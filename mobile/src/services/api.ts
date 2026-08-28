@@ -1,8 +1,13 @@
 import { authStorage } from './authStorage';
 import { Platform } from 'react-native';
 
-// Default to localhost, with Android emulator fallback support
-export const DEFAULT_API_HOST = Platform.OS === 'android' ? 'http://10.0.2.2:8000' : 'http://127.0.0.1:8000';
+// Network host configurations
+export const PC_LAN_API_HOST = 'http://192.168.1.5:8000'; // Physical Android device over Wi-Fi
+export const EMULATOR_API_HOST = 'http://10.0.2.2:8000';   // Android Emulator loopback
+export const LOCALHOST_API_HOST = 'http://127.0.0.1:8000';  // Web / iOS simulator
+
+// Default active API host for standalone build on physical Android phone
+export const DEFAULT_API_HOST = Platform.OS === 'android' ? PC_LAN_API_HOST : LOCALHOST_API_HOST;
 
 let customBaseUrl: string | null = null;
 
