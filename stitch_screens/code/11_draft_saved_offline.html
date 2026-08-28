@@ -1,0 +1,213 @@
+<!DOCTYPE html>
+
+<html class="light" lang="en"><head>
+<meta charset="utf-8"/>
+<meta content="width=device-width, initial-scale=1.0" name="viewport"/>
+<title>Draft Saved / Offline State - Legal Metrology</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;display=swap" rel="stylesheet"/>
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet"/>
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "on-secondary-container": "#5c636a",
+                        "on-surface-variant": "#44474e",
+                        "secondary-container": "#dae0e9",
+                        "error-container": "#ffdad6",
+                        "on-tertiary-fixed": "#291800",
+                        "on-primary-fixed": "#081b3a",
+                        "inverse-primary": "#b6c6ef",
+                        "surface-container-lowest": "#ffffff",
+                        "surface-container-highest": "#e1e2e8",
+                        "on-error-container": "#93000a",
+                        "status-green-bg": "#e8f5e9",
+                        "on-error": "#ffffff",
+                        "surface-tint": "#4e5e81",
+                        "tertiary-fixed": "#ffddb1",
+                        "primary": "#031635",
+                        "inverse-on-surface": "#eff0f6",
+                        "surface-variant": "#e1e2e8",
+                        "surface-dim": "#d8dae0",
+                        "border-subtle": "#c5c6cf",
+                        "on-secondary-fixed-variant": "#41484e",
+                        "status-green-text": "#1b5e20",
+                        "surface-container": "#eceef3",
+                        "surface-bright": "#f8f9ff",
+                        "on-primary-container": "#8293b8",
+                        "surface-container-high": "#e7e8ee",
+                        "status-amber-bg": "#fff3e0",
+                        "status-red-text": "#b71c1c",
+                        "surface": "#f8f9ff",
+                        "on-tertiary": "#ffffff",
+                        "background": "#f8f9ff",
+                        "primary-fixed-dim": "#b6c6ef",
+                        "on-primary-fixed-variant": "#364768",
+                        "on-primary": "#ffffff",
+                        "on-background": "#191c20",
+                        "error": "#ba1a1a",
+                        "secondary-fixed": "#dce3eb",
+                        "tertiary-container": "#3e2700",
+                        "status-red-bg": "#ffebee",
+                        "outline": "#75777f",
+                        "secondary": "#585f66",
+                        "on-tertiary-container": "#b08d5b",
+                        "on-surface": "#191c20",
+                        "on-secondary": "#ffffff",
+                        "status-amber-text": "#e65100",
+                        "inverse-surface": "#2e3135",
+                        "on-secondary-fixed": "#151c22",
+                        "on-tertiary-fixed-variant": "#5d4217",
+                        "outline-variant": "#c5c6cf",
+                        "primary-fixed": "#d8e2ff",
+                        "secondary-fixed-dim": "#c0c7cf",
+                        "surface-container-low": "#f2f3f9",
+                        "primary-container": "#1a2b4b",
+                        "tertiary": "#231400",
+                        "tertiary-fixed-dim": "#e8c08a"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "base": "8px",
+                        "tight": "4px",
+                        "gutter": "16px",
+                        "stack-md": "12px",
+                        "margin-x": "16px",
+                        "stack-sm": "8px"
+                    },
+                    "fontFamily": {
+                        "caption": ["Inter"],
+                        "section-header": ["Inter"],
+                        "body-sm": ["Inter"],
+                        "headline-lg": ["Inter"],
+                        "body-md": ["Inter"],
+                        "label-caps": ["Inter"]
+                    },
+                    "fontSize": {
+                        "caption": ["12px", { "lineHeight": "16px", "fontWeight": "400" }],
+                        "section-header": ["16px", { "lineHeight": "24px", "fontWeight": "600" }],
+                        "body-sm": ["13px", { "lineHeight": "18px", "fontWeight": "400" }],
+                        "headline-lg": ["20px", { "lineHeight": "28px", "fontWeight": "600" }],
+                        "body-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "label-caps": ["12px", { "lineHeight": "16px", "letterSpacing": "0.02em", "fontWeight": "600" }]
+                    }
+                }
+            }
+        }
+    </script>
+<style>
+        body { font-family: 'Inter', sans-serif; }
+    </style>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+  </head>
+<body class="bg-background text-on-background antialiased flex flex-col min-h-screen">
+<!-- TopAppBar -->
+<header class="bg-surface dark:bg-on-primary-fixed border-b border-border-subtle dark:border-outline-variant flat no shadows flex justify-between items-center w-full px-gutter h-14 docked full-width top-0 z-50">
+<button class="text-on-surface dark:text-inverse-on-surface hover:bg-surface-variant dark:hover:bg-primary-container p-2 rounded-full transition-colors duration-200">
+<span class="material-symbols-outlined" data-icon="arrow_back">arrow_back</span>
+</button>
+<h1 class="font-headline-lg text-headline-lg font-bold text-primary dark:text-primary-fixed">Legal Metrology</h1>
+<div class="w-8 h-8 rounded-full overflow-hidden border border-border-subtle shrink-0">
+<img alt="Inspector profile photo" class="w-full h-full object-cover" data-alt="A formal portrait of an inspector in professional uniform. The lighting is bright and even, set against a stark, pure white background to maintain a cold, corporate aesthetic. The image is clear and focused, emphasizing reliability and authority without any unnecessary decorative elements." src="https://lh3.googleusercontent.com/aida-public/AB6AXuDIP__HcctX05zvhlIQkSAZSLS4ymGm2416xcBrKr3NAxsxu1qFgaCI6ruQQaCLCFowcL56bJAt68S38FWTD8XUs3zbfwOvDKst4kXioJpOroEeZwMYojmZ3Ds_6ICgvSQCVejPrqc6FLMQcEMI_3v9aPWWVXrew1HVKiUimOV853eyM2ecw7nM12RCywQ1XLWAzaaMgj-xUFO_DkIoStXILuOgUXA5pXvnrIsfe1IdB6oY6H-7OGFE"/>
+</div>
+</header>
+<!-- Main Content -->
+<main class="flex-1 overflow-y-auto pb-24">
+<!-- Warning Banner -->
+<div class="bg-status-amber-bg text-status-amber-text px-margin-x py-stack-sm flex items-center gap-2 border-b border-border-subtle">
+<span class="material-symbols-outlined text-[18px]">warning</span>
+<span class="font-body-sm font-semibold">Connection Lost</span>
+</div>
+<div class="px-margin-x py-stack-md flex flex-col gap-stack-md">
+<!-- Header Text -->
+<p class="font-body-md text-on-surface-variant text-center">Your inspection has been saved as a local draft.</p>
+<!-- Central Card -->
+<div class="bg-surface-container-lowest border border-border-subtle rounded-DEFAULT p-margin-x flex flex-col gap-stack-md">
+<div class="flex items-center gap-2 pb-stack-sm border-b border-border-subtle">
+<span class="material-symbols-outlined text-on-surface-variant">content_paste</span>
+<h2 class="font-section-header text-on-surface uppercase">DRAFT SAVED LOCALLY</h2>
+</div>
+<div class="grid grid-cols-2 gap-stack-sm font-body-md">
+<div class="text-on-surface-variant">ID</div>
+<div class="text-on-surface font-semibold text-right">LM-2026-00891</div>
+<div class="text-on-surface-variant">Product</div>
+<div class="text-on-surface font-semibold text-right">Premium Basmati Rice</div>
+</div>
+<div class="flex items-center justify-between mt-stack-sm">
+<span class="font-caption text-on-surface-variant flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]">image</span> 2 images saved · 27 Aug 2026
+                    </span>
+<div class="bg-status-amber-bg text-status-amber-text px-2 py-1 border border-status-amber-text rounded-DEFAULT font-label-caps flex items-center gap-1">
+<span class="material-symbols-outlined text-[14px]" style="font-variation-settings: 'FILL' 1;">radio_button_checked</span>
+                        DRAFT — Pending Sync
+                    </div>
+</div>
+</div>
+<!-- Checklist -->
+<div class="bg-surface-container-lowest border border-border-subtle rounded-DEFAULT p-margin-x">
+<h3 class="font-section-header text-on-surface mb-stack-sm border-b border-border-subtle pb-stack-sm">What was saved:</h3>
+<ul class="flex flex-col gap-stack-sm font-body-sm text-on-surface-variant">
+<li class="flex items-center gap-2">
+<span class="material-symbols-outlined text-status-green-text text-[18px]">check_circle</span>
+                        Inspection details
+                    </li>
+<li class="flex items-center gap-2">
+<span class="material-symbols-outlined text-status-green-text text-[18px]">check_circle</span>
+                        2 package images (locally stored)
+                    </li>
+<li class="flex items-center gap-2">
+<span class="material-symbols-outlined text-status-red-text text-[18px]">cancel</span>
+                        AI analysis not started (requires connection)
+                    </li>
+</ul>
+</div>
+<!-- Buttons -->
+<div class="flex flex-col gap-stack-sm mt-stack-md">
+<button class="w-full bg-primary-container text-on-primary py-3 rounded-DEFAULT font-section-header flex justify-center items-center gap-2 hover:bg-on-primary-fixed transition-colors">
+<span class="material-symbols-outlined">sync</span>
+                    Retry Connection
+                </button>
+<button class="w-full bg-transparent border border-primary-container text-primary-container py-3 rounded-DEFAULT font-section-header flex justify-center items-center hover:bg-surface-container-low transition-colors">
+                    Continue Offline — Review Draft
+                </button>
+</div>
+<p class="font-caption text-on-surface-variant text-center mt-stack-md">Your data will sync automatically when the connection is restored.</p>
+</div>
+</main>
+<!-- BottomNavBar -->
+<nav class="fixed bottom-0 left-0 w-full z-50 flex justify-around items-center px-tight py-base bg-surface dark:bg-on-primary-fixed border-t border-border-subtle dark:border-outline-variant flat no shadows">
+<button class="flex flex-col items-center justify-center text-on-surface-variant dark:text-outline px-3 py-1 hover:bg-surface-container-high dark:hover:bg-primary-container scale-95 active:scale-90 transition-transform">
+<span class="material-symbols-outlined" data-icon="home">home</span>
+<span class="font-caption text-caption">Home</span>
+</button>
+<button class="flex flex-col items-center justify-center bg-secondary-container dark:bg-primary-container text-primary dark:text-primary-fixed-dim rounded-xl px-3 py-1 hover:bg-surface-container-high dark:hover:bg-primary-container scale-95 active:scale-90 transition-transform">
+<span class="material-symbols-outlined" data-icon="fact_check" style="font-variation-settings: 'FILL' 1;">fact_check</span>
+<span class="font-caption text-caption">Inspections</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-surface-variant dark:text-outline px-3 py-1 hover:bg-surface-container-high dark:hover:bg-primary-container scale-95 active:scale-90 transition-transform">
+<span class="material-symbols-outlined" data-icon="add_circle">add_circle</span>
+<span class="font-caption text-caption">New</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-surface-variant dark:text-outline px-3 py-1 hover:bg-surface-container-high dark:hover:bg-primary-container scale-95 active:scale-90 transition-transform">
+<span class="material-symbols-outlined" data-icon="assessment">assessment</span>
+<span class="font-caption text-caption">Reports</span>
+</button>
+<button class="flex flex-col items-center justify-center text-on-surface-variant dark:text-outline px-3 py-1 hover:bg-surface-container-high dark:hover:bg-primary-container scale-95 active:scale-90 transition-transform">
+<span class="material-symbols-outlined" data-icon="person">person</span>
+<span class="font-caption text-caption">Profile</span>
+</button>
+</nav>
+<script src="../app.js"></script>
+</body></html>

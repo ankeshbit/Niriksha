@@ -1,0 +1,181 @@
+<!DOCTYPE html><html class="light" lang="en"><head>
+<meta charset="utf-8">
+<meta content="width=device-width, initial-scale=1.0" name="viewport">
+<title>Evidence Review - Legal Metrology</title>
+<script src="https://cdn.tailwindcss.com?plugins=forms,container-queries"></script>
+<link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&amp;display=swap" rel="stylesheet">
+<link href="https://fonts.googleapis.com/css2?family=Material+Symbols+Outlined:wght,FILL@100..700,0..1&amp;display=swap" rel="stylesheet">
+<script id="tailwind-config">
+        tailwind.config = {
+            darkMode: "class",
+            theme: {
+                extend: {
+                    "colors": {
+                        "border-subtle": "#c5c6cf",
+                        "on-primary-fixed": "#081b3a",
+                        "surface": "#f8f9ff",
+                        "primary-container": "#1a2b4b",
+                        "on-surface": "#191c20",
+                        "on-tertiary-fixed-variant": "#5d4217",
+                        "status-red-bg": "#ffebee",
+                        "on-secondary": "#ffffff",
+                        "status-amber-text": "#e65100",
+                        "inverse-surface": "#2e3135",
+                        "on-secondary-fixed-variant": "#41484e",
+                        "surface-variant": "#e1e2e8",
+                        "surface-bright": "#f8f9ff",
+                        "secondary-fixed-dim": "#c0c7cf",
+                        "on-secondary-container": "#5c636a",
+                        "on-tertiary": "#ffffff",
+                        "on-surface-variant": "#44474e",
+                        "secondary-container": "#dae0e9",
+                        "on-secondary-fixed": "#151c22",
+                        "on-tertiary-fixed": "#291800",
+                        "surface-container-high": "#e7e8ee",
+                        "on-background": "#191c20",
+                        "outline-variant": "#c5c6cf",
+                        "status-red-text": "#b71c1c",
+                        "surface-container-highest": "#e1e2e8",
+                        "background": "#f8f9ff",
+                        "on-tertiary-container": "#b08d5b",
+                        "surface-container-low": "#f2f3f9",
+                        "on-error-container": "#93000a",
+                        "primary-fixed-dim": "#b6c6ef",
+                        "inverse-primary": "#b6c6ef",
+                        "status-amber-bg": "#fff3e0",
+                        "primary": "#031635",
+                        "on-primary-container": "#8293b8",
+                        "tertiary-fixed": "#ffddb1",
+                        "surface-container": "#eceef3",
+                        "outline": "#75777f",
+                        "status-green-text": "#1b5e20",
+                        "inverse-on-surface": "#eff0f6",
+                        "on-primary": "#ffffff",
+                        "error": "#ba1a1a",
+                        "tertiary": "#231400",
+                        "primary-fixed": "#d8e2ff",
+                        "secondary": "#585f66",
+                        "tertiary-fixed-dim": "#e8c08a",
+                        "surface-container-lowest": "#ffffff",
+                        "status-green-bg": "#e8f5e9",
+                        "on-error": "#ffffff",
+                        "surface-dim": "#d8dae0",
+                        "on-primary-fixed-variant": "#364768",
+                        "surface-tint": "#4e5e81",
+                        "secondary-fixed": "#dce3eb",
+                        "error-container": "#ffdad6",
+                        "tertiary-container": "#3e2700"
+                    },
+                    "borderRadius": {
+                        "DEFAULT": "0.125rem",
+                        "lg": "0.25rem",
+                        "xl": "0.5rem",
+                        "full": "0.75rem"
+                    },
+                    "spacing": {
+                        "gutter": "16px",
+                        "stack-md": "12px",
+                        "margin-x": "16px",
+                        "tight": "4px",
+                        "base": "8px",
+                        "stack-sm": "8px"
+                    },
+                    "fontFamily": {
+                        "caption": ["Inter"],
+                        "label-caps": ["Inter"],
+                        "section-header": ["Inter"],
+                        "body-md": ["Inter"],
+                        "body-sm": ["Inter"],
+                        "headline-lg": ["Inter"]
+                    },
+                    "fontSize": {
+                        "caption": ["12px", { "lineHeight": "16px", "fontWeight": "400" }],
+                        "label-caps": ["12px", { "lineHeight": "16px", "letterSpacing": "0.02em", "fontWeight": "600" }],
+                        "section-header": ["16px", { "lineHeight": "24px", "fontWeight": "600" }],
+                        "body-md": ["14px", { "lineHeight": "20px", "fontWeight": "400" }],
+                        "body-sm": ["13px", { "lineHeight": "18px", "fontWeight": "400" }],
+                        "headline-lg": ["20px", { "lineHeight": "28px", "fontWeight": "600" }]
+                    }
+                },
+            },
+        }
+    </script>
+<style>
+    body {
+      min-height: max(884px, 100dvh);
+    }
+  </style>
+</head>
+<body class="bg-background text-on-background min-h-screen flex flex-col font-body-md">
+<!-- TopAppBar -->
+<header class="bg-surface dark:bg-on-primary-fixed text-primary dark:text-primary-fixed border-b border-border-subtle dark:border-outline-variant flex justify-between items-center w-full px-gutter h-14 sticky top-0 z-50">
+<button class="text-on-surface dark:text-inverse-on-surface hover:bg-surface-variant dark:hover:bg-primary-container p-2 rounded-DEFAULT transition-colors duration-200">
+<span class="material-symbols-outlined" data-icon="arrow_back">arrow_back</span>
+</button>
+<h1 class="font-headline-lg text-headline-lg font-bold text-primary dark:text-primary-fixed tracking-tight">Evidence Review</h1>
+<div class="w-8 h-8 rounded-full bg-surface-variant overflow-hidden border border-border-subtle">
+<img class="w-full h-full object-cover" data-alt="Close-up professional portrait of an inspector in standard uniform, sharp lighting, corporate institutional style, minimal background, highly detailed, realistic, cool color palette." src="https://lh3.googleusercontent.com/aida-public/AB6AXuASDvqEdHjGhsd87PPnddmRiaH1wwsUocBDi6F2359NdnIx3tDC51xGbbx351vX81AVhm2zf9XsDdpuOz_tCYFs2etL4qReZiUVk9aVs9nYb52Icq890hzHt0rXc7lvclICA4gArWO9pf72Qypv98IEi91-KycDDWtDM9Ks7cdckHgSIN358Pr6ZlkEQvkI8JE9kkol6cXGJQ7CO5a19Lx5fOMafDEjoqNaIIHbbN-QZgT-G8Oa7nKG">
+</div>
+</header>
+<main class="flex-grow pb-24 md:pb-8 flex flex-col max-w-4xl mx-auto w-full">
+<!-- Main Content Area -->
+<div class="flex-col md:flex-row flex w-full h-full">
+<!-- Left Column: Evidence Photo -->
+<div class="w-full md:w-1/2 p-gutter flex flex-col"><div class="flex items-center justify-between mb-stack-sm"><h2 class="font-section-header text-section-header text-on-surface">Finding Summary</h2><span class="bg-status-amber-bg text-status-amber-text font-label-caps text-label-caps px-2 py-1 border border-status-amber-text rounded-DEFAULT">Potential Non-Compliance</span></div><div class="bg-surface border border-border-subtle rounded-DEFAULT p-gutter mb-gutter"><p class="font-body-md text-on-surface font-semibold">MRP Declaration Requires Verification</p></div><div class="relative w-full aspect-square md:aspect-auto md:flex-grow border border-border-subtle bg-surface-container-low rounded-lg overflow-hidden group"><img class="w-full h-full object-cover" src="https://lh3.googleusercontent.com/aida/AEtjO1XTwddur82lL-5HPQrfQRBEbi-ZhUEAyOSKDdQXthOgrW94Z1Ptxi-5BO6ibPXB8PzJlNpa21Z9wn38N4JLPB0UuIa8wWcs9UxkNxAnUCPxSFhwsvNUW5VzhfhvWvVGAfqXC3ONL8uK_0jpBH1EE9upaS3tQReZXMZjAxXwMElxwW-1efPXdb3WfIZ0Bb-dkgTdDgX1i508qM7IGYKaoVbcyKBOUgC8geiHUBqTLDnRZkk4tql0L1a2AjA"><div class="absolute top-[30%] left-[20%] w-64 h-48 border-[2px] border-status-amber-text bg-status-amber-text/5 pointer-events-none"></div><div class="absolute bottom-4 right-4 bg-surface border border-border-subtle rounded-DEFAULT shadow-sm flex"><button class="p-2 hover:bg-surface-variant text-on-surface border-r border-border-subtle"><span class="material-symbols-outlined">zoom_out</span></button><button class="p-2 hover:bg-surface-variant text-on-surface border-r border-border-subtle"><span class="material-symbols-outlined">zoom_in</span></button><button class="p-2 hover:bg-surface-variant text-on-surface"><span class="material-symbols-outlined">pan_tool</span></button></div></div><div class="bg-surface-container-low border border-border-subtle rounded-DEFAULT p-gutter mt-gutter">
+    <div class="flex items-center justify-between mb-stack-sm">
+        <h3 class="font-label-caps text-label-caps text-on-surface-variant flex items-center">
+            <span class="material-symbols-outlined text-[16px] mr-1">attachment</span>
+            Evidence Crop Unavailable — fallback shown
+        </h3>
+    </div>
+    <p class="font-body-sm text-on-surface mb-stack-md">
+        A precise bounding-box crop could not be generated for this field. Full source image is displayed as fallback per inspection protocol.
+    </p>
+    <button class="w-full border border-border-subtle bg-surface text-primary font-label-caps text-label-caps py-2 px-4 rounded-DEFAULT hover:bg-surface-variant transition-colors">
+        [ View Full Image ]
+    </button>
+</div><div class="flex items-center justify-between mt-stack-md text-on-surface-variant font-caption text-caption"><span class="">Inspection ID: LM-2026-00891</span><span class="">Inspector: Rajesh Kumar</span></div></div>
+<!-- Right Column: Details & Actions -->
+<div class="w-full md:w-1/2 p-gutter flex flex-col border-l-0 md:border-l border-border-subtle">
+<div class="flex-grow space-y-stack-md"><div class="bg-surface border border-border-subtle rounded-DEFAULT p-gutter mb-gutter"><h3 class="font-label-caps text-label-caps text-on-surface-variant mb-stack-sm">Why was this flagged?</h3><p class="font-body-sm text-on-surface">The MRP declaration could not be reliably read from the provided image. Further verification by the authorized inspector is required.</p></div><div class="bg-surface border border-border-subtle rounded-DEFAULT p-gutter mb-gutter"><h3 class="font-label-caps text-label-caps text-on-surface-variant mb-stack-sm">Rule Reference</h3><div class="flex items-start"><span class="material-symbols-outlined text-primary mr-2">gavel</span><div><p class="font-body-md text-on-surface font-semibold">Legal Metrology (Packaged Commodities) Rules, 2011</p><p class="font-body-sm text-on-surface-variant mt-tight">Rule Version: v1.0</p></div></div></div><div class="bg-surface-container-low border border-border-subtle rounded-DEFAULT p-gutter"><h3 class="font-label-caps text-label-caps text-on-surface-variant mb-stack-sm flex items-center"><span class="material-symbols-outlined text-[16px] mr-1">document_scanner</span> OCR Analysis &amp; Audit</h3><div class="space-y-stack-md"><div class="flex justify-between items-center border-b border-border-subtle pb-stack-sm"><span class="font-body-sm text-on-surface">AI Extracted Value</span><span class="font-body-sm text-on-surface">₹225</span></div><div class="flex justify-between items-center border-b border-border-subtle pb-stack-sm"><span class="font-body-sm text-on-surface">Inspector Corrected Value</span><span class="font-body-sm text-on-surface font-semibold">₹450</span></div><div class="flex justify-between items-center border-b border-border-subtle pb-stack-sm"><span class="font-body-sm text-on-surface">Corrected By</span><span class="font-body-sm text-on-surface-variant">Rajesh Kumar</span></div><div class="flex justify-between items-center border-b border-border-subtle pb-stack-sm"><span class="font-body-sm text-on-surface">OCR Confidence</span><span class="font-label-caps text-label-caps text-status-red-text">Low — 62%</span></div><div class="flex justify-between items-center"><span class="font-body-sm text-on-surface">Timestamp</span><span class="font-body-sm text-on-surface-variant">27 Aug 2026, 14:35</span></div></div></div></div>
+<!-- Inspector Decisions (Bottom pinned in flex) -->
+<div class="pt-stack-md border-t border-border-subtle space-y-stack-sm mt-gutter"><div class="mb-stack-sm"><label class="font-label-caps text-label-caps text-on-surface-variant mb-tight block">Inspector Remarks</label><textarea class="w-full bg-surface border border-border-subtle rounded-DEFAULT p-2 font-body-sm text-on-surface focus:outline-none focus:border-primary" rows="2" placeholder="Add notes about this finding..."></textarea></div>
+<h3 class="font-label-caps text-label-caps text-on-surface-variant mb-base">Inspector Decision</h3>
+<button class="w-full bg-primary-container text-on-primary font-section-header text-section-header py-3 px-4 rounded-DEFAULT hover:bg-primary transition-colors flex items-center justify-center">
+<span class="material-symbols-outlined mr-2">check_circle</span>
+                        Confirm Finding
+                    </button><p class="text-caption font-caption text-on-surface-variant text-center mt-tight">Records the inspector’s decision for this potential finding.</p>
+<div class="grid grid-cols-2 gap-stack-sm">
+<button class="border border-border-subtle bg-surface text-on-surface font-body-md text-body-md py-2 px-4 rounded-DEFAULT hover:bg-surface-variant transition-colors flex items-center justify-center">
+<span class="material-symbols-outlined mr-2 text-status-red-text">cancel</span>
+                            Reject
+                        </button>
+<button class="border border-border-subtle bg-surface text-on-surface font-body-md text-body-md py-2 px-4 rounded-DEFAULT hover:bg-surface-variant transition-colors flex items-center justify-center">
+<span class="material-symbols-outlined mr-2">edit_note</span>
+                            Correct Info
+                        </button>
+<button class="border border-border-subtle bg-surface text-on-surface font-body-md text-body-md py-2 px-4 rounded-DEFAULT hover:bg-surface-variant transition-colors flex items-center justify-center">
+<span class="material-symbols-outlined mr-2">add_a_photo</span>
+                            Request New Image
+                        </button>
+<button class="border border-border-subtle bg-surface text-on-surface font-body-md text-body-md py-2 px-4 rounded-DEFAULT hover:bg-surface-variant transition-colors flex items-center justify-center">
+<span class="material-symbols-outlined mr-2">block</span>
+                            N/A
+                        </button>
+</div>
+</div>
+</div>
+</div>
+</main>
+
+
+
+
+
+
+
+
+
+
+<script src="../app.js"></script>
+</body></html>
