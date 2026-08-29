@@ -66,6 +66,7 @@ export const spacing = {
 
 export const borderRadius = {
   default: 2,
+  DEFAULT: 2,
   sm: 2,
   lg: 4,
   xl: 8,

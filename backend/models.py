@@ -24,6 +24,8 @@ class User(Base):
     id = Column(String(36), primary_key=True, default=generate_uuid)
     officer_id = Column(String(50), unique=True, nullable=False, index=True)
     full_name = Column(String(100), nullable=False)
+    email = Column(String(100), nullable=True)
+    phone = Column(String(30), nullable=True)
     designation = Column(String(100), nullable=False)
     zone = Column(String(100), nullable=False)
     password_hash = Column(String(255), nullable=False)

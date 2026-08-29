@@ -1,4 +1,4 @@
-import React, { useState, useEffect, useCallback } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -8,17 +8,93 @@ import {
   RefreshControl,
   ActivityIndicator,
   Platform,
+  SafeAreaView,
 } from 'react-native';
+import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
-import { AppHeader } from '../components/AppHeader';
 import { BottomNav } from '../components/BottomNav';
-import { MetricCard } from '../components/MetricCard';
-import { StatusBadge } from '../components/StatusBadge';
 import { api } from '../services/api';
 import { authStorage } from '../services/authStorage';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
+
+// Stitch Filter Chip Definitions
+interface FilterChip {
+  id: string;
+  label: string;
+  bgColor: string;
+  borderColor: string;
+  textColor: string;
+  matcher?: (item: any) => boolean;
+}
+
+const FILTER_CHIPS: FilterChip[] = [
+  {
+    id: 'draft',
+    label: 'Draft',
+    bgColor: colors.surfaceContainerLowest,
+    borderColor: colors.borderSubtle,
+    textColor: colors.onSurfaceVariant,
+    matcher: (item) => (item.overall_status || item.status) === 'DRAFT',
+  },
+  {
+    id: 'processing',
+    label: 'Processing',
+    bgColor: colors.primaryContainer,
+    borderColor: colors.primary,
+    textColor: colors.onPrimary,
+    matcher: (item) => (item.overall_status || item.status) === 'PROCESSING',
+  },
+  {
+    id: 'analysis_complete',
+    label: 'Analysis Complete',
+    bgColor: colors.statusGreenBg,
+    borderColor: colors.statusGreenText,
+    textColor: colors.statusGreenText,
+    matcher: (item) =>
+      ['VERIFIED_COMPLIANT', 'NO_POTENTIAL_VIOLATIONS', 'PASS', 'COMPLETED'].includes(
+        item.overall_status || item.status
+      ),
+  },
+  {
+    id: 'needs_manual_verification',
+    label: 'Needs Manual Verification',
+    bgColor: colors.statusAmberBg,
+    borderColor: colors.statusAmberText,
+    textColor: colors.statusAmberText,
+    matcher: (item) =>
+      ['NEEDS_MANUAL_VERIFICATION', 'WARNING'].includes(item.overall_status || item.status),
+  },
+  {
+    id: 'no_violations',
+    label: 'No Violations',
+    bgColor: colors.statusGreenBg,
+    borderColor: colors.statusGreenText,
+    textColor: colors.statusGreenText,
+    matcher: (item) =>
+      ['NO_POTENTIAL_VIOLATIONS', 'VERIFIED_COMPLIANT', 'PASS'].includes(
+        item.overall_status || item.status
+      ),
+  },
+  {
+    id: 'report_generated',
+    label: 'Report Generated',
+    bgColor: colors.secondaryContainer,
+    borderColor: colors.primary,
+    textColor: colors.primary,
+    matcher: (item) =>
+      ['FINALIZED', 'COMPLETED', 'REPORT_GENERATED'].includes(item.overall_status || item.status),
+  },
+  {
+    id: 'insufficient_evidence',
+    label: 'Insufficient Evidence',
+    bgColor: colors.surfaceContainerHighest,
+    borderColor: colors.borderSubtle,
+    textColor: colors.onSurface,
+    matcher: (item) => (item.overall_status || item.status) === 'INSUFFICIENT_EVIDENCE',
+  },
+];
 
 export const DashboardScreen: React.FC = () => {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
@@ -26,6 +102,7 @@ export const DashboardScreen: React.FC = () => {
   const [dashboardData, setDashboardData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [selectedChipId, setSelectedChipId] = useState<string | null>(null);
 
   const loadData = async () => {
     try {
@@ -60,157 +137,355 @@ export const DashboardScreen: React.FC = () => {
     year: 'numeric',
   });
 
+  const formatCount = (val?: number) => {
+    const num = val ?? 0;
+    return num < 10 ? `0${num}` : `${num}`;
+  };
+
+  // Determine raw inspections from API
+  const rawInspections = dashboardData?.recent_inspections || [];
+
+  // Filter if chip is active
+  const filteredInspections = selectedChipId
+    ? rawInspections.filter((item: any) => {
+        const chip = FILTER_CHIPS.find((c) => c.id === selectedChipId);
+        return chip?.matcher ? chip.matcher(item) : true;
+      })
+    : rawInspections;
+
+  const getStatusBadgeProps = (status?: string) => {
+    if (status === 'POTENTIAL_NON_COMPLIANCE' || status === 'FAIL' || status === 'CONFIRMED') {
+      return {
+        label: 'Potential Non-Compliance Identified',
+        bg: colors.statusRedBg,
+        text: colors.statusRedText,
+        border: colors.statusRedText,
+      };
+    }
+    if (status === 'VERIFIED_COMPLIANT' || status === 'NO_POTENTIAL_VIOLATIONS' || status === 'PASS') {
+      return {
+        label: 'No Potential Violations Detected',
+        bg: colors.statusGreenBg,
+        text: colors.statusGreenText,
+        border: colors.statusGreenText,
+      };
+    }
+    if (status === 'NEEDS_MANUAL_VERIFICATION' || status === 'WARNING') {
+      return {
+        label: 'Needs Manual Verification',
+        bg: colors.statusAmberBg,
+        text: colors.statusAmberText,
+        border: colors.statusAmberText,
+      };
+    }
+    if (status === 'INSUFFICIENT_EVIDENCE') {
+      return {
+        label: 'Insufficient Evidence',
+        bg: colors.surfaceContainerHighest,
+        text: colors.onSurface,
+        border: colors.borderSubtle,
+      };
+    }
+    return {
+      label: 'No Potential Violations Detected',
+      bg: colors.statusGreenBg,
+      text: colors.statusGreenText,
+      border: colors.statusGreenText,
+    };
+  };
+
   return (
-    <View style={styles.container}>
-      <AppHeader
-        title="LEGAL METROLOGY"
-        subtitle="Department of Consumer Affairs (DoCA)"
-        rightAction={{
-          icon: 'add',
-          label: 'NEW',
-          onPress: () => navigation.navigate('NewInspection'),
-        }}
-      />
+    <SafeAreaView style={styles.safeArea}>
+      <View style={styles.container}>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Welcome Header */}
+          <View style={styles.welcomeHeader}>
+            <Text style={styles.welcomeGreeting}>
+              Good morning, {profile?.full_name || 'Inspector'}
+            </Text>
+            <Text style={styles.welcomeSubtext}>
+              ID: {profile?.officer_id || 'DOCA-INSP-842'} • {todayStr}
+            </Text>
+          </View>
 
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-      >
-        {/* Officer Welcome Banner */}
-        <View style={styles.welcomeBanner}>
-          <Text style={styles.greetingTitle}>
-            Good morning, {profile?.full_name || 'Inspector'}
-          </Text>
-          <Text style={styles.greetingSubtitle}>
-            ID: {profile?.officer_id || 'DOCA-INSP-842'} • {todayStr}
-          </Text>
-        </View>
+          {loading ? (
+            <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 30 }} />
+          ) : (
+            <>
+              {/* Dashboard Grid: 2x2 Metric Cards */}
+              <View style={styles.metricsGrid}>
+                <View style={styles.metricsRow}>
+                  {/* Metric 1: Total Inspections */}
+                  <View style={styles.metricCard}>
+                    <Text style={styles.metricLabelDefault}>Total Inspections</Text>
+                    <Text style={styles.metricValuePrimary}>
+                      {formatCount(dashboardData?.total_inspections ?? 0)}
+                    </Text>
+                  </View>
 
-        {loading ? (
-          <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 30 }} />
-        ) : (
-          <>
-            {/* 4 Metric Cards Grid (2x2) */}
-            <View style={styles.metricsGrid}>
-              <View style={styles.metricsRow}>
-                <MetricCard
-                  title="TOTAL INSPECTIONS"
-                  count={dashboardData?.total_inspections ?? 0}
-                  icon="assignment"
-                  color={colors.primary}
-                  bgColor={colors.surfaceContainerLow}
-                />
-                <MetricCard
-                  title="NEEDS VERIFICATION"
-                  count={dashboardData?.needs_manual_verification ?? 0}
-                  icon="warning"
-                  color={colors.statusAmberText}
-                  bgColor={colors.statusAmberBg}
-                />
-              </View>
-
-              <View style={styles.metricsRow}>
-                <MetricCard
-                  title="VERIFIED COMPLIANT"
-                  count={dashboardData?.verified_inspections ?? 0}
-                  icon="check-circle"
-                  color={colors.statusGreenText}
-                  bgColor={colors.statusGreenBg}
-                />
-                <MetricCard
-                  title="POTENTIAL VIOLATIONS"
-                  count={dashboardData?.potential_non_compliance ?? 0}
-                  icon="error"
-                  color={colors.statusRedText}
-                  bgColor={colors.statusRedBg}
-                />
-              </View>
-            </View>
-
-            {/* Recent Inspections Table Card */}
-            <View style={styles.recentCard}>
-              <View style={styles.recentHeader}>
-                <Text style={typography.sectionHeader}>Recent Inspections</Text>
-                <TouchableOpacity onPress={() => navigation.navigate('ReportsList')}>
-                  <Text style={styles.viewAllText}>View All →</Text>
-                </TouchableOpacity>
-              </View>
-
-              {!dashboardData?.recent_inspections || dashboardData.recent_inspections.length === 0 ? (
-                <View style={styles.emptyContainer}>
-                  <Text style={typography.bodySm}>
-                    No inspections recorded yet. Tap "+ NEW" to start.
-                  </Text>
+                  {/* Metric 2: Needs Manual Verification */}
+                  <View style={styles.metricCard}>
+                    <Text style={styles.metricLabelAmber}>Needs Manual Verification</Text>
+                    <Text style={styles.metricValueAmber}>
+                      {formatCount(dashboardData?.needs_manual_verification ?? 0)}
+                    </Text>
+                  </View>
                 </View>
-              ) : (
-                dashboardData.recent_inspections.map((item: any, idx: number) => {
-                  const isLast = idx === dashboardData.recent_inspections.length - 1;
+
+                <View style={styles.metricsRow}>
+                  {/* Metric 3: Verified Inspections */}
+                  <View style={styles.metricCard}>
+                    <Text style={styles.metricLabelDefault}>Verified Inspections</Text>
+                    <Text style={styles.metricValuePrimary}>
+                      {formatCount(dashboardData?.verified_inspections ?? 0)}
+                    </Text>
+                  </View>
+
+                  {/* Metric 4: Potential Non-Compliance */}
+                  <View style={styles.metricCard}>
+                    <Text style={styles.metricLabelRed}>Potential Non-Compliance</Text>
+                    <Text style={styles.metricValueRed}>
+                      {formatCount(dashboardData?.potential_non_compliance ?? 0)}
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Status Filter Chips Row */}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.chipsScrollContent}
+                style={styles.chipsScroll}
+              >
+                {FILTER_CHIPS.map((chip) => {
+                  const isSelected = selectedChipId === chip.id;
                   return (
                     <TouchableOpacity
-                      key={item.id}
-                      style={[styles.inspectionRow, !isLast && styles.rowBorder]}
-                      onPress={() =>
-                        navigation.navigate('Findings', {
-                          inspectionId: item.id,
-                          inspectionNumber: item.inspection_number,
-                        })
-                      }
-                      activeOpacity={0.7}
+                      key={chip.id}
+                      style={[
+                        styles.chipButton,
+                        {
+                          backgroundColor: chip.bgColor,
+                          borderColor: chip.borderColor,
+                          opacity: isSelected || selectedChipId === null ? 1 : 0.6,
+                          transform: [{ scale: isSelected ? 1.03 : 1 }],
+                        },
+                      ]}
+                      onPress={() => {
+                        setSelectedChipId(selectedChipId === chip.id ? null : chip.id);
+                      }}
+                      activeOpacity={0.8}
                     >
-                      <View style={styles.rowMain}>
-                        <View style={styles.rowTopLine}>
-                          <Text style={styles.inspNumber}>{item.inspection_number}</Text>
-                          <StatusBadge status={item.overall_status || item.status} />
-                        </View>
-                        <Text style={styles.productName} numberOfLines={1}>
-                          {item.product_name}
-                        </Text>
-                        <Text style={styles.locationText} numberOfLines={1}>
-                          {item.location}
-                        </Text>
-                      </View>
+                      <Text style={[styles.chipText, { color: chip.textColor }]}>
+                        {chip.label}
+                      </Text>
                     </TouchableOpacity>
                   );
-                })
-              )}
-            </View>
-          </>
-        )}
-      </ScrollView>
+                })}
+              </ScrollView>
 
-      <BottomNav />
-    </View>
+              {/* Recent Inspections List */}
+              <View style={styles.recentSection}>
+                <Text style={styles.sectionTitle}>Recent Inspections</Text>
+                <View style={styles.recentCard}>
+                  {filteredInspections.length === 0 ? (
+                    <View style={{ paddingVertical: 24, alignItems: 'center', justifyContent: 'center' }}>
+                      <MaterialIcons name="fact-check" size={36} color={colors.outline} />
+                      <Text style={{ ...typography.bodyMd, color: colors.onSurfaceVariant, marginTop: 8 }}>
+                        No recent inspections recorded.
+                      </Text>
+                      <Text style={{ ...typography.caption, color: colors.outline, marginTop: 4 }}>
+                        Tap the + button below to start a new package inspection.
+                      </Text>
+                    </View>
+                  ) : (
+                    filteredInspections.map((item: any, idx: number) => {
+                      const isLast = idx === filteredInspections.length - 1;
+                      const badge = getStatusBadgeProps(item.overall_status || item.status);
+
+                      return (
+                        <TouchableOpacity
+                          key={item.id || idx}
+                          style={[styles.inspectionRow, !isLast && styles.rowBorder]}
+                          onPress={() => {
+                            navigation.navigate('Findings', {
+                              inspectionId: item.id,
+                              inspectionNumber: item.inspection_number,
+                            });
+                          }}
+                          activeOpacity={0.7}
+                        >
+                        <Text style={styles.rowIdText}>{item.inspection_number}</Text>
+                        <Text style={styles.rowProductText} numberOfLines={1}>
+                          {item.product_name}
+                        </Text>
+                        <Text style={styles.rowLocationText} numberOfLines={1}>
+                          {item.location}
+                        </Text>
+                        <View style={styles.badgeRow}>
+                          <View
+                            style={[
+                              styles.statusBadge,
+                              { backgroundColor: badge.bg, borderColor: badge.border },
+                            ]}
+                          >
+                            <Text style={[styles.statusBadgeText, { color: badge.text }]}>
+                              {badge.label}
+                            </Text>
+                          </View>
+                        </View>
+                        </TouchableOpacity>
+                      );
+                    })
+                  )}
+                </View>
+              </View>
+            </>
+          )}
+        </ScrollView>
+
+        {/* Mobile Floating Action Button (FAB) */}
+        <TouchableOpacity
+          style={styles.fab}
+          onPress={() => navigation.navigate('NewInspection')}
+          activeOpacity={0.85}
+        >
+          <MaterialIcons name="add" size={24} color="#ffffff" />
+        </TouchableOpacity>
+
+        {/* Bottom Navigation Bar */}
+        <BottomNav />
+      </View>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
   container: {
     flex: 1,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.background,
+    position: 'relative',
   },
   scrollContent: {
-    padding: spacing.gutter,
-    paddingBottom: 24,
-    gap: spacing.gutter,
+    paddingHorizontal: spacing.marginX,
+    paddingTop: spacing.stackMd,
+    paddingBottom: 90,
   },
-  welcomeBanner: {
-    marginBottom: 4,
+  welcomeHeader: {
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle,
+    paddingBottom: spacing.stackSm,
+    marginBottom: spacing.stackSm,
   },
-  greetingTitle: {
+  welcomeGreeting: {
     ...typography.headlineLg,
+    fontSize: 20,
+    lineHeight: 28,
     color: colors.primary,
   },
-  greetingSubtitle: {
+  welcomeSubtext: {
     ...typography.bodySm,
+    fontSize: 13,
+    lineHeight: 18,
     color: colors.onSurfaceVariant,
-    marginTop: 2,
+    marginTop: spacing.tight,
   },
   metricsGrid: {
-    gap: spacing.stackMd,
+    gap: spacing.base,
+    marginBottom: spacing.stackMd,
   },
   metricsRow: {
     flexDirection: 'row',
-    gap: spacing.stackMd,
+    gap: spacing.base,
+  },
+  metricCard: {
+    flex: 1,
+    backgroundColor: colors.surfaceContainerLowest,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    borderRadius: borderRadius.lg,
+    padding: spacing.stackSm,
+    flexDirection: 'column',
+  },
+  metricLabelDefault: {
+    ...typography.labelCaps,
+    fontSize: 12,
+    lineHeight: 16,
+    color: colors.onSurfaceVariant,
+  },
+  metricLabelAmber: {
+    ...typography.labelCaps,
+    fontSize: 12,
+    lineHeight: 16,
+    color: colors.statusAmberText,
+  },
+  metricLabelRed: {
+    ...typography.labelCaps,
+    fontSize: 12,
+    lineHeight: 16,
+    color: colors.statusRedText,
+  },
+  metricValuePrimary: {
+    ...typography.headlineLg,
+    fontSize: 20,
+    lineHeight: 28,
+    color: colors.primary,
+    marginTop: spacing.tight,
+  },
+  metricValueAmber: {
+    ...typography.headlineLg,
+    fontSize: 20,
+    lineHeight: 28,
+    color: colors.statusAmberText,
+    marginTop: spacing.tight,
+  },
+  metricValueRed: {
+    ...typography.headlineLg,
+    fontSize: 20,
+    lineHeight: 28,
+    color: colors.statusRedText,
+    marginTop: spacing.tight,
+  },
+  chipsScroll: {
+    marginBottom: spacing.stackMd,
+  },
+  chipsScrollContent: {
+    gap: spacing.base,
+    paddingBottom: 4,
+  },
+  chipButton: {
+    paddingHorizontal: 16,
+    paddingVertical: 6,
+    borderRadius: borderRadius.round,
+    borderWidth: 1,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  chipText: {
+    ...typography.labelCaps,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  recentSection: {
+    gap: spacing.base,
+  },
+  sectionTitle: {
+    ...typography.sectionHeader,
+    fontSize: 16,
+    lineHeight: 24,
+    color: colors.primary,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle,
+    paddingBottom: spacing.tight,
   },
   recentCard: {
     backgroundColor: colors.surfaceContainerLowest,
@@ -219,54 +494,67 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.lg,
     overflow: 'hidden',
   },
-  recentHeader: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-    paddingHorizontal: spacing.marginX,
-    paddingVertical: spacing.stackMd,
-    backgroundColor: colors.surfaceContainerLow,
-    borderBottomWidth: 1,
-    borderBottomColor: colors.borderSubtle,
-  },
-  viewAllText: {
-    ...typography.caption,
-    color: colors.primary,
-    fontWeight: '700',
-  },
-  emptyContainer: {
-    padding: spacing.stackLg,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   inspectionRow: {
-    paddingHorizontal: spacing.marginX,
-    paddingVertical: spacing.stackMd,
+    padding: spacing.stackSm,
+    gap: spacing.tight,
   },
   rowBorder: {
     borderBottomWidth: 1,
     borderBottomColor: colors.borderSubtle,
   },
-  rowMain: {
-    gap: 4,
-  },
-  rowTopLine: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  inspNumber: {
-    ...typography.caption,
+  rowIdText: {
+    ...typography.bodySm,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.onSurfaceVariant,
     fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
-    fontWeight: '700',
-    color: colors.primary,
   },
-  productName: {
-    ...typography.bodyMdMedium,
+  rowProductText: {
+    ...typography.bodyMd,
+    fontSize: 14,
+    lineHeight: 20,
     color: colors.onSurface,
   },
-  locationText: {
+  rowLocationText: {
     ...typography.bodySm,
+    fontSize: 13,
+    lineHeight: 18,
     color: colors.onSurfaceVariant,
+  },
+  badgeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    marginTop: 2,
+  },
+  statusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    alignSelf: 'flex-start',
+  },
+  statusBadgeText: {
+    ...typography.caption,
+    fontSize: 12,
+    lineHeight: 16,
+  },
+  fab: {
+    position: 'absolute',
+    right: spacing.marginX,
+    bottom: 76,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: '#1A2B4B',
+    borderWidth: 1,
+    borderColor: colors.primary,
+    alignItems: 'center',
+    justifyContent: 'center',
+    zIndex: 40,
+    elevation: 6,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: 4 },
+    shadowOpacity: 0.3,
+    shadowRadius: 6,
   },
 });

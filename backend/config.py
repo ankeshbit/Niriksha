@@ -35,4 +35,10 @@ class Settings(BaseSettings):
     OCR_ENGINE: str = "auto"
     GEMINI_API_KEY: Optional[str] = None
 
+    # Supabase Configuration
+    SUPABASE_URL: Optional[str] = None
+    SUPABASE_KEY: Optional[str] = None
+    SUPABASE_BUCKET_IMAGES: str = "inspection-images"
+    SUPABASE_BUCKET_REPORTS: str = "inspection-reports"
+
 settings = Settings()

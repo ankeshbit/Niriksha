@@ -22,7 +22,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
-from sqlalchemy.orm import Session
+from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text
 
 from backend.config import settings
@@ -65,9 +65,11 @@ from backend.schemas import (
     AuditLogResponse,
     ReportResponse,
     FinalizeInspectionRequest,
-    FinalizeInspectionResponse
+    FinalizeInspectionResponse,
+    UpdateProfileRequest,
+    ChangePasswordRequest
 )
-from backend.auth_utils import verify_password
+from backend.auth_utils import verify_password, hash_password
 from backend.auth_service import create_access_token, get_current_user
 from backend.image_quality import assess_image_quality
 from backend.ocr_service import ocr_service
@@ -328,6 +330,60 @@ def get_profile(current_user: User = Depends(get_current_user)):
     """Returns the authenticated officer profile."""
     return current_user
 
+@app.patch("/api/auth/me", response_model=UserProfileResponse, tags=["Authentication"])
+def update_profile(
+    req: UpdateProfileRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Updates authenticated officer contact information."""
+    if req.email is not None:
+        current_user.email = req.email.strip()
+    if req.phone is not None:
+        current_user.phone = req.phone.strip()
+    
+    log_audit(
+        db,
+        current_user.officer_id,
+        "PROFILE_UPDATED",
+        "user",
+        current_user.id,
+        details=f"Officer contact details updated. Email: {current_user.email}, Phone: {current_user.phone}"
+    )
+    db.commit()
+    db.refresh(current_user)
+    return current_user
+
+@app.post("/api/auth/change-password", tags=["Authentication"])
+def change_password(
+    req: ChangePasswordRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Verifies existing password and updates to new password hash."""
+    if not verify_password(req.current_password, current_user.password_hash):
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Current password is incorrect"
+        )
+    if len(req.new_password) < 6:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="New password must be at least 6 characters long"
+        )
+    
+    current_user.password_hash = hash_password(req.new_password)
+    log_audit(
+        db,
+        current_user.officer_id,
+        "PASSWORD_CHANGED",
+        "user",
+        current_user.id,
+        details="Officer password updated successfully"
+    )
+    db.commit()
+    return {"status": "success", "message": "Password changed successfully"}
+
 # ----------------- Dashboard Endpoint -----------------
 
 @app.get("/api/dashboard", response_model=DashboardStatsResponse, tags=["Dashboard"])
@@ -421,7 +477,13 @@ def list_inspections(
     current_user: User = Depends(get_current_user)
 ):
     """Lists inspections with optional status filtering and pagination."""
-    query = db.query(Inspection)
+    query = db.query(Inspection).options(
+        joinedload(Inspection.product),
+        joinedload(Inspection.images),
+        joinedload(Inspection.declarations),
+        joinedload(Inspection.compliance_checks),
+        joinedload(Inspection.report)
+    )
     if status:
         query = query.filter(Inspection.status == status)
     return query.order_by(Inspection.created_at.desc()).offset(offset).limit(limit).all()
@@ -432,7 +494,9 @@ def get_recent_inspections(
     current_user: User = Depends(get_current_user)
 ):
     """Returns top 5 most recent inspections."""
-    recent_objs = db.query(Inspection).order_by(Inspection.created_at.desc()).limit(5).all()
+    recent_objs = db.query(Inspection).options(
+        joinedload(Inspection.product)
+    ).order_by(Inspection.created_at.desc()).limit(5).all()
     return [
         RecentInspectionItem(
             id=insp.id,
@@ -453,7 +517,13 @@ def get_inspection_details(
     current_user: User = Depends(get_current_user)
 ):
     """Retrieves single inspection details by ID."""
-    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    inspection = db.query(Inspection).options(
+        joinedload(Inspection.product),
+        joinedload(Inspection.images),
+        joinedload(Inspection.declarations),
+        joinedload(Inspection.compliance_checks),
+        joinedload(Inspection.report)
+    ).filter(Inspection.id == inspection_id).first()
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection record not found")
     if inspection.inspector_id != current_user.id and current_user.role != "ADMIN":

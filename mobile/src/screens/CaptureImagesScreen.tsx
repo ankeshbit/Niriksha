@@ -8,11 +8,11 @@ import {
   Image,
   ActivityIndicator,
   Alert,
+  SafeAreaView,
 } from 'react-native';
 import * as ImagePicker from 'expo-image-picker';
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
-import { AppHeader } from '../components/AppHeader';
 import { api, getApiBaseUrl } from '../services/api';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -30,7 +30,7 @@ export const CaptureImagesScreen: React.FC = () => {
   const loadImages = async () => {
     try {
       const data = await api.getInspectionImages(inspectionId);
-      setImages(data);
+      setImages(data || []);
     } catch (err) {
       console.error('Failed to load images:', err);
     } finally {
@@ -126,132 +126,178 @@ export const CaptureImagesScreen: React.FC = () => {
 
   const baseUrl = getApiBaseUrl();
 
-  const renderSlot = (title: string, viewType: 'front' | 'back' | 'side', imgData?: any) => {
+  const hasWarning = images.some((img) => img.quality_status === 'WARNING' || img.quality_status === 'POOR');
+  const hasAtLeastOneImage = images.length > 0;
+
+  const renderSlot = (title: 'FRONT' | 'BACK' | 'SIDE', viewType: 'front' | 'back' | 'side', imgData?: any) => {
     const isUploading = uploadingSlot === viewType;
+    const isWarn = imgData?.quality_status === 'WARNING' || imgData?.quality_status === 'POOR';
 
-    return (
-      <View style={styles.slotCard}>
-        <View style={styles.slotHeader}>
-          <Text style={typography.labelCaps}>{title}</Text>
-          {imgData ? (
-            <View
-              style={[
-                styles.qualityChip,
-                imgData.quality_status === 'GOOD'
-                  ? styles.qualityGood
-                  : imgData.quality_status === 'WARNING'
-                  ? styles.qualityWarn
-                  : styles.qualityBad,
-              ]}
-            >
-              <MaterialIcons
-                name={
-                  imgData.quality_status === 'GOOD'
-                    ? 'check-circle'
-                    : imgData.quality_status === 'WARNING'
-                    ? 'warning'
-                    : 'error'
-                }
-                size={14}
-                color={
-                  imgData.quality_status === 'GOOD'
-                    ? colors.statusGreenText
-                    : imgData.quality_status === 'WARNING'
-                    ? colors.statusAmberText
-                    : colors.statusRedText
-                }
-              />
-              <Text
-                style={[
-                  styles.qualityText,
-                  {
-                    color:
-                      imgData.quality_status === 'GOOD'
-                        ? colors.statusGreenText
-                        : imgData.quality_status === 'WARNING'
-                        ? colors.statusAmberText
-                        : colors.statusRedText,
-                  },
-                ]}
-              >
-                {imgData.quality_status === 'GOOD'
-                  ? `Good Quality (${Math.round(imgData.quality_score * 100)}%)`
-                  : imgData.quality_status === 'WARNING'
-                  ? `Warning (${Math.round(imgData.quality_score * 100)}%)`
-                  : 'Blurry / Low Score'}
-              </Text>
-            </View>
-          ) : null}
-        </View>
-
-        {isUploading ? (
+    if (isUploading) {
+      return (
+        <View style={styles.slotCard}>
+          <View style={styles.slotHeader}>
+            <Text style={styles.slotHeaderLabel}>{title}</Text>
+          </View>
           <View style={styles.uploadingBox}>
             <ActivityIndicator size="small" color={colors.primary} />
             <Text style={styles.uploadingText}>Assessing image quality (OpenCV)...</Text>
           </View>
-        ) : imgData ? (
-          <View style={styles.imagePreviewContainer}>
+        </View>
+      );
+    }
+
+    if (!imgData) {
+      return (
+        <TouchableOpacity
+          style={styles.emptySlotCard}
+          onPress={() => handlePickImage(viewType)}
+          activeOpacity={0.7}
+        >
+          <View style={styles.emptySlotHeader}>
+            <Text style={styles.emptySlotHeaderLabel}>{title}</Text>
+          </View>
+          <View style={styles.emptySlotContent}>
+            <MaterialIcons name="add-a-photo" size={28} color={colors.secondary} />
+            <Text style={styles.emptySlotText}>Tap to Add Image</Text>
+          </View>
+        </TouchableOpacity>
+      );
+    }
+
+    return (
+      <View style={[styles.slotCard, isWarn && styles.slotCardWarn]}>
+        <View style={styles.slotHeader}>
+          <Text style={styles.slotHeaderLabel}>{title}</Text>
+          {isWarn ? (
+            <View style={styles.warnChip}>
+              <MaterialIcons name="warning" size={14} color={colors.statusAmberText} />
+              <Text style={styles.warnChipText}>Blurry — Capture Again</Text>
+            </View>
+          ) : (
+            <View style={styles.goodChip}>
+              <MaterialIcons name="check-circle" size={14} color={colors.statusGreenText} />
+              <Text style={styles.goodChipText}>Good Quality</Text>
+            </View>
+          )}
+        </View>
+
+        <View style={styles.slotBody}>
+          <View style={[styles.thumbnailBox, isWarn && styles.thumbnailWarn]}>
             <Image
               source={{ uri: `${baseUrl}${imgData.file_path}` }}
-              style={styles.previewImage}
+              style={styles.thumbnailImage}
               resizeMode="cover"
             />
+          </View>
+
+          <View style={styles.slotActions}>
             <TouchableOpacity
-              style={styles.retakeButton}
+              style={[styles.retakeBtn, isWarn && styles.retakeBtnWarn]}
               onPress={() => handlePickImage(viewType)}
               activeOpacity={0.8}
             >
-              <MaterialIcons name="photo-camera" size={16} color={colors.primary} />
-              <Text style={styles.retakeText}>Retake / Replace</Text>
+              <Text style={[styles.retakeBtnText, isWarn && styles.retakeBtnTextWarn]}>
+                {isWarn ? 'Retake Now' : 'Retake'}
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={styles.deleteBtn}
+              onPress={() => {
+                Alert.alert('Remove Image', 'Are you sure you want to remove this photo?', [
+                  { text: 'Cancel', style: 'cancel' },
+                  {
+                    text: 'Remove',
+                    style: 'destructive',
+                    onPress: () => {
+                      setImages(images.filter((img) => img.id !== imgData.id));
+                    },
+                  },
+                ]);
+              }}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons name="delete" size={18} color={colors.secondary} />
             </TouchableOpacity>
           </View>
-        ) : (
-          <TouchableOpacity
-            style={styles.emptySlot}
-            onPress={() => handlePickImage(viewType)}
-            activeOpacity={0.7}
-          >
-            <MaterialIcons name="add-a-photo" size={32} color={colors.primary} />
-            <Text style={styles.addPhotoText}>Tap to Capture / Select {title}</Text>
-            <Text style={styles.addPhotoSubtext}>Ensure clear lighting and legible text</Text>
-          </TouchableOpacity>
-        )}
+        </View>
       </View>
     );
   };
 
-  const hasAtLeastOneImage = images.length > 0;
-
   return (
-    <View style={styles.container}>
-      <AppHeader
-        title="CAPTURE IMAGES"
-        subtitle={`Step 2 of 3: ${inspectionNumber || 'Package Photography'}`}
-        showBack={true}
-        onBackPress={() => navigation.goBack()}
-      />
-
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        {/* Quality Guidelines Card */}
-        <View style={styles.guidelinesCard}>
-          <MaterialIcons name="info" size={18} color={colors.primary} />
-          <Text style={styles.guidelinesText}>
-            Capture clear, focused images of the Principal Display Panel (PDP) and statutory declaration panels.
-          </Text>
+    <SafeAreaView style={styles.safeArea}>
+      <View style={styles.container}>
+        {/* Stitch TopAppBar Header */}
+        <View style={styles.topHeader}>
+          <TouchableOpacity
+            style={styles.backButton}
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.7}
+          >
+            <MaterialIcons name="arrow-back" size={24} color={colors.primary} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>Step 2 of 3</Text>
+          <View style={{ width: 40 }} />
         </View>
 
-        {loading ? (
-          <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 30 }} />
-        ) : (
-          <>
-            {renderSlot('FRONT PANEL (PDP)', 'front', frontImg)}
-            {renderSlot('BACK PANEL (STATUTORY DETAILS)', 'back', backImg)}
-            {renderSlot('SIDE / ADDITIONAL PANEL', 'side', sideImg)}
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          {/* Section Header */}
+          <View style={styles.instructionSection}>
+            <Text style={styles.instructionTitle}>Capture Package Images</Text>
+            <Text style={styles.instructionSubtitle}>
+              Capture clear images of all required label areas to ensure accurate processing.
+            </Text>
+          </View>
 
+          {loading ? (
+            <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 30 }} />
+          ) : (
+            <View style={styles.slotsContainer}>
+              {renderSlot('FRONT', 'front', frontImg)}
+              {renderSlot('BACK', 'back', backImg)}
+              {renderSlot('SIDE', 'side', sideImg)}
+            </View>
+          )}
+
+          <View style={{ height: 120 }} />
+        </ScrollView>
+
+        {/* Bottom Actions & Status Container */}
+        <View style={styles.bottomFixedContainer}>
+          {hasWarning && (
+            <View style={styles.warningStatusBar}>
+              <MaterialIcons name="warning" size={18} color={colors.statusAmberText} style={{ marginTop: 1 }} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.warningStatusText}>
+                  1 image requires attention before continuing. Back label is blurry.
+                </Text>
+                <View style={styles.warningActionLinks}>
+                  <TouchableOpacity onPress={() => handlePickImage('back')}>
+                    <Text style={styles.warningLinkText}>Retake Now</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    onPress={() =>
+                      navigation.navigate('Analyzing', {
+                        inspectionId,
+                        inspectionNumber,
+                      })
+                    }
+                  >
+                    <Text style={styles.warningLinkText}>Continue Anyway</Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          )}
+
+          <View style={styles.bottomBtnRow}>
             <TouchableOpacity
               style={[
-                styles.continueButton,
-                !hasAtLeastOneImage && styles.continueButtonDisabled,
+                styles.continueBtn,
+                hasWarning ? styles.continueBtnWarning : styles.continueBtnPrimary,
+                !hasAtLeastOneImage && styles.continueBtnDisabled,
               ]}
               onPress={() => {
                 if (!hasAtLeastOneImage) {
@@ -266,102 +312,238 @@ export const CaptureImagesScreen: React.FC = () => {
               disabled={!hasAtLeastOneImage}
               activeOpacity={0.85}
             >
-              <Text style={styles.continueButtonText}>Continue to OCR Analysis</Text>
-              <MaterialIcons name="arrow-forward" size={18} color={colors.onPrimary} style={{ marginLeft: 6 }} />
+              {hasWarning ? (
+                <View style={styles.btnContentCol}>
+                  <View style={styles.btnContentRow}>
+                    <MaterialIcons name="warning" size={18} color={colors.onPrimary} />
+                    <Text style={styles.continueBtnText}>Continue with Warning</Text>
+                  </View>
+                  <Text style={styles.continueBtnSubtext}>1 image needs attention</Text>
+                </View>
+              ) : (
+                <View style={styles.btnContentRow}>
+                  <Text style={styles.continueBtnText}>Continue to Analysis</Text>
+                  <MaterialIcons name="arrow-forward" size={18} color={colors.onPrimary} />
+                </View>
+              )}
             </TouchableOpacity>
-          </>
-        )}
-      </ScrollView>
-    </View>
+          </View>
+        </View>
+      </View>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
   container: {
     flex: 1,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.background,
   },
-  scrollContent: {
-    padding: spacing.gutter,
-    paddingBottom: 32,
-    gap: spacing.stackMd,
-  },
-  guidelinesCard: {
+  topHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: spacing.stackMd,
-    backgroundColor: colors.surfaceContainerLow,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    borderRadius: borderRadius.lg,
-    gap: 8,
+    justifyContent: 'space-between',
+    backgroundColor: colors.surfaceContainerLowest,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle,
+    height: 56,
+    paddingHorizontal: spacing.gutter,
   },
-  guidelinesText: {
-    ...typography.caption,
-    color: colors.onSurface,
+  backButton: {
+    padding: 6,
+    borderRadius: borderRadius.round,
+  },
+  headerTitle: {
+    ...typography.headlineLg,
+    fontSize: 20,
+    lineHeight: 28,
+    fontWeight: '700',
+    color: colors.primary,
+    textAlign: 'center',
     flex: 1,
+  },
+  scrollContent: {
+    paddingHorizontal: spacing.gutter,
+    paddingTop: spacing.stackMd,
+    paddingBottom: 24,
+    gap: spacing.stackMd,
+  },
+  instructionSection: {
+    gap: 4,
+    marginBottom: 4,
+  },
+  instructionTitle: {
+    ...typography.sectionHeader,
+    fontSize: 16,
+    lineHeight: 24,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+  instructionSubtitle: {
+    ...typography.bodySm,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.secondary,
+  },
+  slotsContainer: {
+    gap: spacing.stackMd,
   },
   slotCard: {
     backgroundColor: colors.surfaceContainerLowest,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
-    borderRadius: borderRadius.lg,
-    padding: spacing.marginX,
-    gap: spacing.stackSm,
+    borderRadius: borderRadius.DEFAULT,
+    overflow: 'hidden',
+  },
+  slotCardWarn: {
+    borderColor: colors.statusAmberText,
   },
   slotHeader: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    paddingHorizontal: spacing.gutter,
+    paddingVertical: spacing.stackSm,
+    backgroundColor: colors.surface,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle,
   },
-  qualityChip: {
+  slotHeaderLabel: {
+    ...typography.labelCaps,
+    fontSize: 12,
+    lineHeight: 16,
+    letterSpacing: 0.5,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+  goodChip: {
     flexDirection: 'row',
     alignItems: 'center',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: borderRadius.sm,
-    borderWidth: 1,
+    backgroundColor: colors.statusGreenBg,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: borderRadius.DEFAULT,
     gap: 4,
   },
-  qualityGood: {
-    backgroundColor: colors.statusGreenBg,
-    borderColor: colors.statusGreenText,
-  },
-  qualityWarn: {
-    backgroundColor: colors.statusAmberBg,
-    borderColor: colors.statusAmberText,
-  },
-  qualityBad: {
-    backgroundColor: colors.statusRedBg,
-    borderColor: colors.statusRedText,
-  },
-  qualityText: {
+  goodChipText: {
     ...typography.caption,
     fontSize: 11,
     fontWeight: '600',
+    color: colors.statusGreenText,
   },
-  emptySlot: {
-    borderWidth: 1.5,
-    borderStyle: 'dashed',
-    borderColor: colors.borderSubtle,
-    borderRadius: borderRadius.lg,
-    padding: spacing.stackLg,
+  warnChip: {
+    flexDirection: 'row',
     alignItems: 'center',
-    justifyContent: 'center',
-    backgroundColor: colors.surfaceBright,
+    backgroundColor: colors.statusAmberBg,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: borderRadius.DEFAULT,
     gap: 4,
   },
-  addPhotoText: {
-    ...typography.bodyMdMedium,
-    color: colors.primary,
-    marginTop: 4,
-  },
-  addPhotoSubtext: {
+  warnChipText: {
     ...typography.caption,
-    color: colors.onSurfaceVariant,
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.statusAmberText,
+  },
+  slotBody: {
+    padding: spacing.gutter,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    gap: 12,
+  },
+  thumbnailBox: {
+    width: 100,
+    height: 75,
+    borderRadius: borderRadius.DEFAULT,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surfaceContainer,
+    overflow: 'hidden',
+  },
+  thumbnailWarn: {
+    borderColor: colors.statusAmberText,
+    opacity: 0.85,
+  },
+  thumbnailImage: {
+    width: '100%',
+    height: '100%',
+  },
+  slotActions: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    flex: 1,
+    justifyContent: 'flex-end',
+  },
+  retakeBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: borderRadius.DEFAULT,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    backgroundColor: colors.surfaceContainerLowest,
+  },
+  retakeBtnWarn: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  retakeBtnText: {
+    ...typography.bodySm,
+    fontSize: 13,
+    color: colors.primary,
+    fontWeight: '600',
+  },
+  retakeBtnTextWarn: {
+    color: colors.onPrimary,
+  },
+  deleteBtn: {
+    padding: 8,
+    borderRadius: borderRadius.DEFAULT,
+  },
+  emptySlotCard: {
+    backgroundColor: colors.surfaceContainerLowest,
+    borderWidth: 1,
+    borderStyle: 'dashed',
+    borderColor: colors.borderSubtle,
+    borderRadius: borderRadius.DEFAULT,
+    overflow: 'hidden',
+  },
+  emptySlotHeader: {
+    paddingHorizontal: spacing.gutter,
+    paddingVertical: spacing.stackSm,
+    backgroundColor: colors.surface,
+    borderBottomWidth: 1,
+    borderStyle: 'dashed',
+    borderBottomColor: colors.borderSubtle,
+  },
+  emptySlotHeaderLabel: {
+    ...typography.labelCaps,
+    fontSize: 12,
+    lineHeight: 16,
+    letterSpacing: 0.5,
+    fontWeight: '600',
+    color: colors.secondary,
+  },
+  emptySlotContent: {
+    padding: 24,
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+  },
+  emptySlotText: {
+    ...typography.bodySm,
+    fontSize: 13,
+    fontWeight: '500',
+    color: colors.secondary,
   },
   uploadingBox: {
-    padding: spacing.stackLg,
+    padding: 24,
     alignItems: 'center',
     justifyContent: 'center',
     gap: 8,
@@ -370,46 +552,89 @@ const styles = StyleSheet.create({
     ...typography.bodySm,
     color: colors.primary,
   },
-  imagePreviewContainer: {
-    borderRadius: borderRadius.lg,
-    overflow: 'hidden',
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-  },
-  previewImage: {
-    width: '100%',
-    height: 180,
-    backgroundColor: colors.surfaceContainerHigh,
-  },
-  retakeButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
-    backgroundColor: colors.surfaceContainerLow,
+  bottomFixedContainer: {
+    position: 'absolute',
+    bottom: 0,
+    left: 0,
+    right: 0,
+    backgroundColor: colors.surfaceContainerLowest,
     borderTopWidth: 1,
     borderTopColor: colors.borderSubtle,
-    gap: 6,
+    elevation: 8,
+    shadowColor: '#000',
+    shadowOffset: { width: 0, height: -3 },
+    shadowOpacity: 0.1,
+    shadowRadius: 4,
   },
-  retakeText: {
-    ...typography.caption,
-    fontWeight: '700',
-    color: colors.primary,
-  },
-  continueButton: {
-    backgroundColor: colors.primary,
+  warningStatusBar: {
     flexDirection: 'row',
+    alignItems: 'flex-start',
+    backgroundColor: colors.statusAmberBg,
+    paddingHorizontal: spacing.gutter,
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle,
+    gap: 8,
+  },
+  warningStatusText: {
+    ...typography.caption,
+    fontSize: 12,
+    lineHeight: 16,
+    fontWeight: '600',
+    color: colors.statusAmberText,
+  },
+  warningActionLinks: {
+    flexDirection: 'row',
+    gap: 16,
+    marginTop: 4,
+  },
+  warningLinkText: {
+    ...typography.labelCaps,
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.statusAmberText,
+    textDecorationLine: 'underline',
+  },
+  bottomBtnRow: {
+    padding: spacing.gutter,
+    backgroundColor: colors.surface,
+  },
+  continueBtn: {
+    width: '100%',
+    paddingVertical: 12,
+    borderRadius: borderRadius.DEFAULT,
     alignItems: 'center',
     justifyContent: 'center',
-    paddingVertical: 12,
-    borderRadius: borderRadius.lg,
-    marginTop: spacing.tight,
   },
-  continueButtonDisabled: {
+  continueBtnPrimary: {
+    backgroundColor: colors.primaryContainer,
+  },
+  continueBtnWarning: {
+    backgroundColor: '#E8590C',
+  },
+  continueBtnDisabled: {
     opacity: 0.5,
   },
-  continueButtonText: {
+  btnContentRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  btnContentCol: {
+    alignItems: 'center',
+    gap: 2,
+  },
+  continueBtnText: {
     ...typography.sectionHeader,
+    fontSize: 16,
+    lineHeight: 22,
     color: colors.onPrimary,
+    fontWeight: '600',
+  },
+  continueBtnSubtext: {
+    ...typography.caption,
+    fontSize: 11,
+    color: colors.onPrimary,
+    opacity: 0.85,
   },
 });

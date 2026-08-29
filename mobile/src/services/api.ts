@@ -85,6 +85,10 @@ export const api = {
   login: (credentials: { officer_id: string; password: string }) =>
     apiRequest('/api/auth/login', { method: 'POST', body: credentials }),
   getProfile: () => apiRequest('/api/auth/me'),
+  updateProfile: (data: { email?: string; phone?: string }) =>
+    apiRequest('/api/auth/me', { method: 'PATCH', body: data }),
+  changePassword: (data: { current_password: string; new_password: string }) =>
+    apiRequest('/api/auth/change-password', { method: 'POST', body: data }),
 
   // Dashboard
   getDashboard: () => apiRequest('/api/dashboard'),

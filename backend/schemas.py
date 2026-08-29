@@ -27,9 +27,19 @@ class UserProfileResponse(BaseModel):
     id: str
     officer_id: str
     full_name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
     designation: str
     zone: str
     role: str
+
+class UpdateProfileRequest(BaseModel):
+    email: Optional[str] = Field(None, description="Inspector email address")
+    phone: Optional[str] = Field(None, description="Inspector phone number")
+
+class ChangePasswordRequest(BaseModel):
+    current_password: str = Field(..., description="Current password for verification")
+    new_password: str = Field(..., min_length=6, description="New secure password")
 
 class CreateInspectionRequest(BaseModel):
     product_name: str = Field(..., description="Name of the packaged commodity")

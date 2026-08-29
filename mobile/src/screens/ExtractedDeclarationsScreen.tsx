@@ -9,23 +9,25 @@ import {
   Modal,
   TextInput,
   Alert,
+  SafeAreaView,
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
-import { AppHeader } from '../components/AppHeader';
+import { BottomNav } from '../components/BottomNav';
 import { api } from '../services/api';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 
 const FIELD_LABELS: Record<string, string> = {
-  commodity_name: 'Name of Commodity (Rule 6(1)(f))',
-  manufacturer_details: 'Manufacturer / Packer (Rule 6(1)(a))',
-  net_quantity: 'Net Quantity (Rule 6(1)(c))',
-  mrp: 'Maximum Retail Price (MRP) (Rule 6(1)(e))',
-  date_of_manufacture_packing: 'Month & Year of Mfg/Packing (Rule 6(1)(d))',
-  consumer_care_details: 'Consumer Care Helpline (Rule 6(1)(g))',
-  country_of_origin: 'Country of Origin (Rule 6(1)(b))',
+  commodity_name: 'Product Name',
+  manufacturer_details: 'Manufacturer',
+  manufacturer_address: 'Address',
+  net_quantity: 'Net Quantity',
+  mrp: 'MRP',
+  date_of_manufacture_packing: 'Date of Packing',
+  consumer_care_details: 'Consumer Care Information',
+  country_of_origin: 'Country of Origin',
 };
 
 export const ExtractedDeclarationsScreen: React.FC = () => {
@@ -46,7 +48,7 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
   const loadDeclarations = async () => {
     try {
       const data = await api.getDeclarations(inspectionId);
-      setDeclarations(data);
+      setDeclarations(data || []);
     } catch (err) {
       console.error('Failed to load declarations:', err);
     } finally {
@@ -99,329 +101,530 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
     }
   };
 
-  return (
-    <View style={styles.container}>
-      <AppHeader
-        title="EXTRACTED DECLARATIONS"
-        subtitle={`Audit Review: ${inspectionNumber || 'Statutory Declarations'}`}
-        showBack={true}
-        onBackPress={() => navigation.goBack()}
-      />
+  const todayStr = new Date().toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        {/* Instruction Card */}
-        <View style={styles.infoCard}>
-          <MaterialIcons name="fact-check" size={20} color={colors.primary} />
-          <Text style={styles.infoText}>
-            Review extracted statutory fields. Tap the edit icon to verify or correct any field before rule evaluation.
-          </Text>
+  return (
+    <SafeAreaView style={styles.safeArea}>
+      <View style={styles.container}>
+        {/* Stitch TopAppBar Header */}
+        <View style={styles.topHeader}>
+          <View style={styles.headerLeft}>
+            <TouchableOpacity
+              style={styles.backButton}
+              onPress={() => navigation.goBack()}
+              activeOpacity={0.7}
+            >
+              <MaterialIcons name="arrow-back" size={24} color={colors.primary} />
+            </TouchableOpacity>
+            <View>
+              <Text style={styles.headerTitle}>Legal Metrology</Text>
+              <Text style={styles.headerSubtitle}>
+                ID: {inspectionNumber || 'LM-2026-00891'} • {todayStr}
+              </Text>
+            </View>
+          </View>
+          <View style={styles.avatarCircle}>
+            <Text style={styles.avatarInitials}>IP</Text>
+          </View>
         </View>
 
-        {loading ? (
-          <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 30 }} />
-        ) : (
-          <View style={styles.tableCard}>
-            {declarations.map((decl, idx) => {
-              const isLast = idx === declarations.length - 1;
-              const label = FIELD_LABELS[decl.field_name] || decl.field_name.toUpperCase();
-              const displayVal = decl.effective_value || decl.extracted_value;
-              const isCorrected = decl.verification_status === 'CORRECTED';
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Header Section */}
+          <View style={styles.sectionHeaderBox}>
+            <Text style={styles.sectionHeaderTitle}>Extracted Declarations Review</Text>
+            <Text style={styles.sectionHeaderSubtitle}>
+              Review and verify the data extracted via AI/OCR.
+            </Text>
+          </View>
 
-              return (
-                <View key={decl.id} style={[styles.declRow, !isLast && styles.rowBorder]}>
-                  <View style={styles.rowTopLine}>
-                    <Text style={styles.fieldLabelText}>{label}</Text>
-                    <TouchableOpacity
-                      onPress={() => openEditModal(decl)}
-                      style={styles.editIconButton}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    >
-                      <MaterialIcons name="edit" size={18} color={colors.primary} />
-                    </TouchableOpacity>
-                  </View>
+          {loading ? (
+            <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 30 }} />
+          ) : (
+            <View style={styles.tableContainer}>
+              {declarations.map((decl, idx) => {
+                const label = FIELD_LABELS[decl.field_type] || decl.field_type.replace(/_/g, ' ');
+                const isConflict = decl.ocr_confidence === 'CONFLICT' || decl.has_conflict;
+                const isNotFound =
+                  !decl.extracted_value && (!decl.effective_value || decl.effective_value === 'NOT_FOUND');
+                const isLast = idx === declarations.length - 1;
 
-                  <Text
+                return (
+                  <View
+                    key={decl.id || idx}
                     style={[
-                      styles.valueText,
-                      !displayVal && styles.missingValueText,
+                      styles.tableRow,
+                      isConflict && styles.rowConflict,
+                      isNotFound && styles.rowNotFound,
+                      !isLast && styles.rowBorder,
                     ]}
                   >
-                    {displayVal || 'Not Detected on Package'}
-                  </Text>
-
-                  {/* Badges Row */}
-                  <View style={styles.badgesRow}>
-                    <View style={styles.aiBadge}>
-                      <MaterialIcons name="memory" size={12} color={colors.onSurfaceVariant} />
-                      <Text style={styles.aiBadgeText}>OCR Extracted</Text>
+                    <View style={styles.rowTop}>
+                      <Text
+                        style={[
+                          styles.fieldLabelCaps,
+                          isConflict && styles.textRed,
+                          isNotFound && styles.textAmber,
+                        ]}
+                      >
+                        {label}
+                      </Text>
+                      <TouchableOpacity
+                        style={styles.editBtn}
+                        onPress={() => openEditModal(decl)}
+                        activeOpacity={0.7}
+                      >
+                        <MaterialIcons name="edit" size={18} color={colors.primary} />
+                      </TouchableOpacity>
                     </View>
 
-                    {isCorrected ? (
-                      <View style={styles.verifiedBadge}>
-                        <Text style={styles.verifiedBadgeText}>Verified by Inspector</Text>
-                      </View>
-                    ) : decl.extraction_status === 'NOT_FOUND' ? (
-                      <View style={styles.notFoundBadge}>
-                        <Text style={styles.notFoundBadgeText}>Not Found</Text>
-                      </View>
-                    ) : decl.confidence >= 0.85 ? (
-                      <View style={styles.highConfBadge}>
-                        <Text style={styles.highConfBadgeText}>
-                          OCR High ({Math.round(decl.confidence * 100)}%)
+                    {isConflict ? (
+                      <View style={styles.conflictContent}>
+                        <View style={styles.alertHeaderRow}>
+                          <MaterialIcons name="warning" size={18} color={colors.statusRedText} />
+                          <Text style={styles.conflictTitle}>CONFLICT DETECTED</Text>
+                        </View>
+                        <Text style={styles.conflictValues}>
+                          {decl.effective_value || decl.extracted_value || 'Multiple values detected across panels'}
+                        </Text>
+                        <Text style={styles.conflictHelper}>
+                          Two different values found across images. Manual verification required.
                         </Text>
                       </View>
+                    ) : isNotFound ? (
+                      <View style={styles.notFoundContent}>
+                        <View style={styles.alertHeaderRow}>
+                          <MaterialIcons name="error" size={18} color={colors.statusAmberText} />
+                          <Text style={styles.notFoundTitle}>Field Not Found</Text>
+                        </View>
+                        <Text style={styles.notFoundSubtext}>OCR could not detect this field.</Text>
+                        <TouchableOpacity
+                          style={styles.manualEntryBtn}
+                          onPress={() => openEditModal(decl)}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={styles.manualEntryText}>[ Enter Value Manually ]</Text>
+                        </TouchableOpacity>
+                      </View>
                     ) : (
-                      <View style={styles.lowConfBadge}>
-                        <Text style={styles.lowConfBadgeText}>
-                          Needs Verification ({Math.round(decl.confidence * 100)}%)
+                      <View style={styles.valueRow}>
+                        <Text style={styles.valueText}>
+                          {decl.effective_value || decl.extracted_value || 'Not specified'}
                         </Text>
                       </View>
                     )}
-                  </View>
-                </View>
-              );
-            })}
-          </View>
-        )}
 
-        {/* Evaluate Button */}
-        <TouchableOpacity
-          style={styles.evalButton}
-          onPress={handleEvaluateRules}
-          disabled={evaluating || loading}
-          activeOpacity={0.85}
-        >
-          {evaluating ? (
-            <ActivityIndicator size="small" color={colors.onPrimary} />
-          ) : (
-            <View style={styles.buttonInner}>
-              <Text style={styles.evalButtonText}>Evaluate Statutory Rules (PCR 2011)</Text>
-              <MaterialIcons name="gavel" size={18} color={colors.onPrimary} />
+                    {/* Chips Row */}
+                    <View style={styles.chipsRow}>
+                      <View style={styles.sourceChip}>
+                        <MaterialIcons name="memory" size={14} color={colors.onSurfaceVariant} />
+                        <Text style={styles.sourceChipText}>
+                          {decl.verification_status === 'CORRECTED' ? 'Inspector Corrected' : 'AI/OCR Extracted'}
+                        </Text>
+                      </View>
+
+                      {isConflict ? (
+                        <View style={styles.conflictChip}>
+                          <Text style={styles.conflictChipText}>CONFLICT — NEEDS MANUAL VERIFICATION</Text>
+                        </View>
+                      ) : isNotFound ? (
+                        <View style={styles.notFoundChip}>
+                          <Text style={styles.notFoundChipText}>OCR Result: not_found</Text>
+                        </View>
+                      ) : (
+                        <View style={styles.goodChip}>
+                          <Text style={styles.goodChipText}>
+                            OCR Confidence: {decl.ocr_confidence || 'High'}
+                          </Text>
+                        </View>
+                      )}
+                    </View>
+                  </View>
+                );
+              })}
             </View>
           )}
-        </TouchableOpacity>
-      </ScrollView>
 
-      {/* In-Place Edit / Verification Modal */}
-      <Modal visible={!!editingDecl} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalContent}>
-            <View style={styles.modalHeader}>
-              <Text style={typography.sectionHeader}>
-                Verify / Correct Declaration
-              </Text>
-              <TouchableOpacity onPress={() => setEditingDecl(null)}>
-                <MaterialIcons name="close" size={22} color={colors.onSurfaceVariant} />
-              </TouchableOpacity>
-            </View>
+          {/* Action Button: Check for Potential Violations */}
+          <TouchableOpacity
+            style={styles.evaluateButton}
+            onPress={handleEvaluateRules}
+            disabled={evaluating}
+            activeOpacity={0.85}
+          >
+            {evaluating ? (
+              <ActivityIndicator size="small" color={colors.onPrimary} />
+            ) : (
+              <View style={styles.btnInner}>
+                <MaterialIcons name="rule" size={20} color={colors.onPrimary} />
+                <Text style={styles.evaluateButtonText}>Check for Potential Violations</Text>
+              </View>
+            )}
+          </TouchableOpacity>
 
-            <Text style={styles.modalFieldLabel}>
-              {editingDecl ? FIELD_LABELS[editingDecl.field_name] : ''}
-            </Text>
+          <View style={styles.footerNote}>
+            <Text style={styles.footerNoteText}>Smart India Hackathon 2026 Prototype</Text>
+          </View>
+        </ScrollView>
 
-            <View style={styles.modalInputGroup}>
-              <Text style={typography.labelCaps}>Verified Value</Text>
-              <TextInput
-                style={styles.modalTextInput}
-                value={correctedValue}
-                onChangeText={setCorrectedValue}
-                placeholder="Enter verified label value"
-                placeholderTextColor={colors.outline}
-              />
-            </View>
+        {/* Edit Modal */}
+        <Modal visible={!!editingDecl} transparent animationType="fade">
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <Text style={typography.sectionHeader}>
+                  Edit {editingDecl ? FIELD_LABELS[editingDecl.field_type] || editingDecl.field_type : 'Declaration'}
+                </Text>
+                <TouchableOpacity onPress={() => setEditingDecl(null)}>
+                  <MaterialIcons name="close" size={22} color={colors.onSurfaceVariant} />
+                </TouchableOpacity>
+              </View>
 
-            <View style={styles.modalInputGroup}>
-              <Text style={typography.labelCaps}>Officer Correction Reason</Text>
-              <TextInput
-                style={styles.modalTextInput}
-                value={correctionReason}
-                onChangeText={setCorrectionReason}
-                placeholder="e.g. Verified on back panel text"
-                placeholderTextColor={colors.outline}
-              />
-            </View>
+              <View style={styles.modalBody}>
+                <Text style={typography.labelCaps}>Corrected / Verified Value</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  value={correctedValue}
+                  onChangeText={setCorrectedValue}
+                  placeholder="Enter correct value from package"
+                  placeholderTextColor={colors.outline}
+                />
 
-            <View style={styles.modalActions}>
-              <TouchableOpacity
-                style={styles.modalCancelBtn}
-                onPress={() => setEditingDecl(null)}
-              >
-                <Text style={styles.modalCancelText}>Cancel</Text>
-              </TouchableOpacity>
+                <Text style={[typography.labelCaps, { marginTop: 12 }]}>Reason for Modification</Text>
+                <TextInput
+                  style={styles.modalInput}
+                  value={correctionReason}
+                  onChangeText={setCorrectionReason}
+                  placeholder="e.g. Verified on physical package label"
+                  placeholderTextColor={colors.outline}
+                />
+              </View>
 
-              <TouchableOpacity
-                style={styles.modalSaveBtn}
-                onPress={handleSaveCorrection}
-                disabled={savingCorrection}
-              >
-                {savingCorrection ? (
-                  <ActivityIndicator size="small" color={colors.onPrimary} />
-                ) : (
-                  <Text style={styles.modalSaveText}>Save Correction</Text>
-                )}
-              </TouchableOpacity>
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={styles.modalCancelBtn}
+                  onPress={() => setEditingDecl(null)}
+                  disabled={savingCorrection}
+                >
+                  <Text style={styles.modalCancelText}>Cancel</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.modalSaveBtn}
+                  onPress={handleSaveCorrection}
+                  disabled={savingCorrection}
+                  activeOpacity={0.85}
+                >
+                  {savingCorrection ? (
+                    <ActivityIndicator size="small" color={colors.onPrimary} />
+                  ) : (
+                    <Text style={styles.modalSaveText}>Save Correction</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
             </View>
           </View>
-        </View>
-      </Modal>
-    </View>
+        </Modal>
+
+        {/* Bottom Navigation */}
+        <BottomNav />
+      </View>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
   container: {
     flex: 1,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.background,
   },
-  scrollContent: {
-    padding: spacing.gutter,
-    paddingBottom: 32,
-    gap: spacing.stackMd,
-  },
-  infoCard: {
+  topHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    padding: spacing.stackMd,
-    backgroundColor: colors.surfaceContainerLow,
+    justifyContent: 'space-between',
+    backgroundColor: colors.surfaceContainerLowest,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle,
+    height: 56,
+    paddingHorizontal: spacing.gutter,
+  },
+  headerLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  backButton: {
+    padding: 6,
+    borderRadius: borderRadius.round,
+  },
+  headerTitle: {
+    ...typography.headlineLg,
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  headerSubtitle: {
+    ...typography.caption,
+    fontSize: 12,
+    color: colors.onSurfaceVariant,
+  },
+  avatarCircle: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    backgroundColor: colors.surfaceContainerHigh,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
-    borderRadius: borderRadius.lg,
-    gap: 8,
+    alignItems: 'center',
+    justifyContent: 'center',
   },
-  infoText: {
-    ...typography.caption,
-    color: colors.onSurface,
-    flex: 1,
+  avatarInitials: {
+    ...typography.labelCaps,
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primary,
   },
-  tableCard: {
+  scrollContent: {
+    paddingHorizontal: spacing.gutter,
+    paddingTop: spacing.stackMd,
+    paddingBottom: 90,
+    gap: spacing.stackMd,
+  },
+  sectionHeaderBox: {
+    gap: 2,
+    marginBottom: 4,
+  },
+  sectionHeaderTitle: {
+    ...typography.sectionHeader,
+    fontSize: 16,
+    lineHeight: 24,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+  sectionHeaderSubtitle: {
+    ...typography.bodySm,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.onSurfaceVariant,
+  },
+  tableContainer: {
     backgroundColor: colors.surfaceContainerLowest,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
-    borderRadius: borderRadius.lg,
+    borderRadius: borderRadius.DEFAULT,
     overflow: 'hidden',
   },
-  declRow: {
-    padding: spacing.marginX,
-    gap: 4,
+  tableRow: {
+    padding: spacing.gutter,
+    gap: 8,
   },
   rowBorder: {
     borderBottomWidth: 1,
     borderBottomColor: colors.borderSubtle,
   },
-  rowTopLine: {
+  rowConflict: {
+    backgroundColor: colors.statusRedBg,
+    borderColor: 'rgba(183, 28, 28, 0.2)',
+  },
+  rowNotFound: {
+    backgroundColor: colors.statusAmberBg,
+    borderColor: 'rgba(230, 81, 0, 0.2)',
+  },
+  rowTop: {
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
   },
-  fieldLabelText: {
+  fieldLabelCaps: {
     ...typography.labelCaps,
+    fontSize: 12,
+    lineHeight: 16,
+    letterSpacing: 0.5,
+    fontWeight: '600',
     color: colors.onSurfaceVariant,
-    fontSize: 11,
-    flex: 1,
+    textTransform: 'uppercase',
   },
-  editIconButton: {
+  textRed: {
+    color: colors.statusRedText,
+  },
+  textAmber: {
+    color: colors.statusAmberText,
+  },
+  editBtn: {
     padding: 4,
+    borderRadius: borderRadius.DEFAULT,
+  },
+  valueRow: {
+    marginBottom: 2,
   },
   valueText: {
-    ...typography.bodyMdMedium,
+    ...typography.bodyMd,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '600',
     color: colors.onSurface,
-    fontSize: 15,
   },
-  missingValueText: {
-    color: colors.secondary,
-    fontStyle: 'italic',
+  conflictContent: {
+    gap: 4,
+    marginBottom: 4,
   },
-  badgesRow: {
+  alertHeaderRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    flexWrap: 'wrap',
     gap: 6,
+  },
+  conflictTitle: {
+    ...typography.bodyMd,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '700',
+    color: colors.statusRedText,
+  },
+  conflictValues: {
+    ...typography.bodySm,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.onSurface,
+    marginLeft: 24,
+  },
+  conflictHelper: {
+    ...typography.caption,
+    fontSize: 12,
+    color: colors.onSurfaceVariant,
+    marginLeft: 24,
+  },
+  notFoundContent: {
+    gap: 4,
+    marginBottom: 4,
+  },
+  notFoundTitle: {
+    ...typography.bodyMd,
+    fontSize: 14,
+    lineHeight: 20,
+    fontWeight: '700',
+    color: colors.statusAmberText,
+  },
+  notFoundSubtext: {
+    ...typography.bodySm,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.onSurface,
+    marginLeft: 24,
+  },
+  manualEntryBtn: {
+    marginLeft: 24,
     marginTop: 2,
   },
-  aiBadge: {
+  manualEntryText: {
+    ...typography.bodySm,
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.primary,
+    textDecorationLine: 'underline',
+  },
+  chipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    alignItems: 'center',
+    gap: 8,
+    marginTop: 2,
+  },
+  sourceChip: {
     flexDirection: 'row',
     alignItems: 'center',
     backgroundColor: colors.surfaceContainerLow,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
-    paddingHorizontal: 6,
+    borderRadius: borderRadius.DEFAULT,
+    paddingHorizontal: 8,
     paddingVertical: 2,
-    borderRadius: borderRadius.sm,
-    gap: 3,
+    gap: 4,
   },
-  aiBadgeText: {
+  sourceChipText: {
     ...typography.caption,
-    fontSize: 10,
+    fontSize: 11,
     color: colors.onSurfaceVariant,
   },
-  verifiedBadge: {
-    backgroundColor: '#eff6ff',
-    borderWidth: 1,
-    borderColor: '#93c5fd',
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: borderRadius.sm,
-  },
-  verifiedBadgeText: {
-    ...typography.caption,
-    fontSize: 10,
-    color: '#1d4ed8',
-    fontWeight: '700',
-  },
-  notFoundBadge: {
-    backgroundColor: colors.surfaceContainerHigh,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: borderRadius.sm,
-  },
-  notFoundBadgeText: {
-    ...typography.caption,
-    fontSize: 10,
-    color: colors.secondary,
-  },
-  highConfBadge: {
+  goodChip: {
     backgroundColor: colors.statusGreenBg,
     borderWidth: 1,
-    borderColor: colors.statusGreenText,
-    paddingHorizontal: 6,
+    borderColor: 'rgba(27, 94, 32, 0.2)',
+    borderRadius: borderRadius.DEFAULT,
+    paddingHorizontal: 8,
     paddingVertical: 2,
-    borderRadius: borderRadius.sm,
   },
-  highConfBadgeText: {
+  goodChipText: {
     ...typography.caption,
-    fontSize: 10,
-    color: colors.statusGreenText,
+    fontSize: 11,
     fontWeight: '600',
+    color: colors.statusGreenText,
   },
-  lowConfBadge: {
+  conflictChip: {
+    backgroundColor: colors.statusRedBg,
+    borderWidth: 1,
+    borderColor: 'rgba(183, 28, 28, 0.2)',
+    borderRadius: borderRadius.DEFAULT,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+  },
+  conflictChipText: {
+    ...typography.caption,
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.statusRedText,
+  },
+  notFoundChip: {
     backgroundColor: colors.statusAmberBg,
     borderWidth: 1,
-    borderColor: colors.statusAmberText,
-    paddingHorizontal: 6,
+    borderColor: 'rgba(230, 81, 0, 0.2)',
+    borderRadius: borderRadius.DEFAULT,
+    paddingHorizontal: 8,
     paddingVertical: 2,
-    borderRadius: borderRadius.sm,
   },
-  lowConfBadgeText: {
+  notFoundChipText: {
     ...typography.caption,
-    fontSize: 10,
-    color: colors.statusAmberText,
+    fontSize: 11,
     fontWeight: '600',
+    color: colors.statusAmberText,
   },
-  evalButton: {
+  evaluateButton: {
     backgroundColor: colors.primary,
-    paddingVertical: 12,
-    borderRadius: borderRadius.lg,
+    paddingVertical: 14,
+    borderRadius: borderRadius.xl,
     alignItems: 'center',
     justifyContent: 'center',
+    marginTop: 8,
   },
-  buttonInner: {
+  btnInner: {
     flexDirection: 'row',
     alignItems: 'center',
-    gap: 6,
+    gap: 8,
   },
-  evalButtonText: {
+  evaluateButtonText: {
     ...typography.sectionHeader,
+    fontSize: 15,
+    lineHeight: 22,
     color: colors.onPrimary,
+    fontWeight: '600',
+  },
+  footerNote: {
+    alignItems: 'center',
+    marginTop: 8,
+    marginBottom: 8,
+  },
+  footerNoteText: {
+    ...typography.caption,
+    fontSize: 11,
+    color: colors.onSurfaceVariant,
   },
   modalOverlay: {
     flex: 1,
@@ -435,6 +638,8 @@ const styles = StyleSheet.create({
     maxWidth: 400,
     backgroundColor: colors.surfaceContainerLowest,
     borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
     padding: spacing.marginX,
     gap: spacing.stackMd,
   },
@@ -442,16 +647,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-between',
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle,
+    paddingBottom: spacing.stackSm,
   },
-  modalFieldLabel: {
-    ...typography.labelCaps,
-    color: colors.primary,
-    fontSize: 11,
+  modalBody: {
+    gap: 6,
   },
-  modalInputGroup: {
-    gap: 4,
-  },
-  modalTextInput: {
+  modalInput: {
     backgroundColor: colors.surfaceBright,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
@@ -465,7 +668,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     justifyContent: 'flex-end',
     gap: 8,
-    marginTop: spacing.tight,
+    marginTop: 8,
   },
   modalCancelBtn: {
     paddingVertical: 8,
@@ -482,11 +685,8 @@ const styles = StyleSheet.create({
   modalSaveBtn: {
     backgroundColor: colors.primary,
     paddingVertical: 8,
-    paddingHorizontal: 14,
+    paddingHorizontal: 16,
     borderRadius: borderRadius.lg,
-    alignItems: 'center',
-    justifyContent: 'center',
-    minWidth: 120,
   },
   modalSaveText: {
     ...typography.bodySm,

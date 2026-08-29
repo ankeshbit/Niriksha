@@ -1,5 +1,5 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
 import { useNavigation, useRoute } from '@react-navigation/native';
@@ -16,50 +16,43 @@ export const BottomNav: React.FC = () => {
     name: string;
     route: keyof RootStackParamList;
     icon: keyof typeof MaterialIcons.glyphMap;
-    isPrimaryAction?: boolean;
   }> = [
     { name: 'Home', route: 'Dashboard', icon: 'home' },
-    { name: 'Reports', route: 'ReportsList', icon: 'description' },
-    { name: '+ NEW', route: 'NewInspection', icon: 'add-circle', isPrimaryAction: true },
-    { name: 'Offline', route: 'DraftOffline', icon: 'cloud-off' },
+    { name: 'Inspections', route: 'DraftOffline', icon: 'fact-check' },
+    { name: 'New', route: 'NewInspection', icon: 'add-circle' },
+    { name: 'Reports', route: 'ReportsList', icon: 'assessment' },
     { name: 'Profile', route: 'Profile', icon: 'person' },
   ];
 
   return (
     <View style={styles.navContainer}>
       {tabs.map((tab) => {
-        const isActive = currentRoute === tab.route;
-
-        if (tab.isPrimaryAction) {
-          return (
-            <TouchableOpacity
-              key={tab.name}
-              onPress={() => navigation.navigate(tab.route as any)}
-              style={styles.primaryActionButton}
-              activeOpacity={0.8}
-            >
-              <MaterialIcons name="add" size={22} color={colors.onPrimary} />
-              <Text style={styles.primaryActionText}>NEW</Text>
-            </TouchableOpacity>
-          );
-        }
+        const isActive =
+          (tab.name === 'Home' && currentRoute === 'Dashboard') ||
+          (tab.name === 'Inspections' && currentRoute === 'DraftOffline') ||
+          (tab.name === 'New' && currentRoute === 'NewInspection') ||
+          (tab.name === 'Reports' && currentRoute === 'ReportsList') ||
+          (tab.name === 'Profile' && currentRoute === 'Profile');
 
         return (
           <TouchableOpacity
             key={tab.name}
             onPress={() => navigation.navigate(tab.route as any)}
-            style={styles.tabItem}
+            style={[styles.tabItem, isActive && styles.activeTabItem]}
             activeOpacity={0.7}
           >
             <MaterialIcons
               name={tab.icon}
               size={22}
-              color={isActive ? colors.primary : colors.secondary}
+              color={isActive ? colors.primary : colors.onSurfaceVariant}
             />
             <Text
               style={[
                 styles.tabLabel,
-                { color: isActive ? colors.primary : colors.secondary, fontWeight: isActive ? '700' : '500' },
+                {
+                  color: isActive ? colors.primary : colors.onSurfaceVariant,
+                  fontWeight: isActive ? '600' : '400',
+                },
               ]}
             >
               {tab.name}
@@ -76,36 +69,29 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'space-around',
-    backgroundColor: colors.surfaceContainerLowest,
+    backgroundColor: colors.surface,
     borderTopWidth: 1,
     borderTopColor: colors.borderSubtle,
-    paddingVertical: 8,
-    paddingHorizontal: spacing.gutter,
+    paddingVertical: 6,
+    paddingHorizontal: spacing.tight,
+    paddingBottom: Platform.OS === 'ios' ? 20 : 6,
   },
   tabItem: {
     alignItems: 'center',
     justifyContent: 'center',
     paddingVertical: 4,
-    minWidth: 50,
+    paddingHorizontal: 12,
+    borderRadius: borderRadius.xl,
+    minWidth: 60,
+  },
+  activeTabItem: {
+    backgroundColor: colors.secondaryContainer,
   },
   tabLabel: {
     ...typography.caption,
-    fontSize: 11,
+    fontSize: 12,
+    lineHeight: 16,
     marginTop: 2,
   },
-  primaryActionButton: {
-    backgroundColor: colors.primary,
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingHorizontal: 12,
-    paddingVertical: 6,
-    borderRadius: borderRadius.round,
-    marginHorizontal: 4,
-  },
-  primaryActionText: {
-    ...typography.caption,
-    color: colors.onPrimary,
-    fontWeight: '700',
-    marginLeft: 2,
-  },
 });
+

@@ -9,14 +9,13 @@ import {
   RefreshControl,
   TextInput,
   Alert,
+  SafeAreaView,
 } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
-import { AppHeader } from '../components/AppHeader';
 import { BottomNav } from '../components/BottomNav';
-import { StatusBadge } from '../components/StatusBadge';
 import { api, getApiBaseUrl } from '../services/api';
 import { authStorage } from '../services/authStorage';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -78,13 +77,33 @@ export const ReportsListScreen: React.FC = () => {
             UTI: 'com.adobe.pdf',
           });
         } else {
-          Alert.alert('Download Saved', `PDF saved to: ${downloadRes.uri}`);
+          Alert.alert('Download Saved', `PDF saved to:\n${downloadRes.uri}`);
         }
       }
     } catch (err: any) {
       Alert.alert('Export Error', err.message || 'Could not download PDF.');
     } finally {
       setDownloadingId(null);
+    }
+  };
+
+  const handleShare = async (reportItem: any) => {
+    try {
+      const baseUrl = getApiBaseUrl();
+      const pdfUrl = `${baseUrl}/api/inspections/${reportItem.inspection_id}/report/pdf`;
+      const token = await authStorage.getToken();
+      const localFilename = `LM_Report_${reportItem.inspection_number}.pdf`;
+      const fileUri = `${FileSystem.documentDirectory}${localFilename}`;
+
+      const downloadRes = await FileSystem.downloadAsync(pdfUrl, fileUri, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (downloadRes.status === 200 && (await Sharing.isAvailableAsync())) {
+        await Sharing.shareAsync(downloadRes.uri);
+      }
+    } catch (err: any) {
+      Alert.alert('Share Error', err.message || 'Could not share report.');
     }
   };
 
@@ -99,231 +118,363 @@ export const ReportsListScreen: React.FC = () => {
   });
 
   return (
-    <View style={styles.container}>
-      <AppHeader
-        title="REPORTS ARCHIVE"
-        subtitle="Department of Consumer Affairs (DoCA)"
-        showBack={false}
-      />
-
-      <ScrollView
-        contentContainerStyle={styles.scrollContent}
-        refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
-      >
-        {/* Search Bar */}
-        <View style={styles.searchContainer}>
-          <MaterialIcons name="search" size={20} color={colors.onSurfaceVariant} />
-          <TextInput
-            style={styles.searchInput}
-            value={searchQuery}
-            onChangeText={setSearchQuery}
-            placeholder="Search by ID, commodity, or site..."
-            placeholderTextColor={colors.outline}
-          />
-          {searchQuery ? (
-            <TouchableOpacity onPress={() => setSearchQuery('')}>
-              <MaterialIcons name="clear" size={18} color={colors.onSurfaceVariant} />
-            </TouchableOpacity>
-          ) : null}
+    <SafeAreaView style={styles.safeArea}>
+      <View style={styles.container}>
+        {/* Stitch TopAppBar Header */}
+        <View style={styles.topHeader}>
+          <TouchableOpacity
+            style={styles.headerIconButton}
+            onPress={() => navigation.navigate('Dashboard')}
+            activeOpacity={0.7}
+          >
+            <MaterialIcons name="menu" size={24} color={colors.onSurfaceVariant} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>LEGAL METROLOGY</Text>
+          <TouchableOpacity
+            style={styles.headerIconButton}
+            onPress={() => navigation.navigate('Profile')}
+            activeOpacity={0.7}
+          >
+            <MaterialIcons name="account-circle" size={24} color={colors.onSurfaceVariant} />
+          </TouchableOpacity>
         </View>
 
-        {loading ? (
-          <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 30 }} />
-        ) : filteredReports.length === 0 ? (
-          <View style={styles.emptyCard}>
-            <MaterialIcons name="folder-open" size={40} color={colors.outline} />
-            <Text style={styles.emptyTitle}>No Inspection Reports Found</Text>
-            <Text style={styles.emptySub}>
-              Reports generated from finalized inspections will appear here.
-            </Text>
-          </View>
-        ) : (
-          filteredReports.map((item) => {
-            const isDownloading = downloadingId === item.id;
-            const dateStr = item.generated_at
-              ? new Date(item.generated_at).toLocaleDateString('en-GB', {
-                  day: 'numeric',
-                  month: 'short',
-                  year: 'numeric',
-                })
-              : 'Recent';
-
-            return (
-              <View key={item.id} style={styles.reportCard}>
-                <View style={styles.cardHeader}>
-                  <View>
-                    <Text style={styles.inspNumText}>{item.inspection_number}</Text>
-                    <Text style={styles.dateVersionText}>
-                      {dateStr} • Version {item.report_version || 1}
-                    </Text>
-                  </View>
-                  <StatusBadge status={item.overall_status} />
-                </View>
-
-                <View style={styles.bodySection}>
-                  <Text style={styles.productNameText}>{item.product_name || 'Packaged Commodity'}</Text>
-                  <Text style={styles.locationText}>{item.location || 'Field Location'}</Text>
-                </View>
-
-                <View style={styles.cardActionsRow}>
-                  <TouchableOpacity
-                    style={styles.previewBtn}
-                    onPress={() =>
-                      navigation.navigate('ReportPreview', {
-                        inspectionId: item.inspection_id,
-                        inspectionNumber: item.inspection_number,
-                      })
-                    }
-                    activeOpacity={0.8}
-                  >
-                    <MaterialIcons name="visibility" size={16} color={colors.primary} />
-                    <Text style={styles.previewBtnText}>View Summary</Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={styles.pdfBtn}
-                    onPress={() => handleDownloadPDF(item)}
-                    disabled={isDownloading}
-                    activeOpacity={0.8}
-                  >
-                    {isDownloading ? (
-                      <ActivityIndicator size="small" color={colors.onPrimary} />
-                    ) : (
-                      <>
-                        <MaterialIcons name="download" size={16} color={colors.onPrimary} />
-                        <Text style={styles.pdfBtnText}>Download PDF</Text>
-                      </>
-                    )}
-                  </TouchableOpacity>
-                </View>
+        <ScrollView
+          contentContainerStyle={styles.scrollContent}
+          refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
+          showsVerticalScrollIndicator={false}
+        >
+          {/* Header Title & Search Controls */}
+          <View style={styles.pageHeader}>
+            <Text style={styles.pageTitle}>Reports</Text>
+            <View style={styles.searchRow}>
+              <View style={styles.searchContainer}>
+                <MaterialIcons name="search" size={20} color={colors.outline} />
+                <TextInput
+                  style={styles.searchInput}
+                  value={searchQuery}
+                  onChangeText={setSearchQuery}
+                  placeholder="Search reports by ID or Product..."
+                  placeholderTextColor={colors.outline}
+                />
               </View>
-            );
-          })
-        )}
-      </ScrollView>
+              <TouchableOpacity style={styles.filterBtn} activeOpacity={0.8}>
+                <MaterialIcons name="filter-list" size={18} color={colors.primary} />
+                <Text style={styles.filterBtnText}>Filters</Text>
+                <MaterialIcons name="arrow-drop-down" size={16} color={colors.primary} />
+              </TouchableOpacity>
+            </View>
+          </View>
 
-      <BottomNav />
-    </View>
+          {/* Reports Table Container */}
+          <View style={styles.tableContainer}>
+            {loading ? (
+              <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 30 }} />
+            ) : filteredReports.length === 0 ? (
+              <View style={styles.emptyBox}>
+                <MaterialIcons name="folder-open" size={40} color={colors.outline} />
+                <Text style={styles.emptyTitle}>No Inspection Reports Found</Text>
+                <Text style={styles.emptySubtitle}>
+                  Reports generated from finalized inspections will appear here.
+                </Text>
+              </View>
+            ) : (
+              filteredReports.map((item, idx) => {
+                const isLast = idx === filteredReports.length - 1;
+                const isDownloading = downloadingId === item.id;
+                const isNonCompliant =
+                  item.overall_status === 'POTENTIAL_NON_COMPLIANCE' || item.overall_status === 'FAIL';
+                const isCompliant =
+                  item.overall_status === 'NO_POTENTIAL_VIOLATIONS' || item.overall_status === 'VERIFIED_COMPLIANT';
+
+                const dateStr = item.generated_at
+                  ? new Date(item.generated_at).toLocaleDateString('en-GB', {
+                      day: 'numeric',
+                      month: 'short',
+                      year: 'numeric',
+                    })
+                  : '27 Aug 2026';
+
+                return (
+                  <View key={item.id || idx} style={[styles.reportRow, !isLast && styles.rowBorder]}>
+                    <View style={styles.rowTop}>
+                      <View>
+                        <Text style={styles.reportIdText}>{item.inspection_number}</Text>
+                        <Text style={styles.reportDateText}>{dateStr}</Text>
+                      </View>
+                      <View
+                        style={[
+                          styles.badge,
+                          isCompliant ? styles.badgeGreen : isNonCompliant ? styles.badgeRed : styles.badgeAmber,
+                        ]}
+                      >
+                        <MaterialIcons
+                          name={isCompliant ? 'check-circle' : isNonCompliant ? 'error' : 'warning'}
+                          size={14}
+                          color={
+                            isCompliant
+                              ? colors.statusGreenText
+                              : isNonCompliant
+                              ? colors.statusRedText
+                              : colors.statusAmberText
+                          }
+                        />
+                        <Text
+                          style={[
+                            styles.badgeText,
+                            {
+                              color: isCompliant
+                                ? colors.statusGreenText
+                                : isNonCompliant
+                                ? colors.statusRedText
+                                : colors.statusAmberText,
+                            },
+                          ]}
+                        >
+                          {isCompliant
+                            ? 'No Potential Violations Detected'
+                            : isNonCompliant
+                            ? 'Potential Non-Compliance Identified'
+                            : 'Needs Manual Verification'}
+                        </Text>
+                      </View>
+                    </View>
+
+                    <View style={styles.productDescBox}>
+                      <Text style={styles.productNameText}>{item.product_name || 'Packaged Commodity'}</Text>
+                      <Text style={styles.productLocationText}>{item.location || 'Field Location'}</Text>
+                    </View>
+
+                    <View style={styles.rowActions}>
+                      <TouchableOpacity
+                        style={styles.actionIconButton}
+                        onPress={() =>
+                          navigation.navigate('ReportPreview', {
+                            inspectionId: item.inspection_id,
+                            inspectionNumber: item.inspection_number,
+                          })
+                        }
+                        activeOpacity={0.7}
+                      >
+                        <MaterialIcons name="visibility" size={18} color={colors.primary} />
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.actionIconButton}
+                        onPress={() => handleShare(item)}
+                        activeOpacity={0.7}
+                      >
+                        <MaterialIcons name="share" size={18} color={colors.primary} />
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={styles.actionIconButton}
+                        onPress={() => handleDownloadPDF(item)}
+                        disabled={isDownloading}
+                        activeOpacity={0.7}
+                      >
+                        {isDownloading ? (
+                          <ActivityIndicator size="small" color={colors.primary} />
+                        ) : (
+                          <MaterialIcons name="download" size={18} color={colors.primary} />
+                        )}
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                );
+              })
+            )}
+          </View>
+        </ScrollView>
+
+        {/* Bottom Navigation */}
+        <BottomNav />
+      </View>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
   container: {
     flex: 1,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.background,
   },
-  scrollContent: {
-    padding: spacing.gutter,
-    paddingBottom: 24,
-    gap: spacing.stackMd,
-  },
-  searchContainer: {
+  topHeader: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.surfaceBright,
+    justifyContent: 'space-between',
+    backgroundColor: colors.surfaceContainerLowest,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle,
+    height: 56,
+    paddingHorizontal: spacing.gutter,
+  },
+  headerIconButton: {
+    padding: 6,
+    borderRadius: borderRadius.round,
+  },
+  headerTitle: {
+    ...typography.headlineLg,
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  scrollContent: {
+    paddingHorizontal: spacing.gutter,
+    paddingTop: spacing.stackMd,
+    paddingBottom: 90,
+    gap: spacing.stackMd,
+  },
+  pageHeader: {
+    gap: spacing.stackSm,
+  },
+  pageTitle: {
+    ...typography.headlineLg,
+    fontSize: 20,
+    lineHeight: 28,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  searchRow: {
+    flexDirection: 'row',
+    gap: 8,
+    alignItems: 'center',
+  },
+  searchContainer: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surfaceContainerLowest,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
-    borderRadius: borderRadius.lg,
-    paddingHorizontal: 12,
+    borderRadius: borderRadius.DEFAULT,
+    paddingHorizontal: 10,
     paddingVertical: 6,
-    gap: 8,
+    gap: 6,
   },
   searchInput: {
-    ...typography.bodyMd,
     flex: 1,
+    ...typography.bodyMd,
+    fontSize: 13,
     color: colors.onSurface,
     paddingVertical: 2,
   },
-  emptyCard: {
+  filterBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
     backgroundColor: colors.surfaceContainerLowest,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
-    borderRadius: borderRadius.lg,
+    borderRadius: borderRadius.DEFAULT,
+    paddingHorizontal: 10,
+    paddingVertical: 8,
+    gap: 4,
+  },
+  filterBtnText: {
+    ...typography.bodyMd,
+    fontSize: 13,
+    color: colors.primary,
+  },
+  tableContainer: {
+    backgroundColor: colors.surfaceContainerLowest,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    borderRadius: borderRadius.DEFAULT,
+    overflow: 'hidden',
+  },
+  emptyBox: {
     padding: spacing.stackLg,
     alignItems: 'center',
     gap: 8,
-    marginTop: 20,
   },
   emptyTitle: {
     ...typography.sectionHeader,
+    fontSize: 15,
     color: colors.primary,
   },
-  emptySub: {
-    ...typography.bodySm,
+  emptySubtitle: {
+    ...typography.caption,
+    fontSize: 12,
     color: colors.onSurfaceVariant,
     textAlign: 'center',
   },
-  reportCard: {
-    backgroundColor: colors.surfaceContainerLowest,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    borderRadius: borderRadius.lg,
-    padding: spacing.marginX,
-    gap: spacing.stackSm,
+  reportRow: {
+    padding: spacing.gutter,
+    gap: 8,
   },
-  cardHeader: {
+  rowBorder: {
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle,
+  },
+  rowTop: {
     flexDirection: 'row',
-    alignItems: 'flex-start',
     justifyContent: 'space-between',
+    alignItems: 'flex-start',
+    gap: 8,
   },
-  inspNumText: {
-    ...typography.bodyMdMedium,
-    color: colors.primary,
+  reportIdText: {
+    ...typography.bodySm,
+    fontSize: 13,
     fontWeight: '700',
+    color: colors.onSurface,
   },
-  dateVersionText: {
+  reportDateText: {
     ...typography.caption,
     fontSize: 11,
     color: colors.onSurfaceVariant,
     marginTop: 1,
   },
-  bodySection: {
+  badge: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: borderRadius.DEFAULT,
+    gap: 4,
+    maxWidth: '65%',
+  },
+  badgeGreen: {
+    backgroundColor: colors.statusGreenBg,
+  },
+  badgeRed: {
+    backgroundColor: colors.statusRedBg,
+  },
+  badgeAmber: {
+    backgroundColor: colors.statusAmberBg,
+  },
+  badgeText: {
+    ...typography.caption,
+    fontSize: 10,
+    fontWeight: '600',
+  },
+  productDescBox: {
     gap: 2,
   },
   productNameText: {
-    ...typography.bodyMdMedium,
+    ...typography.bodyMd,
+    fontSize: 14,
     color: colors.onSurface,
   },
-  locationText: {
-    ...typography.bodySm,
+  productLocationText: {
+    ...typography.caption,
+    fontSize: 12,
     color: colors.onSurfaceVariant,
   },
-  cardActionsRow: {
+  rowActions: {
     flexDirection: 'row',
     justifyContent: 'flex-end',
     gap: 8,
-    paddingTop: 8,
-    borderTopWidth: 1,
-    borderTopColor: colors.surfaceContainerHigh,
+    paddingTop: 4,
   },
-  previewBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
+  actionIconButton: {
+    padding: 6,
     backgroundColor: colors.surfaceContainerLow,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
-    borderRadius: borderRadius.lg,
-    gap: 4,
-  },
-  previewBtnText: {
-    ...typography.caption,
-    fontWeight: '600',
-    color: colors.primary,
-  },
-  pdfBtn: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    paddingVertical: 6,
-    paddingHorizontal: 12,
-    backgroundColor: colors.primary,
-    borderRadius: borderRadius.lg,
-    gap: 4,
-  },
-  pdfBtnText: {
-    ...typography.caption,
-    fontWeight: '700',
-    color: colors.onPrimary,
+    borderRadius: borderRadius.DEFAULT,
   },
 });

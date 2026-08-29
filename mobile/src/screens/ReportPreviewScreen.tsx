@@ -7,14 +7,12 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
-  Platform,
+  SafeAreaView,
 } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
-import { AppHeader } from '../components/AppHeader';
-import { StatusBadge } from '../components/StatusBadge';
 import { api, getApiBaseUrl } from '../services/api';
 import { authStorage } from '../services/authStorage';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
@@ -27,19 +25,17 @@ export const ReportPreviewScreen: React.FC = () => {
   const { inspectionId, inspectionNumber } = route.params;
 
   const [report, setReport] = useState<any | null>(null);
-  const [inspection, setInspection] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
 
   useEffect(() => {
-    const loadReport = async () => {
+    const fetchReport = async () => {
       try {
-        const [rep, insp] = await Promise.all([
-          api.getReportMetadata(inspectionId),
-          api.getInspection(inspectionId),
-        ]);
-        setReport(rep);
-        setInspection(insp);
+        let data = await api.getReportMetadata(inspectionId);
+        if (!data || !data.report_number) {
+          data = await api.generateReport(inspectionId);
+        }
+        setReport(data);
       } catch (err) {
         console.error('Failed to load report preview:', err);
       } finally {
@@ -47,18 +43,18 @@ export const ReportPreviewScreen: React.FC = () => {
       }
     };
 
-    loadReport();
+    fetchReport();
   }, [inspectionId]);
 
-  const handleDownloadAndSharePDF = async () => {
+  const handleDownloadPDF = async () => {
     setDownloading(true);
     try {
       const baseUrl = getApiBaseUrl();
       const pdfUrl = `${baseUrl}/api/inspections/${inspectionId}/report/pdf`;
       const token = await authStorage.getToken();
 
-      const localFilename = `LM_Report_${inspection?.inspection_number || inspectionNumber || 'doc'}.pdf`;
-      const fileUri = `${FileSystem.documentDirectory}${localFilename}`;
+      const filename = `Inspection_Report_${report?.report_number || inspectionNumber || 'LM-2026'}.pdf`;
+      const fileUri = `${FileSystem.documentDirectory}${filename}`;
 
       const downloadRes = await FileSystem.downloadAsync(pdfUrl, fileUri, {
         headers: {
@@ -70,303 +66,390 @@ export const ReportPreviewScreen: React.FC = () => {
         if (await Sharing.isAvailableAsync()) {
           await Sharing.shareAsync(downloadRes.uri, {
             mimeType: 'application/pdf',
-            dialogTitle: `Official Statutory Inspection Report: ${inspection?.inspection_number}`,
+            dialogTitle: 'Inspection Report PDF',
             UTI: 'com.adobe.pdf',
           });
         } else {
-          Alert.alert('Download Complete', `Report saved to: ${downloadRes.uri}`);
+          Alert.alert('PDF Saved', `Inspection report saved to:\n${downloadRes.uri}`);
         }
       } else {
-        throw new Error(`Download failed with HTTP ${downloadRes.status}`);
+        Alert.alert('Export Failed', 'Server returned error generating PDF.');
       }
     } catch (err: any) {
-      Alert.alert('PDF Export Error', err.message || 'Could not download PDF report.');
+      Alert.alert('Export Error', err.message || 'Could not download PDF report.');
     } finally {
       setDownloading(false);
     }
   };
 
-  const generatedDateStr = report?.generated_at
-    ? new Date(report.generated_at).toLocaleString('en-GB', {
+  const status = report?.overall_status || 'POTENTIAL_NON_COMPLIANCE';
+  const isCompliant = status === 'NO_POTENTIAL_VIOLATIONS' || status === 'VERIFIED_COMPLIANT';
+  const isNonCompliant = status === 'POTENTIAL_NON_COMPLIANCE' || status === 'FAIL';
+
+  const dateStr = report?.generated_at
+    ? new Date(report.generated_at).toLocaleDateString('en-GB', {
         day: 'numeric',
         month: 'short',
         year: 'numeric',
-        hour: '2-digit',
-        minute: '2-digit',
       })
-    : new Date().toLocaleString('en-GB');
+    : new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
 
   return (
-    <View style={styles.container}>
-      <AppHeader
-        title="INSPECTION REPORT"
-        subtitle={`Verified Record: ${inspection?.inspection_number || inspectionNumber || 'LM-2026'}`}
-        showBack={true}
-        onBackPress={() => navigation.navigate('Dashboard')}
-      />
+    <SafeAreaView style={styles.safeArea}>
+      <View style={styles.container}>
+        {/* Stitch TopAppBar Header */}
+        <View style={styles.topHeader}>
+          <TouchableOpacity
+            style={styles.headerIconButton}
+            onPress={() => navigation.navigate('Dashboard')}
+            activeOpacity={0.7}
+          >
+            <MaterialIcons name="menu" size={24} color={colors.onSurfaceVariant} />
+          </TouchableOpacity>
+          <Text style={styles.headerTitle}>LEGAL METROLOGY</Text>
+          <TouchableOpacity
+            style={styles.headerIconButton}
+            onPress={() => navigation.navigate('Profile')}
+            activeOpacity={0.7}
+          >
+            <MaterialIcons name="account-circle" size={24} color={colors.onSurfaceVariant} />
+          </TouchableOpacity>
+        </View>
 
-      <ScrollView contentContainerStyle={styles.scrollContent}>
-        {loading ? (
-          <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 30 }} />
-        ) : (
-          <>
-            {/* Success Status Banner */}
-            <View style={styles.successBanner}>
-              <MaterialIcons name="verified" size={24} color={colors.statusGreenText} />
-              <View style={{ flex: 1 }}>
-                <Text style={styles.successTitle}>Official Inspection Report Generated</Text>
-                <Text style={styles.successSubtext}>
-                  Compiled from verified database records under PCR 2011.
+        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+          {/* Back to Inspection Link */}
+          <TouchableOpacity
+            style={styles.backLink}
+            onPress={() => navigation.goBack()}
+            activeOpacity={0.7}
+          >
+            <MaterialIcons name="arrow-back" size={16} color={colors.onSurfaceVariant} />
+            <Text style={styles.backLinkText}>BACK TO INSPECTION</Text>
+          </TouchableOpacity>
+
+          {loading ? (
+            <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 40 }} />
+          ) : (
+            <View style={styles.paperArticle}>
+              {/* Print Header */}
+              <View style={styles.printHeader}>
+                <View style={styles.balanceCircle}>
+                  <MaterialIcons name="balance" size={32} color={colors.primary} />
+                </View>
+                <Text style={styles.brandTitle}>LEGAL METROLOGY</Text>
+                <Text style={styles.reportTitle}>INSPECTION REPORT</Text>
+                <Text style={styles.reportSubtitle}>AI-Assisted Legal Metrology Inspection</Text>
+                <Text style={styles.prototypeSubtitle}>Smart India Hackathon 2026 Prototype</Text>
+                <Text style={styles.versionSubtitle}>Report Version: v{report?.report_version || 1}</Text>
+              </View>
+
+              {/* Status Banner */}
+              <View
+                style={[
+                  styles.statusBanner,
+                  isCompliant
+                    ? styles.statusBannerGreen
+                    : isNonCompliant
+                    ? styles.statusBannerAmber
+                    : styles.statusBannerAmber,
+                ]}
+              >
+                <MaterialIcons
+                  name={isCompliant ? 'check-circle' : 'warning'}
+                  size={20}
+                  color={isCompliant ? colors.statusGreenText : colors.statusAmberText}
+                />
+                <Text
+                  style={[
+                    styles.statusBannerText,
+                    { color: isCompliant ? colors.statusGreenText : colors.statusAmberText },
+                  ]}
+                >
+                  {isCompliant
+                    ? 'NO POTENTIAL VIOLATIONS DETECTED'
+                    : 'POTENTIAL NON-COMPLIANCE IDENTIFIED'}
                 </Text>
               </View>
-            </View>
 
-            {/* Report Metadata Card */}
-            <View style={styles.card}>
-              <View style={styles.cardTop}>
-                <Text style={styles.reportDocTitle}>LEGAL METROLOGY INSPECTION REPORT</Text>
-                <View style={styles.versionBadge}>
-                  <Text style={styles.versionText}>Version {report?.report_version || 1}</Text>
-                </View>
-              </View>
-
-              <View style={styles.divider} />
-
-              <View style={styles.metaGrid}>
-                <View style={styles.metaRow}>
-                  <Text style={styles.metaLabel}>Inspection Number:</Text>
-                  <Text style={styles.metaValueBold}>{inspection?.inspection_number}</Text>
-                </View>
-
-                <View style={styles.metaRow}>
-                  <Text style={styles.metaLabel}>Packaged Commodity:</Text>
-                  <Text style={styles.metaValue}>{inspection?.product?.product_name}</Text>
-                </View>
-
-                <View style={styles.metaRow}>
-                  <Text style={styles.metaLabel}>Location Site:</Text>
-                  <Text style={styles.metaValue}>{inspection?.location}</Text>
-                </View>
-
-                <View style={styles.metaRow}>
-                  <Text style={styles.metaLabel}>Inspection Status:</Text>
-                  <StatusBadge status={inspection?.overall_status} />
-                </View>
-
-                <View style={styles.metaRow}>
-                  <Text style={styles.metaLabel}>Generated On:</Text>
-                  <Text style={styles.metaValue}>{generatedDateStr}</Text>
-                </View>
-              </View>
-
-              <View style={styles.divider} />
-
-              {/* Safety Notice */}
-              <Text style={styles.safetyStatement}>
-                {report?.legal_safety_statement ||
-                  'Official inspection record generated under statutory human authority of the designated inspecting officer.'}
-              </Text>
-            </View>
-
-            {/* Legal Disclaimer — PRD Required */}
-            {inspection?.overall_status === 'NO_POTENTIAL_VIOLATIONS' && (
-              <View style={styles.disclaimerCard}>
-                <MaterialIcons name="info" size={18} color={colors.primary} />
-                <Text style={styles.disclaimerText}>
-                  The implemented machine-verifiable checks did not identify a potential issue based on the available evidence. This is not a certification of full legal compliance.
+              {/* Statutory Note */}
+              <View style={styles.statutoryNote}>
+                <MaterialIcons name="info" size={14} color={colors.onSurfaceVariant} style={{ marginTop: 1 }} />
+                <Text style={styles.statutoryNoteText}>
+                  This report covers a limited set of machine-verifiable Legal Metrology requirements only. Final legal determination rests with the authorized inspecting officer.
                 </Text>
               </View>
-            )}
 
-            {/* Action Buttons */}
-            <TouchableOpacity
-              style={styles.downloadButton}
-              onPress={handleDownloadAndSharePDF}
-              disabled={downloading}
-              activeOpacity={0.85}
-            >
-              {downloading ? (
-                <ActivityIndicator size="small" color={colors.onPrimary} />
-              ) : (
-                <View style={styles.btnInner}>
-                  <MaterialIcons name="download" size={20} color={colors.onPrimary} />
-                  <Text style={styles.downloadButtonText}>Download & View PDF Report</Text>
+              {/* Details Section */}
+              <View style={styles.detailsGrid}>
+                <View style={styles.detailItem}>
+                  <Text style={styles.detailLabel}>INSPECTION ID</Text>
+                  <Text style={styles.detailValueBold}>
+                    {report?.inspection_number || inspectionNumber || 'LM-2026-00891'}
+                  </Text>
                 </View>
-              )}
-            </TouchableOpacity>
+                <View style={styles.detailItem}>
+                  <Text style={styles.detailLabel}>DATE</Text>
+                  <Text style={styles.detailValue}>{dateStr}</Text>
+                </View>
+                <View style={styles.detailItem}>
+                  <Text style={styles.detailLabel}>PRODUCT</Text>
+                  <Text style={styles.detailValue}>{report?.product_name || 'Premium Basmati Rice'}</Text>
+                </View>
+                <View style={styles.detailItem}>
+                  <Text style={styles.detailLabel}>LOCATION</Text>
+                  <Text style={styles.detailValue}>{report?.location || 'Sector 4 Market'}</Text>
+                </View>
+                <View style={styles.detailItem}>
+                  <Text style={styles.detailLabel}>MANUFACTURER</Text>
+                  <Text style={styles.detailValue}>{report?.manufacturer || report?.product_name || '—'}</Text>
+                </View>
+              </View>
 
-            <TouchableOpacity
-              style={styles.archiveNavButton}
-              onPress={() => navigation.navigate('ReportsList')}
-              activeOpacity={0.8}
-            >
-              <MaterialIcons name="folder" size={18} color={colors.primary} />
-              <Text style={styles.archiveNavText}>View in Reports Archive</Text>
-            </TouchableOpacity>
+              {/* Action Buttons */}
+              <View style={styles.actionsBox}>
+                <TouchableOpacity
+                  style={styles.downloadPdfBtn}
+                  onPress={handleDownloadPDF}
+                  disabled={downloading}
+                  activeOpacity={0.85}
+                >
+                  {downloading ? (
+                    <ActivityIndicator size="small" color={colors.onPrimary} />
+                  ) : (
+                    <View style={styles.btnRow}>
+                      <MaterialIcons name="download" size={18} color={colors.onPrimary} />
+                      <Text style={styles.downloadPdfText}>Download Signed PDF Report</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
 
-            <TouchableOpacity
-              style={styles.dashboardButton}
-              onPress={() => navigation.navigate('Dashboard')}
-              activeOpacity={0.8}
-            >
-              <Text style={styles.dashboardButtonText}>Return to Dashboard</Text>
-            </TouchableOpacity>
-          </>
-        )}
-      </ScrollView>
-    </View>
+                <TouchableOpacity
+                  style={styles.doneBtn}
+                  onPress={() => navigation.navigate('Dashboard')}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.doneBtnText}>Return to Dashboard</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+          )}
+
+          <View style={{ height: 20 }} />
+        </ScrollView>
+      </View>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: colors.background,
+  },
   container: {
     flex: 1,
-    backgroundColor: colors.surface,
+    backgroundColor: colors.background,
+  },
+  topHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    backgroundColor: colors.surfaceContainerLowest,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle,
+    height: 56,
+    paddingHorizontal: spacing.gutter,
+  },
+  headerIconButton: {
+    padding: 6,
+    borderRadius: borderRadius.round,
+  },
+  headerTitle: {
+    ...typography.headlineLg,
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.primary,
   },
   scrollContent: {
-    padding: spacing.gutter,
-    paddingBottom: 32,
+    paddingHorizontal: spacing.gutter,
+    paddingTop: spacing.stackMd,
+    paddingBottom: 40,
     gap: spacing.stackMd,
   },
-  successBanner: {
+  backLink: {
     flexDirection: 'row',
     alignItems: 'center',
-    backgroundColor: colors.statusGreenBg,
-    borderWidth: 1,
-    borderColor: colors.statusGreenText,
-    borderRadius: borderRadius.lg,
-    padding: spacing.marginX,
-    gap: 12,
+    gap: 4,
+    marginBottom: 4,
   },
-  successTitle: {
-    ...typography.bodyMdMedium,
-    color: colors.statusGreenText,
-    fontWeight: '700',
-  },
-  successSubtext: {
-    ...typography.caption,
-    color: colors.statusGreenText,
-    marginTop: 2,
-  },
-  card: {
-    backgroundColor: colors.surfaceContainerLowest,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    borderRadius: borderRadius.lg,
-    padding: spacing.marginX,
-    gap: spacing.stackSm,
-  },
-  cardTop: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  reportDocTitle: {
-    ...typography.sectionHeader,
-    fontSize: 14,
-    color: colors.primary,
-    flex: 1,
-  },
-  versionBadge: {
-    backgroundColor: colors.surfaceContainerLow,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-    borderRadius: borderRadius.sm,
-  },
-  versionText: {
-    ...typography.caption,
-    fontWeight: '700',
-    color: colors.primary,
-  },
-  divider: {
-    height: 1,
-    backgroundColor: colors.surfaceContainerHigh,
-  },
-  metaGrid: {
-    gap: 6,
-  },
-  metaRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'space-between',
-  },
-  metaLabel: {
-    ...typography.caption,
+  backLinkText: {
+    ...typography.labelCaps,
+    fontSize: 12,
     color: colors.onSurfaceVariant,
     fontWeight: '600',
   },
-  metaValue: {
-    ...typography.bodySm,
-    color: colors.onSurface,
-  },
-  metaValueBold: {
-    ...typography.bodyMdMedium,
-    color: colors.primary,
-  },
-  safetyStatement: {
-    ...typography.caption,
-    fontSize: 10,
-    lineHeight: 14,
-    color: colors.outline,
-    fontStyle: 'italic',
-  },
-  downloadButton: {
-    backgroundColor: colors.primary,
-    paddingVertical: 14,
-    borderRadius: borderRadius.lg,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
-  btnInner: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
-  downloadButtonText: {
-    ...typography.sectionHeader,
-    color: colors.onPrimary,
-  },
-  archiveNavButton: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 12,
+  paperArticle: {
     backgroundColor: colors.surfaceContainerLowest,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
     borderRadius: borderRadius.lg,
-    gap: 6,
+    overflow: 'hidden',
   },
-  archiveNavText: {
+  printHeader: {
+    padding: 24,
+    alignItems: 'center',
+    backgroundColor: colors.surfaceBright,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle,
+  },
+  balanceCircle: {
+    width: 60,
+    height: 60,
+    borderRadius: 30,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginBottom: 12,
+  },
+  brandTitle: {
+    ...typography.headlineLg,
+    fontSize: 20,
+    fontWeight: '800',
+    color: colors.primary,
+    letterSpacing: 1,
+    textTransform: 'uppercase',
+  },
+  reportTitle: {
+    ...typography.sectionHeader,
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.primary,
+    letterSpacing: 0.5,
+    marginTop: 2,
+    textTransform: 'uppercase',
+  },
+  reportSubtitle: {
+    ...typography.bodySm,
+    fontSize: 13,
+    color: colors.onSurfaceVariant,
+    marginTop: 4,
+  },
+  prototypeSubtitle: {
+    ...typography.caption,
+    fontSize: 11,
+    color: colors.onSurfaceVariant,
+    fontStyle: 'italic',
+    marginTop: 2,
+  },
+  versionSubtitle: {
+    ...typography.caption,
+    fontSize: 11,
+    color: colors.onSurfaceVariant,
+    marginTop: 2,
+  },
+  statusBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 14,
+    paddingHorizontal: spacing.gutter,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle,
+    gap: 8,
+  },
+  statusBannerGreen: {
+    backgroundColor: colors.statusGreenBg,
+  },
+  statusBannerAmber: {
+    backgroundColor: colors.statusAmberBg,
+  },
+  statusBannerText: {
     ...typography.sectionHeader,
     fontSize: 14,
-    color: colors.primary,
+    fontWeight: '700',
+    letterSpacing: 0.5,
   },
-  dashboardButton: {
-    alignItems: 'center',
-    paddingVertical: 8,
-  },
-  dashboardButtonText: {
-    ...typography.bodySm,
-    color: colors.onSurfaceVariant,
-  },
-  disclaimerCard: {
+  statutoryNote: {
     flexDirection: 'row',
     alignItems: 'flex-start',
-    gap: 8,
-    padding: spacing.stackMd,
-    backgroundColor: '#e8f0fe',
-    borderWidth: 1,
-    borderColor: colors.primary,
-    borderRadius: borderRadius.lg,
+    backgroundColor: 'rgba(218, 224, 233, 0.3)',
+    padding: spacing.stackSm,
+    gap: 6,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle,
   },
-  disclaimerText: {
+  statutoryNoteText: {
     ...typography.caption,
-    color: colors.primary,
+    fontSize: 11,
+    lineHeight: 15,
+    color: colors.onSurfaceVariant,
     flex: 1,
-    lineHeight: 16,
-    fontStyle: 'italic',
+  },
+  detailsGrid: {
+    padding: spacing.gutter,
+    gap: 12,
+  },
+  detailItem: {
+    gap: 2,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.surfaceContainerHigh,
+    paddingBottom: 8,
+  },
+  detailLabel: {
+    ...typography.labelCaps,
+    fontSize: 11,
+    color: colors.onSurfaceVariant,
+  },
+  detailValue: {
+    ...typography.bodyMd,
+    fontSize: 14,
+    color: colors.onSurface,
+  },
+  detailValueBold: {
+    ...typography.bodyMd,
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  actionsBox: {
+    padding: spacing.gutter,
+    gap: 10,
+    backgroundColor: colors.surfaceContainerLow,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSubtle,
+  },
+  downloadPdfBtn: {
+    backgroundColor: colors.primary,
+    paddingVertical: 12,
+    borderRadius: borderRadius.DEFAULT,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  btnRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  downloadPdfText: {
+    ...typography.sectionHeader,
+    fontSize: 14,
+    color: colors.onPrimary,
+    fontWeight: '600',
+  },
+  doneBtn: {
+    paddingVertical: 10,
+    alignItems: 'center',
+    justifyContent: 'center',
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surfaceContainerLowest,
+    borderRadius: borderRadius.DEFAULT,
+  },
+  doneBtnText: {
+    ...typography.bodySm,
+    fontSize: 13,
+    color: colors.primary,
+    fontWeight: '600',
   },
 });

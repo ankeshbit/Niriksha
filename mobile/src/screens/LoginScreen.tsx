@@ -28,7 +28,6 @@ export const LoginScreen: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    // Check if already authenticated
     authStorage.getToken().then((token) => {
       if (token) {
         navigation.replace('Dashboard');
@@ -77,7 +76,12 @@ export const LoginScreen: React.FC = () => {
         <View style={styles.card}>
           {/* Header Section */}
           <View style={styles.headerSection}>
-            <MaterialIcons name="account-balance" size={48} color={colors.primary} style={styles.logoIcon} />
+            <MaterialIcons
+              name="verified-user"
+              size={48}
+              color={colors.primary}
+              style={styles.logoIcon}
+            />
             <Text style={styles.titleText}>LEGAL METROLOGY</Text>
             <Text style={styles.subtitleText}>AI-Assisted Legal Metrology Inspection</Text>
           </View>
@@ -151,11 +155,16 @@ export const LoginScreen: React.FC = () => {
                 </View>
               )}
             </TouchableOpacity>
-
-            <Text style={styles.footerHelpText}>
-              Department of Consumer Affairs (DoCA) • SIH 2026
-            </Text>
           </View>
+        </View>
+
+        {/* Stitch Footer */}
+        <View style={styles.footerSection}>
+          <View style={styles.footerLockRow}>
+            <MaterialIcons name="lock" size={16} color={colors.onSurfaceVariant} />
+            <Text style={styles.footerLockText}>Authorized inspection personnel only</Text>
+          </View>
+          <Text style={styles.footerPrototypeText}>Smart India Hackathon 2026 Prototype</Text>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
@@ -185,7 +194,7 @@ const styles = StyleSheet.create({
   headerSection: {
     alignItems: 'center',
     paddingHorizontal: spacing.marginX,
-    paddingTop: spacing.stackLg,
+    paddingTop: spacing.stackMd,
     paddingBottom: spacing.stackSm,
     borderBottomWidth: 1,
     borderBottomColor: colors.borderSubtle,
@@ -195,11 +204,16 @@ const styles = StyleSheet.create({
   },
   titleText: {
     ...typography.headlineLg,
+    fontSize: 20,
+    lineHeight: 28,
+    fontWeight: '700',
     color: colors.primary,
     marginBottom: spacing.tight,
   },
   subtitleText: {
     ...typography.bodySm,
+    fontSize: 13,
+    lineHeight: 18,
     color: colors.onSurfaceVariant,
   },
   formSection: {
@@ -211,6 +225,8 @@ const styles = StyleSheet.create({
   },
   inputLabel: {
     ...typography.labelCaps,
+    fontSize: 12,
+    lineHeight: 16,
     color: colors.onSurfaceVariant,
   },
   textInput: {
@@ -263,12 +279,28 @@ const styles = StyleSheet.create({
   },
   submitButtonText: {
     ...typography.sectionHeader,
+    fontSize: 16,
+    lineHeight: 24,
     color: colors.onPrimary,
   },
-  footerHelpText: {
+  footerSection: {
+    marginTop: spacing.stackMd,
+    alignItems: 'center',
+    gap: spacing.tight,
+  },
+  footerLockRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.tight,
+  },
+  footerLockText: {
     ...typography.caption,
-    textAlign: 'center',
-    color: colors.outline,
-    marginTop: 4,
+    fontSize: 12,
+    color: colors.onSurfaceVariant,
+  },
+  footerPrototypeText: {
+    ...typography.caption,
+    fontSize: 12,
+    color: colors.onSurfaceVariant,
   },
 });
