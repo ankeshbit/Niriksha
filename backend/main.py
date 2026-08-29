@@ -322,7 +322,9 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         officer_id=officer.officer_id,
         full_name=officer.full_name,
         designation=officer.designation,
-        zone=officer.zone
+        zone=officer.zone,
+        email=officer.email,
+        phone=officer.phone
     )
 
 @app.get("/api/auth/me", response_model=UserProfileResponse, tags=["Authentication"])

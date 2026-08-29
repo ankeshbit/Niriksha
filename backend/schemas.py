@@ -16,6 +16,8 @@ class TokenResponse(BaseModel):
     full_name: str
     designation: str
     zone: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
 
 class LoginRequest(BaseModel):
     officer_id: str = Field(..., description="Officer ID / Username")

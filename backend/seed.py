@@ -14,6 +14,8 @@ def seed_database():
             officer = User(
                 officer_id=settings.SEED_OFFICER_ID,
                 full_name=settings.SEED_OFFICER_NAME,
+                email="rajesh.kumar@lm.gov.in",
+                phone="+91 98765 43210",
                 designation=settings.SEED_OFFICER_DESIGNATION,
                 zone=settings.SEED_OFFICER_ZONE,
                 password_hash=hash_password(settings.SEED_OFFICER_PASSWORD),
@@ -22,7 +24,12 @@ def seed_database():
             db.add(officer)
             print(f"[Seed] Created development officer account: {settings.SEED_OFFICER_ID}")
         else:
-            print(f"[Seed] Development officer account already exists: {settings.SEED_OFFICER_ID}")
+            if not existing_officer.email:
+                existing_officer.email = "rajesh.kumar@lm.gov.in"
+            if not existing_officer.phone:
+                existing_officer.phone = "+91 98765 43210"
+            db.commit()
+            print(f"[Seed] Development officer account verified with contact info: {settings.SEED_OFFICER_ID}")
 
         # 2. Seed Verified Legal Metrology PCR 2011 Rules (Version 1)
         seed_rules = [

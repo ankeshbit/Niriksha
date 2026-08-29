@@ -155,7 +155,9 @@ const App = {
                         officer_id: data.officer_id,
                         full_name: data.full_name,
                         designation: data.designation,
-                        zone: data.zone
+                        zone: data.zone,
+                        email: data.email || 'rajesh.kumar@lm.gov.in',
+                        phone: data.phone || '+91 98765 43210'
                     });
 
                     window.location.href = '/stitch/code/02_dashboard.html';
@@ -1011,20 +1013,331 @@ const App = {
     },
 
     // 12. Profile Controller
-    initProfile() {
+    async initProfile() {
         if (!this.requireAuth()) return;
         this.initCommonNav();
 
-        const profile = this.getProfile();
-        
-        const nameEl = document.querySelector('h1, h2.font-headline-lg');
-        if (nameEl && profile.full_name) {
-            nameEl.textContent = profile.full_name;
+        const showToast = (msg) => {
+            const toast = document.getElementById('toast-banner');
+            const toastText = document.getElementById('toast-text');
+            if (toast && toastText) {
+                toastText.textContent = msg;
+                toast.classList.remove('hidden');
+                setTimeout(() => toast.classList.add('hidden'), 3500);
+            } else {
+                alert(msg);
+            }
+        };
+
+        const renderProfileFields = (prof) => {
+            const nameEl = document.getElementById('profile-name') || document.querySelector('h1.font-headline-lg');
+            const idEl = document.getElementById('profile-id') || document.querySelector('p.font-body-sm.text-on-surface-variant');
+            const desigEl = document.getElementById('profile-designation');
+            const deptEl = document.getElementById('profile-dept');
+            const emailEl = document.getElementById('profile-email');
+            const phoneEl = document.getElementById('profile-phone');
+            const zoneEl = document.getElementById('profile-zone');
+
+            if (nameEl && prof.full_name) nameEl.textContent = prof.full_name;
+            if (idEl && prof.officer_id) idEl.textContent = `ID: ${prof.officer_id}`;
+            if (desigEl && prof.designation) desigEl.textContent = prof.designation;
+            if (deptEl) deptEl.textContent = 'Legal Metrology Dept.';
+            if (emailEl) emailEl.textContent = prof.email || 'rajesh.kumar@lm.gov.in';
+            if (phoneEl) phoneEl.textContent = prof.phone || '+91 98765 43210';
+            if (zoneEl && prof.zone) zoneEl.textContent = prof.zone;
+        };
+
+        // Render from local storage initially
+        let currentProfile = this.getProfile();
+        renderProfileFields(currentProfile);
+
+        // Revalidate asynchronously from server
+        try {
+            const res = await this.fetchAuth('/api/auth/me');
+            if (res.ok) {
+                const serverProfile = await res.json();
+                currentProfile = { ...currentProfile, ...serverProfile };
+                this.setProfile(currentProfile);
+                renderProfileFields(currentProfile);
+            }
+        } catch (err) {
+            console.warn('Profile fetch error:', err);
         }
 
-        const logoutBtn = Array.from(document.querySelectorAll('button, a')).find(el => el.textContent.toLowerCase().includes('log out') || el.textContent.toLowerCase().includes('logout'));
-        if (logoutBtn) {
-            logoutBtn.addEventListener('click', (e) => {
+        // Modal Helpers
+        const openModal = (id) => {
+            const el = document.getElementById(id);
+            if (el) el.classList.remove('hidden');
+        };
+        const closeModal = (id) => {
+            const el = document.getElementById(id);
+            if (el) el.classList.add('hidden');
+        };
+
+        // 1. Email Modal & Handlers
+        const btnEditEmail = document.getElementById('btn-edit-email');
+        const modalEmail = document.getElementById('modal-email');
+        const formEditEmail = document.getElementById('form-edit-email');
+        const inputModalEmail = document.getElementById('input-modal-email');
+        const errorModalEmail = document.getElementById('error-modal-email');
+        const modalEmailClose = document.getElementById('modal-email-close');
+        const modalEmailCancel = document.getElementById('modal-email-cancel');
+
+        if (btnEditEmail) {
+            btnEditEmail.addEventListener('click', () => {
+                if (inputModalEmail) inputModalEmail.value = currentProfile.email || 'rajesh.kumar@lm.gov.in';
+                if (errorModalEmail) errorModalEmail.classList.add('hidden');
+                openModal('modal-email');
+                if (inputModalEmail) inputModalEmail.focus();
+            });
+        }
+        if (modalEmailClose) modalEmailClose.addEventListener('click', () => closeModal('modal-email'));
+        if (modalEmailCancel) modalEmailCancel.addEventListener('click', () => closeModal('modal-email'));
+        if (modalEmail) {
+            modalEmail.addEventListener('click', (e) => {
+                if (e.target === modalEmail) closeModal('modal-email');
+            });
+        }
+
+        if (formEditEmail) {
+            formEditEmail.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const newEmail = inputModalEmail ? inputModalEmail.value.trim() : '';
+                const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+                if (!newEmail || !emailRegex.test(newEmail)) {
+                    if (errorModalEmail) {
+                        errorModalEmail.textContent = 'Please enter a valid email address.';
+                        errorModalEmail.classList.remove('hidden');
+                    }
+                    return;
+                }
+
+                const submitBtn = document.getElementById('modal-email-submit');
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.textContent = 'Saving...';
+                }
+
+                try {
+                    const res = await this.fetchAuth('/api/auth/me', {
+                        method: 'PATCH',
+                        body: JSON.stringify({ email: newEmail })
+                    });
+
+                    if (!res.ok) {
+                        const err = await res.json();
+                        throw new Error(err.detail || 'Failed to update email');
+                    }
+
+                    const updated = await res.json();
+                    currentProfile.email = updated.email;
+                    this.setProfile(currentProfile);
+                    renderProfileFields(currentProfile);
+                    closeModal('modal-email');
+                    showToast('Email address updated successfully.');
+                } catch (err) {
+                    if (errorModalEmail) {
+                        errorModalEmail.textContent = err.message;
+                        errorModalEmail.classList.remove('hidden');
+                    }
+                } finally {
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = 'Save Email';
+                    }
+                }
+            });
+        }
+
+        // 2. Phone Modal & Handlers
+        const btnEditPhone = document.getElementById('btn-edit-phone');
+        const modalPhone = document.getElementById('modal-phone');
+        const formEditPhone = document.getElementById('form-edit-phone');
+        const inputModalPhone = document.getElementById('input-modal-phone');
+        const errorModalPhone = document.getElementById('error-modal-phone');
+        const modalPhoneClose = document.getElementById('modal-phone-close');
+        const modalPhoneCancel = document.getElementById('modal-phone-cancel');
+
+        if (btnEditPhone) {
+            btnEditPhone.addEventListener('click', () => {
+                if (inputModalPhone) inputModalPhone.value = currentProfile.phone || '+91 98765 43210';
+                if (errorModalPhone) errorModalPhone.classList.add('hidden');
+                openModal('modal-phone');
+                if (inputModalPhone) inputModalPhone.focus();
+            });
+        }
+        if (modalPhoneClose) modalPhoneClose.addEventListener('click', () => closeModal('modal-phone'));
+        if (modalPhoneCancel) modalPhoneCancel.addEventListener('click', () => closeModal('modal-phone'));
+        if (modalPhone) {
+            modalPhone.addEventListener('click', (e) => {
+                if (e.target === modalPhone) closeModal('modal-phone');
+            });
+        }
+
+        if (formEditPhone) {
+            formEditPhone.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const newPhone = inputModalPhone ? inputModalPhone.value.trim() : '';
+                const phoneDigits = newPhone.replace(/\D/g, '');
+
+                if (!newPhone || phoneDigits.length < 7 || phoneDigits.length > 15) {
+                    if (errorModalPhone) {
+                        errorModalPhone.textContent = 'Please enter a valid phone number (7 to 15 digits).';
+                        errorModalPhone.classList.remove('hidden');
+                    }
+                    return;
+                }
+
+                const submitBtn = document.getElementById('modal-phone-submit');
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.textContent = 'Saving...';
+                }
+
+                try {
+                    const res = await this.fetchAuth('/api/auth/me', {
+                        method: 'PATCH',
+                        body: JSON.stringify({ phone: newPhone })
+                    });
+
+                    if (!res.ok) {
+                        const err = await res.json();
+                        throw new Error(err.detail || 'Failed to update phone number');
+                    }
+
+                    const updated = await res.json();
+                    currentProfile.phone = updated.phone;
+                    this.setProfile(currentProfile);
+                    renderProfileFields(currentProfile);
+                    closeModal('modal-phone');
+                    showToast('Phone number updated successfully.');
+                } catch (err) {
+                    if (errorModalPhone) {
+                        errorModalPhone.textContent = err.message;
+                        errorModalPhone.classList.remove('hidden');
+                    }
+                } finally {
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = 'Save Phone';
+                    }
+                }
+            });
+        }
+
+        // 3. Change Password Modal & Handlers
+        const btnChangePassword = document.getElementById('btn-change-password');
+        const modalPassword = document.getElementById('modal-password');
+        const formChangePassword = document.getElementById('form-change-password');
+        const inputCurrentPassword = document.getElementById('input-current-password');
+        const inputNewPassword = document.getElementById('input-new-password');
+        const inputConfirmPassword = document.getElementById('input-confirm-password');
+        const errorModalPassword = document.getElementById('error-modal-password');
+        const modalPasswordClose = document.getElementById('modal-password-close');
+        const modalPasswordCancel = document.getElementById('modal-password-cancel');
+
+        if (btnChangePassword) {
+            btnChangePassword.addEventListener('click', () => {
+                if (inputCurrentPassword) inputCurrentPassword.value = '';
+                if (inputNewPassword) inputNewPassword.value = '';
+                if (inputConfirmPassword) inputConfirmPassword.value = '';
+                if (errorModalPassword) errorModalPassword.classList.add('hidden');
+                openModal('modal-password');
+                if (inputCurrentPassword) inputCurrentPassword.focus();
+            });
+        }
+        if (modalPasswordClose) modalPasswordClose.addEventListener('click', () => closeModal('modal-password'));
+        if (modalPasswordCancel) modalPasswordCancel.addEventListener('click', () => closeModal('modal-password'));
+        if (modalPassword) {
+            modalPassword.addEventListener('click', (e) => {
+                if (e.target === modalPassword) closeModal('modal-password');
+            });
+        }
+
+        if (formChangePassword) {
+            formChangePassword.addEventListener('submit', async (e) => {
+                e.preventDefault();
+                const curPass = inputCurrentPassword ? inputCurrentPassword.value : '';
+                const newPass = inputNewPassword ? inputNewPassword.value : '';
+                const confPass = inputConfirmPassword ? inputConfirmPassword.value : '';
+
+                if (!curPass) {
+                    if (errorModalPassword) {
+                        errorModalPassword.textContent = 'Please enter your current password.';
+                        errorModalPassword.classList.remove('hidden');
+                    }
+                    return;
+                }
+                if (!newPass || newPass.length < 6) {
+                    if (errorModalPassword) {
+                        errorModalPassword.textContent = 'New password must be at least 6 characters.';
+                        errorModalPassword.classList.remove('hidden');
+                    }
+                    return;
+                }
+                if (newPass === curPass) {
+                    if (errorModalPassword) {
+                        errorModalPassword.textContent = 'New password cannot be identical to current password.';
+                        errorModalPassword.classList.remove('hidden');
+                    }
+                    return;
+                }
+                if (newPass !== confPass) {
+                    if (errorModalPassword) {
+                        errorModalPassword.textContent = 'New password and confirmation do not match.';
+                        errorModalPassword.classList.remove('hidden');
+                    }
+                    return;
+                }
+
+                const submitBtn = document.getElementById('modal-password-submit');
+                if (submitBtn) {
+                    submitBtn.disabled = true;
+                    submitBtn.textContent = 'Updating...';
+                }
+
+                try {
+                    const res = await this.fetchAuth('/api/auth/change-password', {
+                        method: 'POST',
+                        body: JSON.stringify({
+                            current_password: curPass,
+                            new_password: newPass
+                        })
+                    });
+
+                    if (!res.ok) {
+                        const err = await res.json();
+                        throw new Error(err.detail || 'Password update failed');
+                    }
+
+                    const passStatus = document.getElementById('password-status-text');
+                    if (passStatus) passStatus.textContent = 'Updated just now';
+
+                    closeModal('modal-password');
+                    showToast('Password changed successfully.');
+                } catch (err) {
+                    if (errorModalPassword) {
+                        errorModalPassword.textContent = err.message;
+                        errorModalPassword.classList.remove('hidden');
+                    }
+                } finally {
+                    if (submitBtn) {
+                        submitBtn.disabled = false;
+                        submitBtn.textContent = 'Update Password';
+                    }
+                }
+            });
+        }
+
+        // 4. Sign Out Handlers
+        const signOutBtn = document.getElementById('btn-sign-out') || Array.from(document.querySelectorAll('button, a')).find(el => {
+            const text = el.textContent.trim().toLowerCase();
+            return text.includes('sign out') || text.includes('log out') || text.includes('logout');
+        });
+
+        if (signOutBtn) {
+            signOutBtn.addEventListener('click', (e) => {
                 e.preventDefault();
                 if (confirm('Are you sure you want to sign out?')) {
                     this.logout();
