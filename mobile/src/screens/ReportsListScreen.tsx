@@ -151,7 +151,11 @@ export const ReportsListScreen: React.FC = () => {
 
       if (downloadRes.status === 200) {
         if (await Sharing.isAvailableAsync()) {
-          await Sharing.shareAsync(downloadRes.uri);
+          await Sharing.shareAsync(downloadRes.uri, {
+            mimeType: 'application/pdf',
+            dialogTitle: `Share Inspection Report: ${reportItem.inspection_number}`,
+            UTI: 'com.adobe.pdf',
+          });
         } else {
           Alert.alert('Download Saved', `PDF saved to:\n${downloadRes.uri}`);
         }
