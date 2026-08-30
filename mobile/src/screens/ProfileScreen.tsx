@@ -26,6 +26,7 @@ import { RootStackParamList } from '../navigation/types';
 export const ProfileScreen: React.FC = () => {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const [profile, setProfile] = useState<any>(null);
+  const [drawerVisible, setDrawerVisible] = useState(false);
 
   // Email Edit Modal State
   const [emailModalVisible, setEmailModalVisible] = useState(false);
@@ -244,7 +245,11 @@ export const ProfileScreen: React.FC = () => {
           <TouchableOpacity
             style={styles.headerIconButton}
             activeOpacity={0.7}
-            onPress={() => Alert.alert('Menu', 'Legal Metrology Field Terminal v1.0.0')}
+            onPress={() => {
+              console.log('ProfileScreen: Hamburger menu pressed');
+              setDrawerVisible(true);
+            }}
+            hitSlop={{ top: 15, bottom: 15, left: 15, right: 15 }}
           >
             <MaterialIcons name="menu" size={24} color={colors.onSurfaceVariant} />
           </TouchableOpacity>
@@ -415,6 +420,99 @@ export const ProfileScreen: React.FC = () => {
             </Text>
           </View>
         </ScrollView>
+
+        {/* Navigation Drawer Modal */}
+        <Modal
+          visible={drawerVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => setDrawerVisible(false)}
+        >
+          <View style={styles.drawerOverlay}>
+            <TouchableOpacity
+              style={styles.drawerBackdrop}
+              activeOpacity={1}
+              onPress={() => setDrawerVisible(false)}
+            />
+            <View style={styles.drawerContainer}>
+              {/* Drawer Header */}
+              <View style={styles.drawerHeader}>
+                <Text style={styles.drawerBrandTitle}>LEGAL METROLOGY</Text>
+                <View style={styles.drawerUserBox}>
+                  <ProfileAvatar size={40} />
+                  <View style={styles.drawerUserMeta}>
+                    <Text style={styles.drawerUserName}>{officerName}</Text>
+                    <Text style={styles.drawerUserRole}>{officerRole}</Text>
+                    <Text style={styles.drawerUserId}>ID: {officerId}</Text>
+                  </View>
+                </View>
+              </View>
+
+              {/* Drawer Links */}
+              <View style={styles.drawerLinks}>
+                <TouchableOpacity
+                  style={styles.drawerLinkItem}
+                  onPress={() => {
+                    setDrawerVisible(false);
+                    navigation.navigate('Dashboard');
+                  }}
+                >
+                  <MaterialIcons name="home" size={22} color={colors.primary} />
+                  <Text style={styles.drawerLinkLabel}>Dashboard</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.drawerLinkItem}
+                  onPress={() => {
+                    setDrawerVisible(false);
+                    navigation.navigate('NewInspection');
+                  }}
+                >
+                  <MaterialIcons name="add-circle" size={22} color={colors.primary} />
+                  <Text style={styles.drawerLinkLabel}>New Inspection</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.drawerLinkItem}
+                  onPress={() => {
+                    setDrawerVisible(false);
+                    navigation.navigate('DraftOffline');
+                  }}
+                >
+                  <MaterialIcons name="drafts" size={22} color={colors.primary} />
+                  <Text style={styles.drawerLinkLabel}>Draft Inspections</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.drawerLinkItem}
+                  onPress={() => {
+                    setDrawerVisible(false);
+                    navigation.navigate('ReportsList');
+                  }}
+                >
+                  <MaterialIcons name="description" size={22} color={colors.primary} />
+                  <Text style={styles.drawerLinkLabel}>Reports Archive</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.drawerLinkItem, styles.drawerLinkItemActive]}
+                  onPress={() => {
+                    setDrawerVisible(false);
+                  }}
+                >
+                  <MaterialIcons name="person" size={22} color={colors.onPrimary} />
+                  <Text style={[styles.drawerLinkLabel, styles.drawerLinkLabelActive]}>Profile</Text>
+                </TouchableOpacity>
+              </View>
+
+              {/* Drawer Footer */}
+              <View style={styles.drawerFooter}>
+                <Text style={styles.drawerFooterText}>Legal Metrology Dept.</Text>
+                <Text style={styles.drawerFooterVersion}>v1.0.0 (SIH 2026)</Text>
+              </View>
+            </View>
+          </View>
+        </Modal>
 
         {/* Edit Email Modal */}
         <Modal visible={emailModalVisible} transparent animationType="fade">
@@ -1100,5 +1198,116 @@ const styles = StyleSheet.create({
     ...typography.bodySm,
     fontWeight: '700',
     color: colors.onPrimary,
+  },
+  drawerOverlay: {
+    flex: 1,
+    flexDirection: 'row',
+    zIndex: 9999,
+  },
+  drawerBackdrop: {
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    width: '100%',
+    height: '100%',
+    backgroundColor: 'rgba(0, 0, 0, 0.45)',
+  },
+  drawerContainer: {
+    width: '75%',
+    maxWidth: 300,
+    height: '100%',
+    backgroundColor: colors.surfaceContainerLowest,
+    shadowColor: '#000',
+    shadowOffset: { width: 4, height: 0 },
+    shadowOpacity: 0.15,
+    shadowRadius: 10,
+    elevation: 20,
+    paddingTop: Platform.OS === 'ios' ? 50 : 20,
+    justifyContent: 'space-between',
+    zIndex: 10000,
+  },
+  drawerHeader: {
+    paddingHorizontal: 20,
+    paddingVertical: 24,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle,
+  },
+  drawerBrandTitle: {
+    ...typography.headlineLg,
+    color: colors.primary,
+    fontSize: 18,
+    fontWeight: '800',
+    letterSpacing: 0.5,
+    marginBottom: 18,
+  },
+  drawerUserBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+  },
+  drawerUserMeta: {
+    flex: 1,
+  },
+  drawerUserName: {
+    ...typography.bodyMd,
+    fontWeight: '700',
+    color: colors.onSurface,
+  },
+  drawerUserRole: {
+    ...typography.caption,
+    fontSize: 11,
+    color: colors.onSurfaceVariant,
+    marginTop: 1,
+  },
+  drawerUserId: {
+    ...typography.caption,
+    fontSize: 10,
+    color: colors.outline,
+    fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+    marginTop: 2,
+  },
+  drawerLinks: {
+    flex: 1,
+    paddingTop: 16,
+    paddingHorizontal: 10,
+    gap: 8,
+  },
+  drawerLinkItem: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+    borderRadius: borderRadius.lg,
+    gap: 12,
+  },
+  drawerLinkItemActive: {
+    backgroundColor: colors.primary,
+  },
+  drawerLinkLabel: {
+    ...typography.bodyMd,
+    fontWeight: '500',
+    color: colors.onSurfaceVariant,
+  },
+  drawerLinkLabelActive: {
+    color: colors.onPrimary,
+    fontWeight: '700',
+  },
+  drawerFooter: {
+    paddingHorizontal: 20,
+    paddingVertical: 18,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSubtle,
+    backgroundColor: colors.surfaceContainerLow,
+  },
+  drawerFooterText: {
+    ...typography.caption,
+    color: colors.onSurfaceVariant,
+    fontWeight: '600',
+  },
+  drawerFooterVersion: {
+    ...typography.caption,
+    fontSize: 10,
+    color: colors.outline,
+    marginTop: 2,
   },
 });
