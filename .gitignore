@@ -1,4 +1,4 @@
-# Python
+# Python Virtual Environments & Cache
 venv/
 .venv/
 __pycache__/
@@ -40,7 +40,7 @@ generated_reports/*
 .env.local
 .env.*.local
 
-# IDE & OS
+# IDE & Operating System
 .vscode/
 .idea/
 .agents/
