@@ -44,6 +44,11 @@ export const CaptureImagesScreen: React.FC = () => {
   }, [inspectionId]);
 
   const handlePickImage = async (viewType: 'front' | 'back' | 'side') => {
+    if (Platform.OS === 'web') {
+      await launchGallery(viewType);
+      return;
+    }
+
     Alert.alert(
       'Upload Package Image',
       `Select source for ${viewType.toUpperCase()} panel:`,
@@ -74,16 +79,18 @@ export const CaptureImagesScreen: React.FC = () => {
       allowsEditing: true,
     });
 
-    if (!result.canceled && result.assets[0]) {
+    if (!result.canceled && result.assets && result.assets[0]) {
       await uploadPickedImage(result.assets[0].uri, viewType);
     }
   };
 
   const launchGallery = async (viewType: string) => {
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== 'granted') {
-      Alert.alert('Permission Denied', 'Gallery access is required to select package photos.');
-      return;
+    if (Platform.OS !== 'web') {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Permission Denied', 'Gallery access is required to select package photos.');
+        return;
+      }
     }
 
     const result = await ImagePicker.launchImageLibraryAsync({
@@ -92,7 +99,7 @@ export const CaptureImagesScreen: React.FC = () => {
       allowsEditing: true,
     });
 
-    if (!result.canceled && result.assets[0]) {
+    if (!result.canceled && result.assets && result.assets[0]) {
       await uploadPickedImage(result.assets[0].uri, viewType);
     }
   };
@@ -121,7 +128,11 @@ export const CaptureImagesScreen: React.FC = () => {
       await api.uploadImage(inspectionId, formData);
       await loadImages();
     } catch (err: any) {
-      Alert.alert('Upload Failed', err.message || 'Could not upload image.');
+      if (Platform.OS === 'web') {
+        alert(err.message || 'Could not upload image.');
+      } else {
+        Alert.alert('Upload Failed', err.message || 'Could not upload image.');
+      }
     } finally {
       setUploadingSlot(null);
     }
@@ -212,6 +223,13 @@ export const CaptureImagesScreen: React.FC = () => {
             <TouchableOpacity
               style={styles.deleteBtn}
               onPress={() => {
+                if (Platform.OS === 'web') {
+                  const confirmed = window.confirm('Are you sure you want to remove this photo?');
+                  if (confirmed) {
+                    setImages(images.filter((img) => img.id !== imgData.id));
+                  }
+                  return;
+                }
                 Alert.alert('Remove Image', 'Are you sure you want to remove this photo?', [
                   { text: 'Cancel', style: 'cancel' },
                   {
