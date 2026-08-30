@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   Alert,
   SafeAreaView,
+  Platform,
 } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
@@ -55,6 +56,28 @@ export const ReportPreviewScreen: React.FC = () => {
       const token = await authStorage.getToken();
 
       const filename = `Inspection_Report_${report?.report_number || inspectionNumber || 'LM-2026'}.pdf`;
+
+      if (Platform.OS === 'web') {
+        const response = await fetch(pdfUrl, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        if (!response.ok) {
+          throw new Error(`Server returned error generating PDF (${response.status})`);
+        }
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        return;
+      }
+
       const fileUri = `${FileSystem.documentDirectory}${filename}`;
 
       const downloadRes = await FileSystem.downloadAsync(pdfUrl, fileUri, {
@@ -77,7 +100,11 @@ export const ReportPreviewScreen: React.FC = () => {
         Alert.alert('Export Failed', 'Server returned error generating PDF.');
       }
     } catch (err: any) {
-      Alert.alert('Export Error', err.message || 'Could not download PDF report.');
+      if (Platform.OS === 'web') {
+        alert(err.message || 'Could not download PDF report.');
+      } else {
+        Alert.alert('Export Error', err.message || 'Could not download PDF report.');
+      }
     } finally {
       setDownloading(false);
     }

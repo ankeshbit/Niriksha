@@ -10,6 +10,7 @@ import {
   TextInput,
   Alert,
   SafeAreaView,
+  Platform,
 } from 'react-native';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
@@ -62,6 +63,28 @@ export const ReportsListScreen: React.FC = () => {
       const token = await authStorage.getToken();
 
       const localFilename = `LM_Report_${reportItem.inspection_number}_v${reportItem.report_version || 1}.pdf`;
+
+      if (Platform.OS === 'web') {
+        const response = await fetch(pdfUrl, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        if (!response.ok) {
+          throw new Error(`Server returned error generating PDF (${response.status})`);
+        }
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = localFilename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        return;
+      }
+
       const fileUri = `${FileSystem.documentDirectory}${localFilename}`;
 
       const downloadRes = await FileSystem.downloadAsync(pdfUrl, fileUri, {
@@ -82,7 +105,11 @@ export const ReportsListScreen: React.FC = () => {
         }
       }
     } catch (err: any) {
-      Alert.alert('Export Error', err.message || 'Could not download PDF.');
+      if (Platform.OS === 'web') {
+        alert(err.message || 'Could not download PDF.');
+      } else {
+        Alert.alert('Export Error', err.message || 'Could not download PDF.');
+      }
     } finally {
       setDownloadingId(null);
     }
@@ -94,17 +121,47 @@ export const ReportsListScreen: React.FC = () => {
       const pdfUrl = `${baseUrl}/api/inspections/${reportItem.inspection_id}/report/pdf`;
       const token = await authStorage.getToken();
       const localFilename = `LM_Report_${reportItem.inspection_number}.pdf`;
+
+      if (Platform.OS === 'web') {
+        const response = await fetch(pdfUrl, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        if (!response.ok) {
+          throw new Error(`Server returned error generating PDF (${response.status})`);
+        }
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = localFilename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        return;
+      }
+
       const fileUri = `${FileSystem.documentDirectory}${localFilename}`;
 
       const downloadRes = await FileSystem.downloadAsync(pdfUrl, fileUri, {
         headers: { Authorization: `Bearer ${token}` },
       });
 
-      if (downloadRes.status === 200 && (await Sharing.isAvailableAsync())) {
-        await Sharing.shareAsync(downloadRes.uri);
+      if (downloadRes.status === 200) {
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(downloadRes.uri);
+        } else {
+          Alert.alert('Download Saved', `PDF saved to:\n${downloadRes.uri}`);
+        }
       }
     } catch (err: any) {
-      Alert.alert('Share Error', err.message || 'Could not share report.');
+      if (Platform.OS === 'web') {
+        alert(err.message || 'Could not share report.');
+      } else {
+        Alert.alert('Share Error', err.message || 'Could not share report.');
+      }
     }
   };
 
