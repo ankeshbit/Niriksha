@@ -156,37 +156,6 @@ flowchart TD
 
 ---
 
-## Application Screenshots
-
-The screenshots below illustrate the implemented mobile application workflow:
-
-### 1. Authentication & Dashboard
-| Login Screen | Inspector Dashboard |
-|:---:|:---:|
-| ![Login Screen](docs/screenshots/01_login.png) | ![Dashboard Screen](docs/screenshots/02_dashboard.png) |
-
-### 2. Inspection Registration & Image Quality
-| New Inspection Registration | Quality Warning & Guidance |
-|:---:|:---:|
-| ![New Inspection](docs/screenshots/04_new_inspection_step1.png) | ![Quality Warning](docs/screenshots/09_capture_images_warning.png) |
-
-### 3. OCR Extraction & Declarations
-| Processing Pipeline | Extracted Declarations Review |
-|:---:|:---:|
-| ![Analyzing Screen](docs/screenshots/12_analyzing.png) | ![Extracted Declarations](docs/screenshots/03_extracted_declarations.png) |
-
-### 4. Statutory Compliance Findings & Evidence
-| Statutory Rule Findings | Evidence Review & Cropped Overlays |
-|:---:|:---:|
-| ![Rule Findings](docs/screenshots/05_findings.png) | ![Evidence Review](docs/screenshots/06_evidence_review.png) |
-
-### 5. Finalization & Official Inspection Report
-| Review & Submit | Inspection Report Preview |
-|:---:|:---:|
-| ![Review & Submit](docs/screenshots/13_step3_review_and_submit.png) | ![Report Preview](docs/screenshots/07_inspection_report_preview.png) |
-
----
-
 ## Installation & Setup
 
 ### Prerequisites
