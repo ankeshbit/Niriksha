@@ -395,18 +395,22 @@ def get_dashboard_stats(
     current_user: User = Depends(get_current_user)
 ):
     """Returns real aggregate metric cards and recent inspections for the dashboard."""
-    total_inspections = db.query(Inspection).count()
-    needs_manual_verification = db.query(Inspection).filter(
+    query = db.query(Inspection)
+    if current_user.role != "ADMIN":
+        query = query.filter(Inspection.inspector_id == current_user.id)
+
+    total_inspections = query.count()
+    needs_manual_verification = query.filter(
         Inspection.overall_status == "NEEDS_MANUAL_VERIFICATION"
     ).count()
-    verified_inspections = db.query(Inspection).filter(
+    verified_inspections = query.filter(
         Inspection.overall_status == "NO_POTENTIAL_VIOLATIONS"
     ).count()
-    potential_non_compliance = db.query(Inspection).filter(
+    potential_non_compliance = query.filter(
         Inspection.overall_status == "POTENTIAL_NON_COMPLIANCE"
     ).count()
 
-    recent_objs = db.query(Inspection).order_by(Inspection.created_at.desc()).limit(5).all()
+    recent_objs = query.order_by(Inspection.created_at.desc()).limit(5).all()
     recent_items = [
         RecentInspectionItem(
             id=insp.id,
@@ -487,6 +491,8 @@ def list_inspections(
         joinedload(Inspection.compliance_checks),
         joinedload(Inspection.report)
     )
+    if current_user.role != "ADMIN":
+        query = query.filter(Inspection.inspector_id == current_user.id)
     if status:
         query = query.filter(Inspection.status == status)
     return query.order_by(Inspection.created_at.desc()).offset(offset).limit(limit).all()
@@ -497,9 +503,12 @@ def get_recent_inspections(
     current_user: User = Depends(get_current_user)
 ):
     """Returns top 5 most recent inspections."""
-    recent_objs = db.query(Inspection).options(
+    query = db.query(Inspection).options(
         joinedload(Inspection.product)
-    ).order_by(Inspection.created_at.desc()).limit(5).all()
+    )
+    if current_user.role != "ADMIN":
+        query = query.filter(Inspection.inspector_id == current_user.id)
+    recent_objs = query.order_by(Inspection.created_at.desc()).limit(5).all()
     return [
         RecentInspectionItem(
             id=insp.id,

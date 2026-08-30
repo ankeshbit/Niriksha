@@ -37,7 +37,7 @@ const FILTER_CHIPS: FilterChip[] = [
     bgColor: colors.surfaceContainerLowest,
     borderColor: colors.borderSubtle,
     textColor: colors.onSurfaceVariant,
-    matcher: (item) => (item.overall_status || item.status) === 'DRAFT',
+    matcher: (item) => (item.status || '').toUpperCase() === 'DRAFT',
   },
   {
     id: 'processing',
@@ -45,7 +45,10 @@ const FILTER_CHIPS: FilterChip[] = [
     bgColor: colors.primaryContainer,
     borderColor: colors.primary,
     textColor: colors.onPrimary,
-    matcher: (item) => (item.overall_status || item.status) === 'PROCESSING',
+    matcher: (item) =>
+      ['IMAGES_UPLOADED', 'OCR_PROCESSING', 'EXTRACTION_COMPLETE', 'PROCESSING'].includes(
+        (item.status || '').toUpperCase()
+      ),
   },
   {
     id: 'analysis_complete',
@@ -54,8 +57,11 @@ const FILTER_CHIPS: FilterChip[] = [
     borderColor: colors.statusGreenText,
     textColor: colors.statusGreenText,
     matcher: (item) =>
+      ['RULE_EVALUATION_COMPLETE', 'COMPLETED', 'ANALYSIS_COMPLETE', 'VERIFIED_COMPLIANT', 'NO_POTENTIAL_VIOLATIONS', 'PASS'].includes(
+        (item.status || '').toUpperCase()
+      ) ||
       ['VERIFIED_COMPLIANT', 'NO_POTENTIAL_VIOLATIONS', 'PASS', 'COMPLETED'].includes(
-        item.overall_status || item.status
+        (item.overall_status || '').toUpperCase()
       ),
   },
   {
@@ -65,7 +71,7 @@ const FILTER_CHIPS: FilterChip[] = [
     borderColor: colors.statusAmberText,
     textColor: colors.statusAmberText,
     matcher: (item) =>
-      ['NEEDS_MANUAL_VERIFICATION', 'WARNING'].includes(item.overall_status || item.status),
+      ['NEEDS_MANUAL_VERIFICATION', 'WARNING'].includes((item.overall_status || '').toUpperCase()),
   },
   {
     id: 'no_violations',
@@ -75,7 +81,7 @@ const FILTER_CHIPS: FilterChip[] = [
     textColor: colors.statusGreenText,
     matcher: (item) =>
       ['NO_POTENTIAL_VIOLATIONS', 'VERIFIED_COMPLIANT', 'PASS'].includes(
-        item.overall_status || item.status
+        (item.overall_status || '').toUpperCase()
       ),
   },
   {
@@ -85,7 +91,8 @@ const FILTER_CHIPS: FilterChip[] = [
     borderColor: colors.primary,
     textColor: colors.primary,
     matcher: (item) =>
-      ['FINALIZED', 'COMPLETED', 'REPORT_GENERATED'].includes(item.overall_status || item.status),
+      ['FINALIZED', 'COMPLETED', 'REPORT_GENERATED'].includes((item.status || '').toUpperCase()) ||
+      ['FINALIZED', 'COMPLETED', 'REPORT_GENERATED'].includes((item.overall_status || '').toUpperCase()),
   },
   {
     id: 'insufficient_evidence',
@@ -93,7 +100,7 @@ const FILTER_CHIPS: FilterChip[] = [
     bgColor: colors.surfaceContainerHighest,
     borderColor: colors.borderSubtle,
     textColor: colors.onSurface,
-    matcher: (item) => (item.overall_status || item.status) === 'INSUFFICIENT_EVIDENCE',
+    matcher: (item) => (item.overall_status || '').toUpperCase() === 'INSUFFICIENT_EVIDENCE',
   },
 ];
 
@@ -101,18 +108,21 @@ export const DashboardScreen: React.FC = () => {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const [profile, setProfile] = useState<any>(null);
   const [dashboardData, setDashboardData] = useState<any>(null);
+  const [inspections, setInspections] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedChipId, setSelectedChipId] = useState<string | null>(null);
 
   const loadData = async () => {
     try {
-      const [prof, dash] = await Promise.all([
+      const [prof, dash, list] = await Promise.all([
         authStorage.getProfile(),
         api.getDashboard(),
+        api.listInspections({ limit: 100 }),
       ]);
       setProfile(prof);
       setDashboardData(dash);
+      setInspections(list || []);
     } catch (err) {
       console.error('Failed to load dashboard:', err);
     } finally {
@@ -143,16 +153,13 @@ export const DashboardScreen: React.FC = () => {
     return num < 10 ? `0${num}` : `${num}`;
   };
 
-  // Determine raw inspections from API
-  const rawInspections = dashboardData?.recent_inspections || [];
-
   // Filter if chip is active
   const filteredInspections = selectedChipId
-    ? rawInspections.filter((item: any) => {
+    ? inspections.filter((item: any) => {
         const chip = FILTER_CHIPS.find((c) => c.id === selectedChipId);
         return chip?.matcher ? chip.matcher(item) : true;
       })
-    : rawInspections;
+    : inspections.slice(0, 5);
 
   const getStatusBadgeProps = (status?: string) => {
     if (status === 'POTENTIAL_NON_COMPLIANCE' || status === 'FAIL' || status === 'CONFIRMED') {
@@ -283,8 +290,8 @@ export const DashboardScreen: React.FC = () => {
                       style={[
                         styles.chipButton,
                         {
-                          backgroundColor: chip.bgColor,
-                          borderColor: chip.borderColor,
+                          backgroundColor: isSelected ? colors.primary : chip.bgColor,
+                          borderColor: isSelected ? colors.primary : chip.borderColor,
                           opacity: isSelected || selectedChipId === null ? 1 : 0.6,
                           transform: [{ scale: isSelected ? 1.03 : 1 }],
                         },
@@ -292,9 +299,9 @@ export const DashboardScreen: React.FC = () => {
                       onPress={() => {
                         setSelectedChipId(selectedChipId === chip.id ? null : chip.id);
                       }}
-                      activeOpacity={0.8}
+                      activeOpacity={0.85}
                     >
-                      <Text style={[styles.chipText, { color: chip.textColor }]}>
+                      <Text style={[styles.chipText, { color: isSelected ? '#ffffff' : chip.textColor }]}>
                         {chip.label}
                       </Text>
                     </TouchableOpacity>

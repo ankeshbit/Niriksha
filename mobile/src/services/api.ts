@@ -103,7 +103,14 @@ export const api = {
     notes?: string;
   }) => apiRequest('/api/inspections', { method: 'POST', body: data }),
   getInspection: (id: string) => apiRequest(`/api/inspections/${id}`),
-  listInspections: () => apiRequest('/api/inspections'),
+  listInspections: (params?: { status?: string; limit?: number; offset?: number }) => {
+    let query = '';
+    if (params) {
+      const q = new URLSearchParams(params as any).toString();
+      if (q) query = '?' + q;
+    }
+    return apiRequest(`/api/inspections${query}`);
+  },
   getRecentInspections: () => apiRequest('/api/inspections/recent'),
 
   // Images & Quality
