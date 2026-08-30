@@ -51,6 +51,10 @@ export const ProfileScreen: React.FC = () => {
   const [savingPassword, setSavingPassword] = useState(false);
   const [passwordUpdatedTime, setPasswordUpdatedTime] = useState('Updated 30 days ago');
 
+  // Sign Out Confirmation Modal State
+  const [signOutModalVisible, setSignOutModalVisible] = useState(false);
+  const [signingOut, setSigningOut] = useState(false);
+
   useEffect(() => {
     // Load profile: first from local storage, then revalidate from server
     const loadProfile = async () => {
@@ -210,21 +214,26 @@ export const ProfileScreen: React.FC = () => {
     }
   };
 
+  const executeSignOut = async () => {
+    try {
+      setSigningOut(true);
+      await authStorage.clear();
+      setSignOutModalVisible(false);
+      navigation.reset({
+        index: 0,
+        routes: [{ name: 'Login' }],
+      });
+    } catch (e) {
+      console.error('Sign out error:', e);
+      setSignOutModalVisible(false);
+      navigation.navigate('Login');
+    } finally {
+      setSigningOut(false);
+    }
+  };
+
   const handleSignOut = () => {
-    Alert.alert('Sign Out', 'Are you sure you want to end your inspection session?', [
-      { text: 'Cancel', style: 'cancel' },
-      {
-        text: 'Sign Out',
-        style: 'destructive',
-        onPress: async () => {
-          await authStorage.clear();
-          navigation.reset({
-            index: 0,
-            routes: [{ name: 'Login' }],
-          });
-        },
-      },
-    ]);
+    setSignOutModalVisible(true);
   };
 
   return (
@@ -665,6 +674,63 @@ export const ProfileScreen: React.FC = () => {
               </View>
             </View>
           </KeyboardAvoidingView>
+        </Modal>
+
+        {/* Sign Out Confirmation Modal */}
+        <Modal
+          visible={signOutModalVisible}
+          transparent
+          animationType="fade"
+          onRequestClose={() => {
+            if (!signingOut) setSignOutModalVisible(false);
+          }}
+        >
+          <View style={styles.modalOverlay}>
+            <View style={styles.modalContent}>
+              <View style={styles.modalHeader}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 8 }}>
+                  <MaterialIcons name="logout" size={22} color={colors.error} />
+                  <Text style={typography.sectionHeader}>Sign Out</Text>
+                </View>
+                <TouchableOpacity
+                  onPress={() => setSignOutModalVisible(false)}
+                  disabled={signingOut}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <MaterialIcons name="close" size={22} color={colors.onSurfaceVariant} />
+                </TouchableOpacity>
+              </View>
+
+              <View style={{ marginVertical: 14 }}>
+                <Text style={[typography.bodyMd, { color: colors.onSurface, lineHeight: 20 }]}>
+                  Are you sure you want to end your inspection session and sign out from this field terminal?
+                </Text>
+              </View>
+
+              <View style={styles.modalActions}>
+                <TouchableOpacity
+                  style={styles.modalCancelBtn}
+                  onPress={() => setSignOutModalVisible(false)}
+                  disabled={signingOut}
+                >
+                  <Text style={styles.modalCancelText}>Cancel</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.modalSaveBtn, { backgroundColor: colors.error }]}
+                  onPress={executeSignOut}
+                  disabled={signingOut}
+                  activeOpacity={0.85}
+                >
+                  {signingOut ? (
+                    <ActivityIndicator size="small" color={colors.onError} />
+                  ) : (
+                    <Text style={styles.modalSaveText}>Sign Out</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </View>
+          </View>
         </Modal>
 
         {/* Bottom Navigation */}

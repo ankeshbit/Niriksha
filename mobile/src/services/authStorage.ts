@@ -11,24 +11,38 @@ export const authStorage = {
   async saveToken(token: string): Promise<void> {
     memoryToken = token;
     try {
-      if (Platform.OS !== 'web') {
+      if (Platform.OS === 'web') {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem(TOKEN_KEY, token);
+        }
+      } else {
         await SecureStore.setItemAsync(TOKEN_KEY, token);
       }
     } catch (e) {
-      console.warn('SecureStore saveToken fallback:', e);
+      console.warn('authStorage saveToken fallback:', e);
     }
   },
 
   async getToken(): Promise<string | null> {
     if (memoryToken) return memoryToken;
     try {
-      if (Platform.OS !== 'web') {
+      if (Platform.OS === 'web') {
+        if (typeof localStorage !== 'undefined') {
+          const webToken = localStorage.getItem(TOKEN_KEY);
+          if (webToken) {
+            memoryToken = webToken;
+            return webToken;
+          }
+        }
+      } else {
         const token = await SecureStore.getItemAsync(TOKEN_KEY);
-        memoryToken = token;
-        return token;
+        if (token) {
+          memoryToken = token;
+          return token;
+        }
       }
     } catch (e) {
-      console.warn('SecureStore getToken fallback:', e);
+      console.warn('authStorage getToken fallback:', e);
     }
     return memoryToken;
   },
@@ -36,18 +50,31 @@ export const authStorage = {
   async saveProfile(profile: any): Promise<void> {
     memoryProfile = profile;
     try {
-      if (Platform.OS !== 'web') {
-        await SecureStore.setItemAsync(PROFILE_KEY, JSON.stringify(profile));
+      const jsonStr = JSON.stringify(profile);
+      if (Platform.OS === 'web') {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.setItem(PROFILE_KEY, jsonStr);
+        }
+      } else {
+        await SecureStore.setItemAsync(PROFILE_KEY, jsonStr);
       }
     } catch (e) {
-      console.warn('SecureStore saveProfile fallback:', e);
+      console.warn('authStorage saveProfile fallback:', e);
     }
   },
 
   async getProfile(): Promise<any | null> {
     if (memoryProfile) return memoryProfile;
     try {
-      if (Platform.OS !== 'web') {
+      if (Platform.OS === 'web') {
+        if (typeof localStorage !== 'undefined') {
+          const raw = localStorage.getItem(PROFILE_KEY);
+          if (raw) {
+            memoryProfile = JSON.parse(raw);
+            return memoryProfile;
+          }
+        }
+      } else {
         const raw = await SecureStore.getItemAsync(PROFILE_KEY);
         if (raw) {
           memoryProfile = JSON.parse(raw);
@@ -55,7 +82,7 @@ export const authStorage = {
         }
       }
     } catch (e) {
-      console.warn('SecureStore getProfile fallback:', e);
+      console.warn('authStorage getProfile fallback:', e);
     }
     return memoryProfile;
   },
@@ -64,12 +91,17 @@ export const authStorage = {
     memoryToken = null;
     memoryProfile = null;
     try {
-      if (Platform.OS !== 'web') {
+      if (Platform.OS === 'web') {
+        if (typeof localStorage !== 'undefined') {
+          localStorage.removeItem(TOKEN_KEY);
+          localStorage.removeItem(PROFILE_KEY);
+        }
+      } else {
         await SecureStore.deleteItemAsync(TOKEN_KEY);
         await SecureStore.deleteItemAsync(PROFILE_KEY);
       }
     } catch (e) {
-      console.warn('SecureStore clear fallback:', e);
+      console.warn('authStorage clear fallback:', e);
     }
   }
 };
