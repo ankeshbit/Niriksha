@@ -76,9 +76,17 @@ def seed_database():
             {
                 "rule_code": "PCR_RULE_06_1_F",
                 "version_number": 1,
-                "title": "Country of Origin (Imported Commodities)",
+                "title": "Generic Name or Commodity Identification",
                 "category": "CATEGORY_A_LEGAL",
                 "statutory_reference": "Rule 6(1)(f), Legal Metrology (Packaged Commodities) Rules, 2011",
+                "rule_logic_description": "Verify generic name or commodity identification is clearly declared on Principal Display Panel."
+            },
+            {
+                "rule_code": "PCR_RULE_06_1_B",
+                "version_number": 1,
+                "title": "Country of Origin Declaration",
+                "category": "CATEGORY_A_LEGAL",
+                "statutory_reference": "Rule 6(1)(b), Legal Metrology (Packaged Commodities) Rules, 2011",
                 "rule_logic_description": "Verify country of origin is clearly declared on packages containing imported commodities."
             },
             {
