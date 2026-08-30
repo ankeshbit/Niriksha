@@ -11,6 +11,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
 import { BottomNav } from '../components/BottomNav';
+import { ProfileAvatar } from '../components/ProfileAvatar';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
@@ -35,9 +36,7 @@ export const DraftOfflineScreen: React.FC = () => {
             <MaterialIcons name="arrow-back" size={24} color={colors.primary} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Legal Metrology</Text>
-          <View style={styles.avatarCircle}>
-            <MaterialIcons name="person" size={20} color={colors.primary} />
-          </View>
+          <ProfileAvatar size={36} />
         </View>
 
         {/* Warning Banner */}

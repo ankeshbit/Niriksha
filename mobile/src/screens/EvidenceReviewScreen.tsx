@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
+import { ProfileAvatar } from '../components/ProfileAvatar';
 import { api, getApiBaseUrl } from '../services/api';
 import { authStorage } from '../services/authStorage';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
@@ -93,9 +94,7 @@ export const EvidenceReviewScreen: React.FC = () => {
             <MaterialIcons name="arrow-back" size={24} color={colors.primary} />
           </TouchableOpacity>
           <Text style={styles.headerTitle}>Evidence Review</Text>
-          <View style={styles.avatarCircle}>
-            <MaterialIcons name="person" size={20} color={colors.primary} />
-          </View>
+          <ProfileAvatar size={36} />
         </View>
 
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>

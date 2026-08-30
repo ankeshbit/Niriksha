@@ -14,6 +14,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
 import { BottomNav } from '../components/BottomNav';
+import { ProfileAvatar } from '../components/ProfileAvatar';
 import { api } from '../services/api';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -148,9 +149,7 @@ export const FindingsScreen: React.FC = () => {
             </TouchableOpacity>
             <Text style={styles.headerTitle}>Legal Metrology</Text>
           </View>
-          <View style={styles.avatarCircle}>
-            <MaterialIcons name="person" size={20} color={colors.primary} />
-          </View>
+          <ProfileAvatar size={36} />
         </View>
 
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>

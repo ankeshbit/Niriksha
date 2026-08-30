@@ -15,6 +15,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
 import { BottomNav } from '../components/BottomNav';
+import { ProfileAvatar } from '../components/ProfileAvatar';
 import { api } from '../services/api';
 import { authStorage } from '../services/authStorage';
 import { useNavigation } from '@react-navigation/native';
@@ -119,9 +120,7 @@ export const NewInspectionScreen: React.FC = () => {
             </TouchableOpacity>
             <Text style={styles.headerTitle}>Step 1 of 3</Text>
           </View>
-          <View style={styles.avatarCircle}>
-            <MaterialIcons name="person" size={20} color={colors.primary} />
-          </View>
+          <ProfileAvatar size={36} />
         </View>
 
         <ScrollView

@@ -13,6 +13,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
 import { BottomNav } from '../components/BottomNav';
+import { ProfileAvatar } from '../components/ProfileAvatar';
 import { api } from '../services/api';
 import { authStorage } from '../services/authStorage';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
@@ -204,12 +205,24 @@ export const DashboardScreen: React.FC = () => {
         >
           {/* Welcome Header */}
           <View style={styles.welcomeHeader}>
-            <Text style={styles.welcomeGreeting}>
-              Good morning, {profile?.full_name || 'Inspector'}
-            </Text>
-            <Text style={styles.welcomeSubtext}>
-              ID: {profile?.officer_id || 'DOCA-INSP-842'} • {todayStr}
-            </Text>
+            <View style={styles.welcomeHeaderRow}>
+              <View style={styles.welcomeHeaderTextCol}>
+                <Text style={styles.welcomeGreeting}>
+                  Good morning, {profile?.full_name || 'Inspector'}
+                </Text>
+                <Text style={styles.welcomeSubtext}>
+                  ID: {profile?.officer_id || 'DOCA-INSP-842'} • {todayStr}
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => navigation.navigate('Profile')}
+                activeOpacity={0.7}
+                accessibilityRole="button"
+                accessibilityLabel="Navigate to Profile"
+              >
+                <ProfileAvatar size={40} />
+              </TouchableOpacity>
+            </View>
           </View>
 
           {loading ? (
@@ -385,6 +398,15 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.borderSubtle,
     paddingBottom: spacing.stackSm,
     marginBottom: spacing.stackSm,
+  },
+  welcomeHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+  },
+  welcomeHeaderTextCol: {
+    flex: 1,
+    paddingRight: spacing.stackSm,
   },
   welcomeGreeting: {
     ...typography.headlineLg,

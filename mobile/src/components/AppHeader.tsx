@@ -6,11 +6,15 @@ import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 
+import { ProfileAvatar } from './ProfileAvatar';
+
 interface AppHeaderProps {
   title?: string;
   subtitle?: string;
   showBack?: boolean;
   onBackPress?: () => void;
+  showProfileAvatar?: boolean;
+  onProfilePress?: () => void;
   rightAction?: {
     icon: keyof typeof MaterialIcons.glyphMap;
     label?: string;
@@ -24,6 +28,8 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
   subtitle,
   showBack = false,
   onBackPress,
+  showProfileAvatar = false,
+  onProfilePress,
   rightAction,
   variant = 'primary',
 }) => {
@@ -42,6 +48,14 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
       navigation.goBack();
     } else {
       navigation.navigate('Dashboard');
+    }
+  };
+
+  const handleProfilePress = () => {
+    if (onProfilePress) {
+      onProfilePress();
+    } else {
+      navigation.navigate('Profile');
     }
   };
 
@@ -66,6 +80,12 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
             ) : null}
           </View>
         </View>
+
+        {showProfileAvatar && (
+          <TouchableOpacity onPress={handleProfilePress} activeOpacity={0.7} style={{ marginLeft: 8 }}>
+            <ProfileAvatar size={28} />
+          </TouchableOpacity>
+        )}
 
         {rightAction && (
           <TouchableOpacity

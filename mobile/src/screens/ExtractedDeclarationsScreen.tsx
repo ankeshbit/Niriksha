@@ -14,6 +14,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
 import { BottomNav } from '../components/BottomNav';
+import { ProfileAvatar } from '../components/ProfileAvatar';
 import { api } from '../services/api';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -127,9 +128,7 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
               </Text>
             </View>
           </View>
-          <View style={styles.avatarCircle}>
-            <Text style={styles.avatarInitials}>IP</Text>
-          </View>
+          <ProfileAvatar size={36} />
         </View>
 
         <ScrollView

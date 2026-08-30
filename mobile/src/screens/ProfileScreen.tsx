@@ -16,6 +16,7 @@ import {
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
 import { BottomNav } from '../components/BottomNav';
+import { ProfileAvatar } from '../components/ProfileAvatar';
 import { authStorage } from '../services/authStorage';
 import { api } from '../services/api';
 import { useNavigation } from '@react-navigation/native';
@@ -246,7 +247,7 @@ export const ProfileScreen: React.FC = () => {
             activeOpacity={0.7}
             onPress={() => Alert.alert('Inspector', `${officerName}\nID: ${officerId}`)}
           >
-            <MaterialIcons name="account-circle" size={24} color={colors.onSurfaceVariant} />
+            <ProfileAvatar size={28} />
           </TouchableOpacity>
         </View>
 
@@ -256,11 +257,7 @@ export const ProfileScreen: React.FC = () => {
         >
           {/* Section 1: Profile Header Card */}
           <View style={styles.profileHeaderCard}>
-            <View style={styles.avatarContainer}>
-              <View style={styles.avatarWrapper}>
-                <MaterialIcons name="person" size={56} color={colors.primary} />
-              </View>
-            </View>
+            <ProfileAvatar size={88} iconSize={52} />
 
             <View style={styles.profileMetaContainer}>
               <Text style={styles.profileNameText} numberOfLines={2}>

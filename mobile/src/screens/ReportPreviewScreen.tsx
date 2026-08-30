@@ -13,6 +13,7 @@ import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
+import { ProfileAvatar } from '../components/ProfileAvatar';
 import { api, getApiBaseUrl } from '../services/api';
 import { authStorage } from '../services/authStorage';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
@@ -111,8 +112,10 @@ export const ReportPreviewScreen: React.FC = () => {
             style={styles.headerIconButton}
             onPress={() => navigation.navigate('Profile')}
             activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel="Navigate to Profile"
           >
-            <MaterialIcons name="account-circle" size={24} color={colors.onSurfaceVariant} />
+            <ProfileAvatar size={28} />
           </TouchableOpacity>
         </View>
 
