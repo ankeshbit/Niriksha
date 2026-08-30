@@ -21,11 +21,13 @@ mobile/android/app/build/
 *.apk
 *.aab
 
-# Local SDKs, Tools and Large Binaries (>100MB)
+# Local SDKs, Tools, UI Mockups and Large Binaries (>100MB)
 android-sdk/
 jdk-17/
 cmdline-tools.zip
 *.zip
+stitch_screens/
+
 
 # Database & Runtime Uploads / Generated artifacts
 *.db
