@@ -247,7 +247,7 @@ export const ProfileScreen: React.FC = () => {
             activeOpacity={0.7}
             onPress={() => Alert.alert('Inspector', `${officerName}\nID: ${officerId}`)}
           >
-            <ProfileAvatar size={28} />
+            <ProfileAvatar size={36} />
           </TouchableOpacity>
         </View>
 

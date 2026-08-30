@@ -138,7 +138,7 @@ export const ReportsListScreen: React.FC = () => {
             accessibilityRole="button"
             accessibilityLabel="Navigate to Profile"
           >
-            <ProfileAvatar size={28} />
+            <ProfileAvatar size={36} />
           </TouchableOpacity>
         </View>
 

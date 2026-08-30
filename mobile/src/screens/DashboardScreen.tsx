@@ -220,7 +220,7 @@ export const DashboardScreen: React.FC = () => {
                 accessibilityRole="button"
                 accessibilityLabel="Navigate to Profile"
               >
-                <ProfileAvatar size={40} />
+                <ProfileAvatar size={36} />
               </TouchableOpacity>
             </View>
           </View>

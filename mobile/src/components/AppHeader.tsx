@@ -83,7 +83,7 @@ export const AppHeader: React.FC<AppHeaderProps> = ({
 
         {showProfileAvatar && (
           <TouchableOpacity onPress={handleProfilePress} activeOpacity={0.7} style={{ marginLeft: 8 }}>
-            <ProfileAvatar size={28} />
+            <ProfileAvatar size={36} />
           </TouchableOpacity>
         )}
 
