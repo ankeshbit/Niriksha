@@ -257,3 +257,7 @@ class Report(Base):
     generated_at = Column(DateTime, default=datetime.utcnow)
 
     inspection = relationship("Inspection", back_populates="report")
+
+    @property
+    def download_url(self) -> str:
+        return f"/api/inspections/{self.inspection_id}/report/pdf"
