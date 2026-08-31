@@ -254,7 +254,6 @@ npm run ts:check
 .
 ├── .env.example               # Sanitized environment configuration template
 ├── .gitignore                  # Git ignore rules for virtualenvs, caches, binaries
-├── LICENSE                     # MIT License
 ├── README.md                   # Primary project documentation
 │
 ├── backend/                    # FastAPI Backend Application
@@ -354,9 +353,3 @@ As an evaluation prototype, the system has the following documented boundaries:
 - **Batch Market Surveillance Analytics**: Centralized administrative dashboard aggregating non-compliance trends across districts and commodity categories.
 - **Multi-Language Declaration Extraction**: Expanding OCR parsers to extract mandatory regional language declarations under Rule 6(3).
 - **On-Device Edge OCR**: Porting OCR inference directly to on-device mobile neural runtimes (e.g. TensorFlow Lite / ONNX) for fully disconnected field execution.
-
----
-
-## License
-
-This project is licensed under the [MIT License](LICENSE).
