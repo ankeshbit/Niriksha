@@ -1,6 +1,6 @@
-# REST API Reference Documentation
+# NiriKsha — REST API Reference Documentation
 
-> **SIH 2026 Prototype — For demonstration purposes only.**
+> **NiriKsha — SIH Prototype 2026 (For demonstration and evaluation purposes only)**
 
 The backend exposes a REST API built with FastAPI. All endpoints, except `/api/health` and `/api/auth/login`, require an `Authorization: Bearer <token>` header containing a valid JSON Web Token (JWT).
 

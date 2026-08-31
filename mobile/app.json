@@ -1,7 +1,7 @@
 {
   "expo": {
-    "name": "Legal Metrology Field Inspect",
-    "slug": "legal-metrology-mobile",
+    "name": "NiriKsha",
+    "slug": "niriksha",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
@@ -11,25 +11,25 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "gov.doca.legalmetrology"
+      "bundleIdentifier": "gov.doca.niriksha"
     },
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#031635"
       },
-      "package": "gov.doca.legalmetrology"
+      "package": "gov.doca.niriksha"
     },
     "plugins": [
       [
         "expo-camera",
         {
-          "cameraPermission": "Allow Legal Metrology app to access camera for capturing package label images."
+          "cameraPermission": "Allow NiriKsha to access camera for capturing package label images."
         }
       ],
       [
         "expo-image-picker",
         {
-          "photosPermission": "Allow Legal Metrology app to access gallery for selecting package images."
+          "photosPermission": "Allow NiriKsha to access gallery for selecting package images."
         }
       ]
     ]

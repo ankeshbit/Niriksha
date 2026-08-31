@@ -1,10 +1,10 @@
-# AI-Assisted Legal Metrology Inspection & Compliance System
+# NiriKsha — AI-Assisted Legal Metrology Inspection & Compliance System
 
 **Smart India Hackathon (SIH) 2026 • Problem Statement ID: 26034**  
 **Ministry**: Ministry of Consumer Affairs, Food & Public Distribution  
 **Department**: Department of Consumer Affairs (DoCA)  
 **Category**: Software System to Check Compliance of Packaged Commodities under Legal Metrology (Packaged Commodities) Rules, 2011  
-> **SIH 2026 Prototype — For demonstration purposes only.**
+> **NiriKsha — SIH Prototype 2026 (For demonstration and evaluation purposes only)**
 
 ---
 
@@ -19,7 +19,7 @@
 
 ## Overview
 
-The **AI-Assisted Legal Metrology Inspection & Compliance System** is a software prototype developed for field enforcement officers to inspect packaged commodities against statutory declaration standards mandated by the **Legal Metrology (Packaged Commodities) Rules, 2011 (PCR 2011)** under the **Legal Metrology Act, 2009**.
+**NiriKsha** is an AI-assisted legal metrology inspection and decision-support system prototype developed for field enforcement officers to inspect packaged commodities against statutory declaration standards mandated by the **Legal Metrology (Packaged Commodities) Rules, 2011 (PCR 2011)** under the **Legal Metrology Act, 2009**.
 
 The platform combines mobile image capture, OpenCV-based image quality assessment, modular optical character recognition (OCR), and structured field extraction with a **deterministic statutory rule engine**.
 

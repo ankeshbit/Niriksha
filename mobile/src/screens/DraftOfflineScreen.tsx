@@ -20,7 +20,7 @@ export const DraftOfflineScreen: React.FC = () => {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
 
   const handleRetryConnection = () => {
-    Alert.alert('Network Sync', 'Checking connection to Legal Metrology Central Server...\n\nConnection restored.');
+    Alert.alert('Network Sync', 'Checking connection to NiriKsha Central Server...\n\nConnection restored.');
   };
 
   return (
@@ -35,7 +35,7 @@ export const DraftOfflineScreen: React.FC = () => {
           >
             <MaterialIcons name="arrow-back" size={24} color={colors.primary} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Legal Metrology</Text>
+          <Text style={styles.headerTitle}>NiriKsha</Text>
           <ProfileAvatar size={36} />
         </View>
 

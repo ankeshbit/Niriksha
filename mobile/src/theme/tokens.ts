@@ -1,5 +1,5 @@
 /**
- * Legal Metrology Mobile - Design System Tokens
+ * NiriKsha Mobile - Design System Tokens
  * Exact extraction from Stitch Tailwind Configuration
  */
 

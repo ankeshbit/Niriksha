@@ -1,8 +1,8 @@
-# Environment Setup & Installation Guide
+# NiriKsha — Environment Setup & Installation Guide
 
-> **SIH 2026 Prototype — For demonstration purposes only.**
+> **NiriKsha — SIH Prototype 2026 (For demonstration and evaluation purposes only)**
 
-This document provides step-by-step instructions to set up, configure, and execute the **AI-Assisted Legal Metrology Inspection & Compliance System** across both backend and mobile layers.
+This document provides step-by-step instructions to set up, configure, and execute the **NiriKsha** inspection platform across both backend and mobile layers.
 
 ---
 

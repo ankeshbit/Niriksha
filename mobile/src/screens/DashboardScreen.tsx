@@ -156,9 +156,9 @@ export const DashboardScreen: React.FC = () => {
   // Filter if chip is active
   const filteredInspections = selectedChipId
     ? inspections.filter((item: any) => {
-        const chip = FILTER_CHIPS.find((c) => c.id === selectedChipId);
-        return chip?.matcher ? chip.matcher(item) : true;
-      })
+      const chip = FILTER_CHIPS.find((c) => c.id === selectedChipId);
+      return chip?.matcher ? chip.matcher(item) : true;
+    })
     : inspections.slice(0, 5);
 
   const getStatusBadgeProps = (status?: string) => {
@@ -340,25 +340,25 @@ export const DashboardScreen: React.FC = () => {
                           }}
                           activeOpacity={0.7}
                         >
-                        <Text style={styles.rowIdText}>{item.inspection_number}</Text>
-                        <Text style={styles.rowProductText} numberOfLines={1}>
-                          {item.product_name}
-                        </Text>
-                        <Text style={styles.rowLocationText} numberOfLines={1}>
-                          {item.location}
-                        </Text>
-                        <View style={styles.badgeRow}>
-                          <View
-                            style={[
-                              styles.statusBadge,
-                              { backgroundColor: badge.bg, borderColor: badge.border },
-                            ]}
-                          >
-                            <Text style={[styles.statusBadgeText, { color: badge.text }]}>
-                              {badge.label}
-                            </Text>
+                          <Text style={styles.rowIdText}>{item.inspection_number}</Text>
+                          <Text style={styles.rowProductText} numberOfLines={1}>
+                            {item.product_name}
+                          </Text>
+                          <Text style={styles.rowLocationText} numberOfLines={1}>
+                            {item.location}
+                          </Text>
+                          <View style={styles.badgeRow}>
+                            <View
+                              style={[
+                                styles.statusBadge,
+                                { backgroundColor: badge.bg, borderColor: badge.border },
+                              ]}
+                            >
+                              <Text style={[styles.statusBadgeText, { color: badge.text }]}>
+                                {badge.label}
+                              </Text>
+                            </View>
                           </View>
-                        </View>
                         </TouchableOpacity>
                       );
                     })

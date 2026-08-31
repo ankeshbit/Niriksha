@@ -42,9 +42,13 @@ generated_reports/*
 .env.local
 .env.*.local
 
+# Scratch & temporary test scripts
+scratch/
+
 # IDE & Operating System
 .vscode/
 .idea/
 .agents/
 .DS_Store
 Thumbs.db
+

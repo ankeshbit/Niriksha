@@ -122,7 +122,7 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
               <MaterialIcons name="arrow-back" size={24} color={colors.primary} />
             </TouchableOpacity>
             <View>
-              <Text style={styles.headerTitle}>Legal Metrology</Text>
+              <Text style={styles.headerTitle}>NiriKsha</Text>
               <Text style={styles.headerSubtitle}>
                 ID: {inspectionNumber || 'LM-2026-00891'} • {todayStr}
               </Text>

@@ -254,7 +254,7 @@ export const ProfileScreen: React.FC = () => {
             <MaterialIcons name="menu" size={24} color={colors.onSurfaceVariant} />
           </TouchableOpacity>
           <Text style={styles.headerTitle} numberOfLines={1} ellipsizeMode="tail">
-            LEGAL METROLOGY
+            NiriKsha
           </Text>
           <TouchableOpacity
             style={styles.headerIconButton}
@@ -408,7 +408,7 @@ export const ProfileScreen: React.FC = () => {
             </View>
             <View style={[styles.appInfoRow, { borderBottomWidth: 0, paddingBottom: 0 }]}>
               <Text style={styles.appInfoLabel}>System Build</Text>
-              <Text style={styles.appInfoBuildValue}>SIH 2026 Prototype</Text>
+              <Text style={styles.appInfoBuildValue}>NiriKsha — SIH Prototype 2026</Text>
             </View>
           </View>
 
@@ -437,7 +437,7 @@ export const ProfileScreen: React.FC = () => {
             <View style={styles.drawerContainer}>
               {/* Drawer Header */}
               <View style={styles.drawerHeader}>
-                <Text style={styles.drawerBrandTitle}>LEGAL METROLOGY</Text>
+                <Text style={styles.drawerBrandTitle}>NiriKsha</Text>
                 <View style={styles.drawerUserBox}>
                   <ProfileAvatar size={40} />
                   <View style={styles.drawerUserMeta}>

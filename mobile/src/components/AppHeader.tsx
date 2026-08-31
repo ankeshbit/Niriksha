@@ -24,7 +24,7 @@ interface AppHeaderProps {
 }
 
 export const AppHeader: React.FC<AppHeaderProps> = ({
-  title = 'LEGAL METROLOGY',
+  title = 'NiriKsha',
   subtitle,
   showBack = false,
   onBackPress,

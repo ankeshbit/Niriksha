@@ -17,12 +17,12 @@ export const BottomNav: React.FC = () => {
     route: keyof RootStackParamList;
     icon: keyof typeof MaterialIcons.glyphMap;
   }> = [
-    { name: 'Home', route: 'Dashboard', icon: 'home' },
-    { name: 'Inspections', route: 'DraftOffline', icon: 'fact-check' },
-    { name: 'New', route: 'NewInspection', icon: 'add-circle' },
-    { name: 'Reports', route: 'ReportsList', icon: 'assessment' },
-    { name: 'Profile', route: 'Profile', icon: 'person' },
-  ];
+      { name: 'Home', route: 'Dashboard', icon: 'home' },
+      { name: 'Inspections', route: 'DraftOffline', icon: 'fact-check' },
+      { name: 'New', route: 'NewInspection', icon: 'add-circle' },
+      { name: 'Reports', route: 'ReportsList', icon: 'assessment' },
+      { name: 'Profile', route: 'Profile', icon: 'person' },
+    ];
 
   return (
     <View style={styles.navContainer}>

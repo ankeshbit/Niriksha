@@ -10,7 +10,7 @@ class Settings(BaseSettings):
     )
 
     # Core App Settings
-    PROJECT_NAME: str = "Legal Metrology Packaged-Commodity Inspection System"
+    PROJECT_NAME: str = "NiriKsha — AI-Assisted Legal Metrology Inspection System"
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
     DATABASE_URL: str = "sqlite:///./legal_metrology.db"

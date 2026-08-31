@@ -147,7 +147,7 @@ export const FindingsScreen: React.FC = () => {
             >
               <MaterialIcons name="arrow-back" size={24} color={colors.primary} />
             </TouchableOpacity>
-            <Text style={styles.headerTitle}>Legal Metrology</Text>
+            <Text style={styles.headerTitle}>NiriKsha</Text>
           </View>
           <ProfileAvatar size={36} />
         </View>

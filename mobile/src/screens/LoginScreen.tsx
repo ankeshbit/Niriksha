@@ -82,7 +82,7 @@ export const LoginScreen: React.FC = () => {
               color={colors.primary}
               style={styles.logoIcon}
             />
-            <Text style={styles.titleText}>LEGAL METROLOGY</Text>
+            <Text style={styles.titleText}>NiriKsha</Text>
             <Text style={styles.subtitleText}>AI-Assisted Legal Metrology Inspection</Text>
           </View>
 
@@ -164,7 +164,7 @@ export const LoginScreen: React.FC = () => {
             <MaterialIcons name="lock" size={16} color={colors.onSurfaceVariant} />
             <Text style={styles.footerLockText}>Authorized inspection personnel only</Text>
           </View>
-          <Text style={styles.footerPrototypeText}>Smart India Hackathon 2026 Prototype</Text>
+          <Text style={styles.footerPrototypeText}>NiriKsha — SIH Prototype 2026</Text>
         </View>
       </ScrollView>
     </KeyboardAvoidingView>

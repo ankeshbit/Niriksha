@@ -89,7 +89,7 @@ except Exception as e:
 app = FastAPI(
     title=settings.PROJECT_NAME,
     version="1.0.0",
-    description="Backend API for Legal Metrology Packaged-Commodity Inspection System (SIH 2026 Problem Statement 26034)"
+    description="Backend API for NiriKsha — AI-Assisted Legal Metrology Packaged-Commodity Inspection System (SIH 2026 Problem Statement 26034)"
 )
 
 # CORS Configuration
@@ -989,8 +989,12 @@ def evaluate_inspection_rules(
     # Execute deterministic rule engine
     eval_results = rule_engine.evaluate_inspection(inspection_id, product_data, declarations, images)
 
-    # Idempotent replacement of previous checks for this inspection
-    db.query(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection_id).delete()
+    # Idempotent replacement of previous checks and evidence for this inspection
+    existing_checks = db.query(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection_id).all()
+    check_ids = [c.id for c in existing_checks]
+    if check_ids:
+        db.query(Evidence).filter(Evidence.check_id.in_(check_ids)).delete(synchronize_session=False)
+        db.query(ComplianceCheck).filter(ComplianceCheck.id.in_(check_ids)).delete(synchronize_session=False)
     db.flush()
 
     saved_checks = []
@@ -1548,7 +1552,7 @@ def root_index():
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Legal Metrology Field Inspection System</title>
+    <title>NiriKsha — Legal Metrology Field Inspection System</title>
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap" rel="stylesheet">
     <style>body { font-family: 'Inter', sans-serif; }</style>
@@ -1558,8 +1562,8 @@ def root_index():
         <header class="bg-[#031635] text-white p-6 rounded-xl shadow-md flex items-center justify-between">
             <div>
                 <span class="text-xs font-semibold uppercase tracking-wider text-blue-300">Department of Consumer Affairs (DoCA)</span>
-                <h1 class="text-2xl font-bold mt-1">Legal Metrology Packaged-Commodity Inspection System</h1>
-                <p class="text-sm text-slate-300 mt-1">SIH 2026 • Problem Statement 26034 • Phase 6 Complete Baseline</p>
+                <h1 class="text-2xl font-bold mt-1">NiriKsha</h1>
+                <p class="text-sm text-slate-300 mt-1">AI-Assisted Legal Metrology Inspection System • NiriKsha — SIH Prototype 2026</p>
             </div>
             <a href="/stitch/code/01_login.html" class="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white text-sm font-bold rounded-lg transition">Launch App →</a>
         </header>

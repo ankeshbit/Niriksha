@@ -1,6 +1,6 @@
-# Automated Testing & Verification Guide
+# NiriKsha — Automated Testing & Verification Guide
 
-> **SIH 2026 Prototype — For demonstration purposes only.**
+> **NiriKsha — SIH Prototype 2026 (For demonstration and evaluation purposes only)**
 
 The system includes an automated test suite implemented in **Pytest** covering all backend layers, rule evaluations, report generators, and full mobile end-to-end workflows. In addition, the mobile application includes static type checking via **TypeScript**.
 

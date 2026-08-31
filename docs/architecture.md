@@ -1,12 +1,12 @@
-# System Architecture & Technical Design
+# NiriKsha — System Architecture & Technical Design
 
-> **SIH 2026 Prototype — For demonstration purposes only.**
+> **NiriKsha — SIH Prototype 2026 (For demonstration and evaluation purposes only)**
 
 ---
 
 ## 1. System Overview
 
-The **AI-Assisted Legal Metrology Inspection & Compliance System** is an architectural prototype designed to evaluate packaged commodities against statutory declaration standards under the **Legal Metrology (Packaged Commodities) Rules, 2011 (PCR 2011)**.
+**NiriKsha** is an AI-assisted legal metrology inspection and compliance decision-support system designed to evaluate packaged commodities against statutory declaration standards under the **Legal Metrology (Packaged Commodities) Rules, 2011 (PCR 2011)**.
 
 The system enforces a **statutory safety principle**: AI and computer vision are strictly restricted to assistive roles (image ingestion, image quality assessment, text recognition, and structured field extraction). All legal compliance determinations and enforcement decisions are executed by a **deterministic statutory rule engine** coupled with a **human-in-the-loop inspector adjudication workflow**.
 

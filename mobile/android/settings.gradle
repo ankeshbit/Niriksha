@@ -44,7 +44,7 @@ if (getRNMinorVersion() >= 75) {
   }
 }
 
-rootProject.name = 'Legal Metrology Field Inspect'
+rootProject.name = 'NiriKsha'
 
 dependencyResolutionManagement {
   versionCatalogs {

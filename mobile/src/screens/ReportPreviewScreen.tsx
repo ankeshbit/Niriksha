@@ -134,7 +134,7 @@ export const ReportPreviewScreen: React.FC = () => {
           >
             <MaterialIcons name="menu" size={24} color={colors.onSurfaceVariant} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>LEGAL METROLOGY</Text>
+          <Text style={styles.headerTitle}>NiriKsha</Text>
           <TouchableOpacity
             style={styles.headerIconButton}
             onPress={() => navigation.navigate('Profile')}
@@ -166,10 +166,10 @@ export const ReportPreviewScreen: React.FC = () => {
                 <View style={styles.balanceCircle}>
                   <MaterialIcons name="balance" size={32} color={colors.primary} />
                 </View>
-                <Text style={styles.brandTitle}>LEGAL METROLOGY</Text>
+                <Text style={styles.brandTitle}>NiriKsha</Text>
                 <Text style={styles.reportTitle}>INSPECTION REPORT</Text>
                 <Text style={styles.reportSubtitle}>AI-Assisted Legal Metrology Inspection</Text>
-                <Text style={styles.prototypeSubtitle}>Smart India Hackathon 2026 Prototype</Text>
+                <Text style={styles.prototypeSubtitle}>NiriKsha — SIH Prototype 2026</Text>
                 <Text style={styles.versionSubtitle}>Report Version: v{report?.report_version || 1}</Text>
               </View>
 
