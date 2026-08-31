@@ -14,7 +14,7 @@ from sqlalchemy.orm import Session
 from backend.database import SessionLocal, engine, Base
 from backend.models import (
     User, RuleVersion, Inspection, Product, ProductImage,
-    OCRResult, Declaration, ComplianceCheck, Evidence, AuditLog, Report
+    OCRResult, Declaration, ComplianceCheck, Evidence, InspectorReview, AuditLog, Report
 )
 from backend.report_service import report_generator
 from backend.config import settings
@@ -32,6 +32,7 @@ def seed_single_demo_inspection():
         print("[Demo Seed] Cleaning up all existing inspection records...")
         db.query(Report).delete()
         db.query(AuditLog).delete()
+        db.query(InspectorReview).delete()
         db.query(Evidence).delete()
         db.query(ComplianceCheck).delete()
         db.query(Declaration).delete()
@@ -40,6 +41,7 @@ def seed_single_demo_inspection():
         db.query(Product).delete()
         db.query(Inspection).delete()
         db.commit()
+
 
         # 3. Create the ONE reference inspection
         inspection_id = str(uuid.uuid4())

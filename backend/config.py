@@ -19,6 +19,7 @@ class Settings(BaseSettings):
     SECRET_KEY: str = "sih-2026-doca-legal-metrology-jwt-secret-key-32chars"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 Hours
     ALGORITHM: str = "HS256"
+    CORS_ORIGINS: str = "*"
 
     # Default Demo Officer
     SEED_OFFICER_ID: str = "DOCA-INSP-842"

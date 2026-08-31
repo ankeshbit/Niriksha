@@ -93,13 +93,17 @@ app = FastAPI(
 )
 
 # CORS Configuration
+_raw_origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
+_cors_origins = ["*"] if ("*" in _raw_origins or not _raw_origins) else _raw_origins
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=_cors_origins,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
 
 # Base Paths
 BASE_DIR = Path(__file__).resolve().parent.parent

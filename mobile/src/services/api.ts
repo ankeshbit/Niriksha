@@ -6,8 +6,13 @@ export const PC_LAN_API_HOST = 'http://192.168.1.5:8000'; // Physical Android de
 export const EMULATOR_API_HOST = 'http://10.0.2.2:8000';   // Android Emulator loopback
 export const LOCALHOST_API_HOST = 'http://127.0.0.1:8000';  // Web / iOS simulator
 
-// Default active API host for standalone build on physical Android phone
-export const DEFAULT_API_HOST = Platform.OS === 'android' ? PC_LAN_API_HOST : LOCALHOST_API_HOST;
+// Environment-configured API host (for production builds / EAS)
+const expoEnvUrl = (process.env as Record<string, string | undefined>)?.EXPO_PUBLIC_API_URL;
+const ENV_API_HOST = expoEnvUrl ? expoEnvUrl.replace(/\/$/, '') : null;
+
+// Default active API host for standalone build or local development
+export const DEFAULT_API_HOST = ENV_API_HOST || (Platform.OS === 'android' ? PC_LAN_API_HOST : LOCALHOST_API_HOST);
+
 
 let customBaseUrl: string | null = null;
 
