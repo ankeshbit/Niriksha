@@ -1,10 +1,25 @@
+import os
 import json
 from pathlib import Path
-from fastapi.testclient import TestClient
 
+# Explicitly isolate test database
+BASE_DIR = Path(__file__).resolve().parent.parent
+TEST_DB_PATH = BASE_DIR / "test_legal_metrology.db"
+os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DB_PATH.as_posix()}"
+
+from backend.config import settings
+settings.DATABASE_URL = f"sqlite:///{TEST_DB_PATH.as_posix()}"
+
+from fastapi.testclient import TestClient
 from backend.main import app
-from backend.models import Inspection, Declaration, ComplianceCheck, Report, AuditLog
+import backend.database as db_module
+from backend.models import Inspection, Declaration, ComplianceCheck, Report, AuditLog, Base
 from backend.database import get_db
+from backend.seed import seed_database
+
+# Ensure test DB initialized
+Base.metadata.create_all(bind=db_module.engine)
+seed_database()
 
 client = TestClient(app)
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"

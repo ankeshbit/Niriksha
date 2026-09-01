@@ -16,6 +16,10 @@ BASE_DIR = Path(__file__).resolve().parent.parent
 TEST_DB_PATH = BASE_DIR / "test_legal_metrology.db"
 TEST_DATABASE_URL = f"sqlite:///{TEST_DB_PATH.as_posix()}"
 
+# SAFETY GUARD: Ensure test database is explicitly isolated from legal_metrology.db
+if "legal_metrology.db" in TEST_DATABASE_URL and "test_legal_metrology.db" not in TEST_DATABASE_URL:
+    raise RuntimeError("SAFETY ERROR: Tests cannot run against the development database (legal_metrology.db). Tests must use test_legal_metrology.db.")
+
 # Set environment variable before any modules load
 os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
@@ -41,6 +45,10 @@ db_module.SessionLocal = TestSessionLocal
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_environment():
     """Initializes a clean test database and tears it down after tests complete."""
+    # Defensive Runtime Verification: Check engine connection URL
+    engine_url_str = str(db_module.engine.url).replace("\\", "/")
+    if engine_url_str.endswith("legal_metrology.db") and not engine_url_str.endswith("test_legal_metrology.db"):
+        raise RuntimeError("SAFETY ERROR: Tests cannot run against the development database (legal_metrology.db). Tests must use test_legal_metrology.db.")
     # Ensure fresh test database file
     if TEST_DB_PATH.exists():
         try:
