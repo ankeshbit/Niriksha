@@ -15,6 +15,7 @@ import * as ImagePicker from 'expo-image-picker';
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
 import { api, getApiBaseUrl } from '../services/api';
+import { draftStorage } from '../services/draftStorage';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
@@ -30,6 +31,21 @@ export const CaptureImagesScreen: React.FC = () => {
 
   const loadImages = async () => {
     try {
+      if (inspectionId && inspectionId.startsWith('draft-')) {
+        const draft = await draftStorage.getDraft(inspectionId);
+        if (draft && draft.images) {
+          setImages(
+            draft.images.map((img) => ({
+              id: `${draft.clientDraftId}-${img.viewType}`,
+              view_type: img.viewType,
+              file_path: img.uri,
+              is_local: true,
+              quality_status: 'GOOD',
+            }))
+          );
+        }
+        return;
+      }
       const data = await api.getInspectionImages(inspectionId);
       setImages(data || []);
     } catch (err) {
@@ -107,6 +123,15 @@ export const CaptureImagesScreen: React.FC = () => {
   const uploadPickedImage = async (uri: string, viewType: string) => {
     setUploadingSlot(viewType);
     try {
+      if (inspectionId && inspectionId.startsWith('draft-')) {
+        await draftStorage.addDraftImage(inspectionId, {
+          viewType: viewType as 'front' | 'back' | 'side',
+          uri,
+        });
+        await loadImages();
+        return;
+      }
+
       const formData = new FormData();
       const filename = uri.split('/').pop() || `${viewType}_panel.jpg`;
       const match = /\.(\w+)$/.exec(filename);
@@ -183,6 +208,10 @@ export const CaptureImagesScreen: React.FC = () => {
       );
     }
 
+    const imageSourceUri = imgData.is_local || imgData.file_path.startsWith('data:') || imgData.file_path.startsWith('blob:') || imgData.file_path.startsWith('file:') || imgData.file_path.startsWith('http')
+      ? imgData.file_path
+      : `${baseUrl}${imgData.file_path}`;
+
     return (
       <View style={[styles.slotCard, isWarn && styles.slotCardWarn]}>
         <View style={styles.slotHeader}>
@@ -203,11 +232,12 @@ export const CaptureImagesScreen: React.FC = () => {
         <View style={styles.slotBody}>
           <View style={[styles.thumbnailBox, isWarn && styles.thumbnailWarn]}>
             <Image
-              source={{ uri: `${baseUrl}${imgData.file_path}` }}
+              source={{ uri: imageSourceUri }}
               style={styles.thumbnailImage}
               resizeMode="cover"
             />
           </View>
+
 
           <View style={styles.slotActions}>
             <TouchableOpacity
@@ -329,11 +359,16 @@ export const CaptureImagesScreen: React.FC = () => {
                   Alert.alert('Image Required', 'Please capture at least 1 package image before proceeding.');
                   return;
                 }
+                if (inspectionId && inspectionId.startsWith('draft-')) {
+                  navigation.navigate('DraftOffline', { clientDraftId: inspectionId });
+                  return;
+                }
                 navigation.navigate('Analyzing', {
                   inspectionId,
                   inspectionNumber,
                 });
               }}
+
               disabled={!hasAtLeastOneImage}
               activeOpacity={0.85}
             >

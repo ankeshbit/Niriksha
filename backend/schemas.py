@@ -50,6 +50,7 @@ class CreateInspectionRequest(BaseModel):
     location: str = Field(..., description="Inspection location")
     batch_number: Optional[str] = Field(None, description="Batch / Lot number")
     notes: Optional[str] = Field(None, description="Additional inspection notes")
+    client_draft_id: Optional[str] = Field(None, description="Client-generated local draft UUID for idempotent sync")
 
 class ProductResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

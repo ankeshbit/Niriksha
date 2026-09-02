@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import {
   View,
   Text,
@@ -18,28 +18,34 @@ import { BottomNav } from '../components/BottomNav';
 import { ProfileAvatar } from '../components/ProfileAvatar';
 import { api } from '../services/api';
 import { authStorage } from '../services/authStorage';
-import { useNavigation } from '@react-navigation/native';
+import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
+
+import { draftStorage } from '../services/draftStorage';
+import { networkService } from '../services/networkService';
 
 export const NewInspectionScreen: React.FC = () => {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const [profile, setProfile] = useState<any>(null);
 
-  // Form Fields
-  const [productName, setProductName] = useState('Premium Basmati Rice');
-  const [brandName, setBrandName] = useState('Agro Foods');
+  // Form Fields — intentionally empty so the user must fill them before Continue fires
+  const [productName, setProductName] = useState('');
+  const [brandName, setBrandName] = useState('');
   const [category, setCategory] = useState<'Packaged Food' | 'Household/Personal Care'>('Packaged Food');
-  const [location, setLocation] = useState('Sector 4 Market');
+  const [location, setLocation] = useState('');
 
   // Additional Details Accordion State & Fields
-  const [additionalDetailsOpen, setAdditionalDetailsOpen] = useState(true);
-  const [batchNumber, setBatchNumber] = useState('BN-2026-X1');
-  const [manufacturer, setManufacturer] = useState('Agro Foods Pvt. Ltd.');
-  const [source, setSource] = useState('Retail Distributor');
+  const [additionalDetailsOpen, setAdditionalDetailsOpen] = useState(false);
+  const [batchNumber, setBatchNumber] = useState('');
+  const [manufacturer, setManufacturer] = useState('');
+  const [source, setSource] = useState('');
   const [inspectionContext, setInspectionContext] = useState<'Retail' | 'Warehouse' | 'E-commerce'>('Retail');
-  const [notes, setNotes] = useState('Routine surveillance under Legal Metrology Rules, 2011');
+  const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
+  // Ref-based in-flight guard: prevents a second POST even if the user manages
+  // to press Continue again before the first setLoading(true) re-render fires.
+  const submittingRef = useRef(false);
 
   useEffect(() => {
     authStorage.getProfile().then((prof) => {
@@ -47,7 +53,28 @@ export const NewInspectionScreen: React.FC = () => {
     });
   }, []);
 
+  // Reset the form every time this screen comes into focus so no stale data
+  // can accidentally pass validation on a subsequent visit.
+  useFocusEffect(
+    useCallback(() => {
+      setProductName('');
+      setBrandName('');
+      setCategory('Packaged Food');
+      setLocation('');
+      setAdditionalDetailsOpen(false);
+      setBatchNumber('');
+      setManufacturer('');
+      setSource('');
+      setInspectionContext('Retail');
+      setNotes('');
+      setLoading(false);
+    }, [])
+  );
+
   const handleContinue = async () => {
+    // Hard guard: bail immediately if a submission is already in-flight
+    if (submittingRef.current) return;
+
     if (!productName.trim()) {
       Alert.alert('Required Field', 'Please enter the Product Name.');
       return;
@@ -61,6 +88,7 @@ export const NewInspectionScreen: React.FC = () => {
       return;
     }
 
+    submittingRef.current = true;
     setLoading(true);
 
     try {
@@ -87,11 +115,57 @@ export const NewInspectionScreen: React.FC = () => {
         inspectionNumber: inspection.inspection_number,
       });
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Failed to create inspection record.');
+      const errorMsg = String(err?.message || '');
+      const isNetworkError =
+        !networkService.isOnline() ||
+        errorMsg.includes('Network') ||
+        errorMsg.includes('Failed to fetch') ||
+        errorMsg.includes('Network request failed') ||
+        errorMsg.includes('502') ||
+        errorMsg.includes('503') ||
+        errorMsg.includes('504');
+
+      if (isNetworkError) {
+        const clientDraftId = draftStorage.generateClientDraftId();
+        const combinedNotes = [
+          manufacturer ? `Manufacturer: ${manufacturer}` : '',
+          source ? `Source: ${source}` : '',
+          inspectionContext ? `Context: ${inspectionContext}` : '',
+          notes ? `Notes: ${notes}` : '',
+        ]
+          .filter(Boolean)
+          .join(' | ');
+
+        const localDraft = {
+          clientDraftId,
+          productName: productName.trim(),
+          brandName: brandName.trim(),
+          category,
+          location: location.trim(),
+          batchNumber: batchNumber.trim() || undefined,
+          manufacturer: manufacturer.trim() || undefined,
+          source: source.trim() || undefined,
+          inspectionContext,
+          notes: combinedNotes || undefined,
+          images: [],
+          status: 'PENDING_SYNC' as const,
+          createdAt: new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+          syncError: errorMsg,
+        };
+
+        await draftStorage.saveDraft(localDraft);
+
+        navigation.navigate('DraftOffline', { clientDraftId });
+      } else {
+        Alert.alert('Error', err.message || 'Failed to create inspection record.');
+      }
     } finally {
+      submittingRef.current = false;
       setLoading(false);
     }
   };
+
 
   const currentDateStr = new Date().toLocaleString('en-GB', {
     day: 'numeric',

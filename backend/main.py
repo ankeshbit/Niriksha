@@ -452,14 +452,34 @@ def create_inspection(
     if not req.location.strip():
         raise HTTPException(status_code=400, detail="Inspection location is required")
 
+    # Idempotent reconciliation: if client_draft_id provided, check if already created
+    if req.client_draft_id and req.client_draft_id.strip():
+        draft_marker = f"[client_draft_id:{req.client_draft_id.strip()}]"
+        existing = db.query(Inspection).options(
+            joinedload(Inspection.product),
+            joinedload(Inspection.images),
+            joinedload(Inspection.declarations),
+            joinedload(Inspection.compliance_checks),
+            joinedload(Inspection.report)
+        ).filter(
+            Inspection.inspector_id == current_user.id,
+            Inspection.notes.like(f"%{draft_marker}%")
+        ).first()
+        if existing:
+            return existing
+
     inspection_number = generate_inspection_number(db)
     
+    notes_val = req.notes.strip() if req.notes else ""
+    if req.client_draft_id and req.client_draft_id.strip():
+        notes_val = f"{notes_val} | [client_draft_id:{req.client_draft_id.strip()}]".strip(" |")
+
     new_inspection = Inspection(
         inspection_number=inspection_number,
         inspector_id=current_user.id,
         location=req.location.strip(),
         status="DRAFT",
-        notes=req.notes.strip() if req.notes else None
+        notes=notes_val if notes_val else None
     )
     db.add(new_inspection)
     db.flush()
@@ -478,6 +498,7 @@ def create_inspection(
     db.refresh(new_inspection)
 
     return new_inspection
+
 
 @app.get("/api/inspections", response_model=List[InspectionDetailResponse], tags=["Inspections"])
 def list_inspections(

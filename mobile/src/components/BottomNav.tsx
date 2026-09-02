@@ -37,7 +37,12 @@ export const BottomNav: React.FC = () => {
         return (
           <TouchableOpacity
             key={tab.name}
-            onPress={() => navigation.navigate(tab.route as any)}
+            onPress={() => {
+              // Do not push a duplicate screen if we are already on this route
+              if (currentRoute !== tab.route) {
+                navigation.navigate(tab.route as any);
+              }
+            }}
             style={[styles.tabItem, isActive && styles.activeTabItem]}
             activeOpacity={0.7}
           >

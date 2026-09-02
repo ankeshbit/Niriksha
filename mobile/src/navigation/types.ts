@@ -11,5 +11,5 @@ export type RootStackParamList = {
   ReportPreview: { inspectionId: string; inspectionNumber?: string };
   ReportsList: undefined;
   Profile: undefined;
-  DraftOffline: undefined;
+  DraftOffline: { clientDraftId?: string } | undefined;
 };

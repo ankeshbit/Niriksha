@@ -24,6 +24,7 @@ export const getApiBaseUrl = () => {
   return customBaseUrl || DEFAULT_API_HOST;
 };
 
+
 export async function apiRequest<T = any>(
   endpoint: string,
   options: {
@@ -33,6 +34,7 @@ export async function apiRequest<T = any>(
     isFormData?: boolean;
   } = {}
 ): Promise<T> {
+  const effectiveMethod = options.method || 'GET';
   const token = await authStorage.getToken();
   const baseUrl = getApiBaseUrl();
   const url = `${baseUrl}${endpoint}`;
@@ -49,10 +51,11 @@ export async function apiRequest<T = any>(
   }
 
   const response = await fetch(url, {
-    method: options.method || 'GET',
+    method: effectiveMethod,
     headers,
     body,
   });
+
 
   if (response.status === 401) {
     await authStorage.clear();
@@ -98,6 +101,9 @@ export const api = {
   // Dashboard
   getDashboard: () => apiRequest('/api/dashboard'),
 
+  // Health & Connectivity
+  checkHealth: () => apiRequest('/api/health'),
+
   // Inspections
   createInspection: (data: {
     product_name: string;
@@ -106,6 +112,7 @@ export const api = {
     location: string;
     batch_number?: string;
     notes?: string;
+    client_draft_id?: string;
   }) => apiRequest('/api/inspections', { method: 'POST', body: data }),
   getInspection: (id: string) => apiRequest(`/api/inspections/${id}`),
   listInspections: (params?: { status?: string; limit?: number; offset?: number }) => {
