@@ -1,5 +1,6 @@
-import React, { useEffect, useState } from 'react';
-import { View, Text, StyleSheet, TouchableOpacity, Alert, SafeAreaView } from 'react-native';
+﻿import React, { useEffect, useState } from 'react';
+import { View, Text, StyleSheet, TouchableOpacity, Alert } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
 import { MaterialIcons } from '@expo/vector-icons';
 import { api } from '../services/api';
@@ -290,3 +291,4 @@ const styles = StyleSheet.create({
     color: colors.primary,
   },
 });
+

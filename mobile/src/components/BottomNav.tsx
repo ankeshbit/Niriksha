@@ -1,14 +1,22 @@
 import React from 'react';
-import { View, Text, TouchableOpacity, StyleSheet, Platform } from 'react-native';
+import { View, Text, TouchableOpacity, StyleSheet } from 'react-native';
 import { MaterialIcons } from '@expo/vector-icons';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
 import { useNavigation, useRoute } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 
+/**
+ * The visible height of the tab bar row (icons + labels + vertical padding).
+ * Does NOT include the bottom safe-area inset — that is added dynamically.
+ */
+export const BOTTOM_NAV_TAB_HEIGHT = 56;
+
 export const BottomNav: React.FC = () => {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute();
+  const insets = useSafeAreaInsets();
 
   const currentRoute = route.name;
 
@@ -25,7 +33,7 @@ export const BottomNav: React.FC = () => {
     ];
 
   return (
-    <View style={styles.navContainer}>
+    <View style={[styles.navContainer, { paddingBottom: Math.max(insets.bottom, 6) }]}>
       {tabs.map((tab) => {
         const isActive =
           (tab.name === 'Home' && currentRoute === 'Dashboard') ||
@@ -77,9 +85,9 @@ const styles = StyleSheet.create({
     backgroundColor: colors.surface,
     borderTopWidth: 1,
     borderTopColor: colors.borderSubtle,
-    paddingVertical: 6,
+    paddingTop: 6,
     paddingHorizontal: spacing.tight,
-    paddingBottom: Platform.OS === 'ios' ? 20 : 6,
+    // paddingBottom is set dynamically in JSX above via insets.bottom
   },
   tabItem: {
     alignItems: 'center',
@@ -99,4 +107,3 @@ const styles = StyleSheet.create({
     marginTop: 2,
   },
 });
-

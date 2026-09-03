@@ -1,5 +1,5 @@
 from pydantic import BaseModel, Field, ConfigDict
-from typing import Optional, List, Dict, Any
+from typing import Literal, Optional, List, Dict, Any
 from datetime import datetime
 
 class HealthCheckResponse(BaseModel):
@@ -43,9 +43,12 @@ class ChangePasswordRequest(BaseModel):
     current_password: str = Field(..., description="Current password for verification")
     new_password: str = Field(..., min_length=6, description="New secure password")
 
+# Valid Legal Metrology commodity categories (PCR 2011 scope)
+INSPECTION_CATEGORIES = Literal["Packaged Food", "Household/Personal Care"]
+
 class CreateInspectionRequest(BaseModel):
     product_name: str = Field(..., description="Name of the packaged commodity")
-    category: str = Field(..., description="Product category: 'Packaged Food' or 'Household/Personal Care'")
+    category: INSPECTION_CATEGORIES = Field(..., description="Product category: 'Packaged Food' or 'Household/Personal Care'")
     brand_name: Optional[str] = Field(None, description="Brand name")
     location: str = Field(..., description="Inspection location")
     batch_number: Optional[str] = Field(None, description="Batch / Lot number")

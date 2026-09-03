@@ -8,11 +8,12 @@ import {
   RefreshControl,
   ActivityIndicator,
   Platform,
-  SafeAreaView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
+import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
-import { BottomNav } from '../components/BottomNav';
+import { BottomNav, BOTTOM_NAV_TAB_HEIGHT } from '../components/BottomNav';
 import { ProfileAvatar } from '../components/ProfileAvatar';
 import { api } from '../services/api';
 import { authStorage } from '../services/authStorage';
@@ -106,6 +107,7 @@ const FILTER_CHIPS: FilterChip[] = [
 
 export const DashboardScreen: React.FC = () => {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const insets = useSafeAreaInsets();
   const [profile, setProfile] = useState<any>(null);
   const [dashboardData, setDashboardData] = useState<any>(null);
   const [inspections, setInspections] = useState<any[]>([]);
@@ -203,10 +205,16 @@ export const DashboardScreen: React.FC = () => {
   };
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       <View style={styles.container}>
         <ScrollView
-          contentContainerStyle={styles.scrollContent}
+          style={{ flex: 1 }}
+          contentContainerStyle={[
+            styles.scrollContent,
+            // Ensure content is not hidden behind BottomNav on any device.
+            // BOTTOM_NAV_TAB_HEIGHT = visible row height; insets.bottom = system navigation area.
+            { paddingBottom: BOTTOM_NAV_TAB_HEIGHT + Math.max(insets.bottom, 6) + 16 },
+          ]}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
           showsVerticalScrollIndicator={false}
         >
@@ -371,7 +379,11 @@ export const DashboardScreen: React.FC = () => {
 
         {/* Mobile Floating Action Button (FAB) */}
         <TouchableOpacity
-          style={styles.fab}
+          style={[
+            styles.fab,
+            // Sit just above the BottomNav, which itself already accounts for insets.bottom
+            { bottom: BOTTOM_NAV_TAB_HEIGHT + Math.max(insets.bottom, 6) + 12 },
+          ]}
           onPress={() => navigation.navigate('NewInspection')}
           activeOpacity={0.85}
         >
@@ -398,7 +410,10 @@ const styles = StyleSheet.create({
   scrollContent: {
     paddingHorizontal: spacing.marginX,
     paddingTop: spacing.stackMd,
-    paddingBottom: 90,
+    // paddingBottom is calculated dynamically on the ScrollView via contentContainerStyle
+    // to accommodate BottomNav height + safe-area bottom.
+    // This static value is a fallback only.
+    paddingBottom: 8,
   },
   welcomeHeader: {
     borderBottomWidth: 1,
@@ -570,7 +585,7 @@ const styles = StyleSheet.create({
   fab: {
     position: 'absolute',
     right: spacing.marginX,
-    bottom: 76,
+    // bottom is set dynamically in JSX using insets.bottom + BOTTOM_NAV_TAB_HEIGHT
     width: 56,
     height: 56,
     borderRadius: 28,

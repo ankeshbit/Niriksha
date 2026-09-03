@@ -9,8 +9,8 @@ import {
   Modal,
   TextInput,
   Alert,
-  SafeAreaView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
 import { BottomNav } from '../components/BottomNav';
@@ -109,7 +109,7 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
   });
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       <View style={styles.container}>
         {/* Stitch TopAppBar Header */}
         <View style={styles.topHeader}>
@@ -693,3 +693,4 @@ const styles = StyleSheet.create({
     color: colors.onPrimary,
   },
 });
+

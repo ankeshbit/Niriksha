@@ -10,8 +10,8 @@ import {
   Platform,
   ActivityIndicator,
   Alert,
-  SafeAreaView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
 import { BottomNav } from '../components/BottomNav';
@@ -71,6 +71,50 @@ export const NewInspectionScreen: React.FC = () => {
     }, [])
   );
 
+  /**
+   * Saves a local draft and navigates to CaptureImages so the officer can
+   * capture package images offline immediately.
+   */
+  const saveOfflineDraftAndCapture = async (errorMsg?: string) => {
+    const clientDraftId = draftStorage.generateClientDraftId();
+    const combinedNotes = [
+      manufacturer ? `Manufacturer: ${manufacturer}` : '',
+      source ? `Source: ${source}` : '',
+      inspectionContext ? `Context: ${inspectionContext}` : '',
+      notes ? `Notes: ${notes}` : '',
+    ]
+      .filter(Boolean)
+      .join(' | ');
+
+    const localDraft = {
+      clientDraftId,
+      productName: productName.trim(),
+      brandName: brandName.trim(),
+      category,
+      location: location.trim(),
+      batchNumber: batchNumber.trim() || undefined,
+      manufacturer: manufacturer.trim() || undefined,
+      source: source.trim() || undefined,
+      inspectionContext,
+      notes: combinedNotes || undefined,
+      images: [],
+      // LOCAL_CAPTURE: officer is still in the capture phase
+      status: 'LOCAL_CAPTURE' as const,
+      createdAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+      syncError: errorMsg,
+    };
+
+    await draftStorage.saveDraft(localDraft);
+
+    // Navigate directly to CaptureImages so the officer can capture images offline.
+    // Using clientDraftId as the inspectionId signals the draft path throughout.
+    navigation.navigate('CaptureImages', {
+      inspectionId: clientDraftId,
+      inspectionNumber: undefined,
+    });
+  };
+
   const handleContinue = async () => {
     // Hard guard: bail immediately if a submission is already in-flight
     if (submittingRef.current) return;
@@ -92,6 +136,14 @@ export const NewInspectionScreen: React.FC = () => {
     setLoading(true);
 
     try {
+      // ── Proactive offline detection ────────────────────────────────────────
+      // Check connectivity BEFORE attempting the API call. If we are already
+      // offline, create a local draft immediately without a failed network request.
+      if (!networkService.isOnline()) {
+        await saveOfflineDraftAndCapture('Device is offline. Inspection saved locally.');
+        return;
+      }
+
       const combinedNotes = [
         manufacturer ? `Manufacturer: ${manufacturer}` : '',
         source ? `Source: ${source}` : '',
@@ -126,37 +178,8 @@ export const NewInspectionScreen: React.FC = () => {
         errorMsg.includes('504');
 
       if (isNetworkError) {
-        const clientDraftId = draftStorage.generateClientDraftId();
-        const combinedNotes = [
-          manufacturer ? `Manufacturer: ${manufacturer}` : '',
-          source ? `Source: ${source}` : '',
-          inspectionContext ? `Context: ${inspectionContext}` : '',
-          notes ? `Notes: ${notes}` : '',
-        ]
-          .filter(Boolean)
-          .join(' | ');
-
-        const localDraft = {
-          clientDraftId,
-          productName: productName.trim(),
-          brandName: brandName.trim(),
-          category,
-          location: location.trim(),
-          batchNumber: batchNumber.trim() || undefined,
-          manufacturer: manufacturer.trim() || undefined,
-          source: source.trim() || undefined,
-          inspectionContext,
-          notes: combinedNotes || undefined,
-          images: [],
-          status: 'PENDING_SYNC' as const,
-          createdAt: new Date().toISOString(),
-          updatedAt: new Date().toISOString(),
-          syncError: errorMsg,
-        };
-
-        await draftStorage.saveDraft(localDraft);
-
-        navigation.navigate('DraftOffline', { clientDraftId });
+        // Reactive fallback: API call failed due to connectivity loss mid-request
+        await saveOfflineDraftAndCapture(errorMsg);
       } else {
         Alert.alert('Error', err.message || 'Failed to create inspection record.');
       }
@@ -180,7 +203,7 @@ export const NewInspectionScreen: React.FC = () => {
     : 'Rajesh Kumar (LM-IND-442)';
 
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       <View style={styles.container}>
         {/* Stitch TopAppBar Header */}
         <View style={styles.topHeader}>
@@ -198,6 +221,7 @@ export const NewInspectionScreen: React.FC = () => {
         </View>
 
         <ScrollView
+          style={{ flex: 1 }}
           contentContainerStyle={styles.scrollContent}
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
@@ -625,3 +649,4 @@ const styles = StyleSheet.create({
     color: colors.onPrimary,
   },
 });
+

@@ -9,11 +9,11 @@ import {
   RefreshControl,
   TextInput,
   Alert,
-  SafeAreaView,
   Platform,
   Modal,
   KeyboardAvoidingView,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -53,6 +53,7 @@ export const ReportsListScreen: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
+
 
   // Active Applied Filters (Drives the derived list calculation)
   const [selectedCompliance, setSelectedCompliance] = useState<ComplianceFilterType>('ALL');
@@ -343,8 +344,10 @@ export const ReportsListScreen: React.FC = () => {
     }
   };
 
+
+
   return (
-    <SafeAreaView style={styles.safeArea}>
+    <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       <View style={styles.container}>
         {/* Stitch TopAppBar Header */}
         <View style={styles.topHeader}>
@@ -622,6 +625,7 @@ export const ReportsListScreen: React.FC = () => {
                           <MaterialIcons name="download" size={18} color={colors.primary} />
                         )}
                       </TouchableOpacity>
+
                     </View>
                   </View>
                 );
@@ -1310,3 +1314,5 @@ const styles = StyleSheet.create({
     color: colors.onPrimary,
   },
 });
+
+

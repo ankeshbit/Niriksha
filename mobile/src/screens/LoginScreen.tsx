@@ -10,10 +10,12 @@ import {
   Platform,
   ScrollView,
   StatusBar,
+  Image,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
-import { api } from '../services/api';
+import { api, getApiBaseUrl } from '../services/api';
 import { authStorage } from '../services/authStorage';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -60,29 +62,39 @@ export const LoginScreen: React.FC = () => {
 
       navigation.replace('Dashboard');
     } catch (err: any) {
-      setErrorMessage(err.message || 'Invalid Inspector ID or password. Please try again.');
+      const msg = String(err?.message || '');
+      if (
+        msg.includes('Failed to fetch') ||
+        msg.includes('Network request failed') ||
+        msg.includes('NetworkError')
+      ) {
+        setErrorMessage(
+          `Cannot reach backend server (${getApiBaseUrl()}). Please ensure the server is running on port 8000.`
+        );
+      } else {
+        setErrorMessage(msg || 'Invalid Inspector ID or password. Please try again.');
+      }
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <KeyboardAvoidingView
-      behavior={Platform.OS === 'ios' ? 'padding' : undefined}
-      style={styles.container}
-    >
-      <StatusBar barStyle="dark-content" backgroundColor={colors.surface} />
-      <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+    <SafeAreaView style={styles.safeArea}>
+      <KeyboardAvoidingView
+        behavior={Platform.OS === 'ios' ? 'padding' : undefined}
+        style={styles.container}
+      >
+        <StatusBar barStyle="dark-content" backgroundColor={colors.surface} />
+        <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         <View style={styles.card}>
           {/* Header Section */}
           <View style={styles.headerSection}>
-            <MaterialIcons
-              name="verified-user"
-              size={48}
-              color={colors.primary}
-              style={styles.logoIcon}
+            <Image
+              source={require('../../assets/niriksha_logo.png')}
+              style={styles.logoImage}
+              resizeMode="contain"
             />
-            <Text style={styles.titleText}>NiriKsha</Text>
             <Text style={styles.subtitleText}>AI-Assisted Legal Metrology Inspection</Text>
           </View>
 
@@ -168,10 +180,15 @@ export const LoginScreen: React.FC = () => {
         </View>
       </ScrollView>
     </KeyboardAvoidingView>
+    </SafeAreaView>
   );
 };
 
 const styles = StyleSheet.create({
+  safeArea: {
+    flex: 1,
+    backgroundColor: colors.surface,
+  },
   container: {
     flex: 1,
     backgroundColor: colors.surface,
@@ -194,21 +211,17 @@ const styles = StyleSheet.create({
   headerSection: {
     alignItems: 'center',
     paddingHorizontal: spacing.marginX,
-    paddingTop: spacing.stackMd,
-    paddingBottom: spacing.stackSm,
+    paddingTop: spacing.base,
+    paddingBottom: spacing.stackSm + 2,
     borderBottomWidth: 1,
     borderBottomColor: colors.borderSubtle,
   },
-  logoIcon: {
-    marginBottom: spacing.stackSm,
-  },
-  titleText: {
-    ...typography.headlineLg,
-    fontSize: 20,
-    lineHeight: 28,
-    fontWeight: '700',
-    color: colors.primary,
-    marginBottom: spacing.tight,
+  logoImage: {
+    width: 130,
+    height: 130,
+    marginTop: -26,
+    marginBottom: -32,
+    alignSelf: 'center',
   },
   subtitleText: {
     ...typography.bodySm,

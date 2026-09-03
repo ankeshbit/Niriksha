@@ -15,6 +15,8 @@ class NetworkService {
   private isChecking = false;
   private netInfoUnsubscribe: (() => void) | null = null;
 
+  private isNativeConnected = true;
+
   constructor() {
     this.init();
   }
@@ -23,7 +25,7 @@ class NetworkService {
     if (Platform.OS === 'web' && typeof navigator !== 'undefined' && typeof navigator.onLine === 'boolean') {
       return navigator.onLine;
     }
-    return true;
+    return this.isNativeConnected;
   }
 
   private init() {
@@ -61,14 +63,26 @@ class NetworkService {
       if (NetInfo && NetInfo.addEventListener) {
         this.netInfoUnsubscribe = NetInfo.addEventListener((netState: any) => {
           const isConnected = netState.isConnected ?? true;
-          const isInternetReachable = netState.isInternetReachable;
+          this.isNativeConnected = isConnected;
 
-          if (!isConnected || isInternetReachable === false) {
+          if (!isConnected) {
+            this.setState('OFFLINE');
+          } else {
+            // Evaluates real FastAPI LAN reachability via /api/health
+            this.checkReachability().catch(() => {});
+          }
+        });
+      }
+      if (NetInfo && NetInfo.fetch) {
+        NetInfo.fetch().then((netState: any) => {
+          const isConnected = netState.isConnected ?? true;
+          this.isNativeConnected = isConnected;
+          if (!isConnected) {
             this.setState('OFFLINE');
           } else {
             this.checkReachability().catch(() => {});
           }
-        });
+        }).catch(() => {});
       }
     } catch (e) {
       // NetInfo not available in this environment

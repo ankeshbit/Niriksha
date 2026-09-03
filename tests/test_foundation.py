@@ -58,8 +58,17 @@ def test_get_current_user_profile():
     assert profile_data["designation"] == settings.SEED_OFFICER_DESIGNATION
 
 def test_rules_registry_endpoint():
-    """Verify registered statutory rules are exposed."""
-    response = client.get("/api/rules")
+    """Verify registered statutory rules are exposed (requires authentication)."""
+    # Login first — /api/rules now requires a valid JWT (S-1 fix)
+    login_resp = client.post("/api/auth/login", json={
+        "officer_id": settings.SEED_OFFICER_ID,
+        "password": settings.SEED_OFFICER_PASSWORD
+    })
+    assert login_resp.status_code == 200
+    token = login_resp.json()["access_token"]
+    auth_headers = {"Authorization": f"Bearer {token}"}
+
+    response = client.get("/api/rules", headers=auth_headers)
     assert response.status_code == 200
     rules = response.json()
     assert len(rules) >= 8
@@ -67,6 +76,7 @@ def test_rules_registry_endpoint():
     assert "PCR_RULE_06_1_E" in rule_codes
     assert "PCR_RULE_06_1_C" in rule_codes
     assert "PCR_RULE_06_1_A" in rule_codes
+
 
 def test_all_13_stitch_screens_exist_and_render():
     """Verify that all 13 Stitch screens exist on disk and serve HTTP 200 via static mount if present."""

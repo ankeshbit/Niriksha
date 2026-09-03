@@ -3,6 +3,7 @@ import re
 import json
 import uuid
 import shutil
+import threading
 from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
@@ -24,6 +25,7 @@ from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from sqlalchemy.orm import Session, joinedload
 from sqlalchemy import text
+from sqlalchemy.exc import IntegrityError
 
 from backend.config import settings
 from backend.database import get_db, engine, Base
@@ -126,8 +128,31 @@ app.mount("/reports-static", StaticFiles(directory=str(REPORTS_DIR)), name="repo
 ALLOWED_MIME_TYPES = {"image/jpeg", "image/png", "image/webp"}
 MAX_FILE_SIZE_BYTES = 15 * 1024 * 1024  # 15 MB
 
+# Thread-level lock to serialize inspection-number allocation.
+# SQLite does not support sequences; this lock prevents a TOCTOU race where
+# two threads both call db.query(Inspection).count() before either commits.
+_inspection_number_lock = threading.Lock()
+
+def _fetch_existing_draft(db: Session, inspector_id: str, draft_marker: str):
+    """Re-query a draft inspection by its marker. Used for idempotent conflict recovery."""
+    return db.query(Inspection).options(
+        joinedload(Inspection.product),
+        joinedload(Inspection.images),
+        joinedload(Inspection.declarations),
+        joinedload(Inspection.compliance_checks),
+        joinedload(Inspection.report)
+    ).filter(
+        Inspection.inspector_id == inspector_id,
+        Inspection.notes.like(f"%{draft_marker}%")
+    ).first()
+
 def generate_inspection_number(db: Session) -> str:
-    """Generates a sequential, official Legal Metrology inspection number."""
+    """Generates a sequential, official Legal Metrology inspection number.
+
+    Must be called while holding _inspection_number_lock to prevent duplicate
+    numbers under concurrent requests. The UNIQUE constraint on inspection_number
+    is the final safety net; this lock prevents the majority of conflicts.
+    """
     count = db.query(Inspection).count() + 1
     return f"LM-2026-{count:05d}"
 
@@ -447,55 +472,85 @@ def create_inspection(
     """Creates a new inspection in DRAFT status with associated product details."""
     if not req.product_name.strip():
         raise HTTPException(status_code=400, detail="Product name is required")
-    if not req.category.strip():
-        raise HTTPException(status_code=400, detail="Product category is required")
     if not req.location.strip():
         raise HTTPException(status_code=400, detail="Inspection location is required")
+    # NOTE: category is validated by Pydantic Literal — invalid values never reach here.
 
-    # Idempotent reconciliation: if client_draft_id provided, check if already created
+    # Build the draft marker string (used for both the fast-path and critical section).
+    draft_marker: Optional[str] = None
     if req.client_draft_id and req.client_draft_id.strip():
         draft_marker = f"[client_draft_id:{req.client_draft_id.strip()}]"
-        existing = db.query(Inspection).options(
-            joinedload(Inspection.product),
-            joinedload(Inspection.images),
-            joinedload(Inspection.declarations),
-            joinedload(Inspection.compliance_checks),
-            joinedload(Inspection.report)
-        ).filter(
-            Inspection.inspector_id == current_user.id,
-            Inspection.notes.like(f"%{draft_marker}%")
-        ).first()
+
+    # --- Fast path (no lock) ---
+    # If the inspection is already committed (e.g., a delayed retry) skip the lock entirely.
+    if draft_marker:
+        existing = _fetch_existing_draft(db, current_user.id, draft_marker)
         if existing:
             return existing
 
-    inspection_number = generate_inspection_number(db)
-    
-    notes_val = req.notes.strip() if req.notes else ""
-    if req.client_draft_id and req.client_draft_id.strip():
-        notes_val = f"{notes_val} | [client_draft_id:{req.client_draft_id.strip()}]".strip(" |")
+    # --- Critical section ---
+    # The process-level lock serialises ALL inspection creation.  This means:
+    #   • inspection numbers are generated strictly one-at-a-time (no TOCTOU on count).
+    #   • the idempotency check is re-run INSIDE the lock so that, after Thread 1
+    #     commits, Threads 2–N find the already-created record and return it instead
+    #     of creating duplicates.
+    # SQLite is effectively single-writer anyway, so this lock adds negligible latency.
+    with _inspection_number_lock:
+        # Re-check inside the lock: the winning thread may have committed while we waited.
+        if draft_marker:
+            existing = _fetch_existing_draft(db, current_user.id, draft_marker)
+            if existing:
+                return existing
 
-    new_inspection = Inspection(
-        inspection_number=inspection_number,
-        inspector_id=current_user.id,
-        location=req.location.strip(),
-        status="DRAFT",
-        notes=notes_val if notes_val else None
-    )
-    db.add(new_inspection)
-    db.flush()
+        # Allocate the next sequential number while holding the lock.
+        inspection_number = generate_inspection_number(db)
 
-    new_product = Product(
-        inspection_id=new_inspection.id,
-        product_name=req.product_name.strip(),
-        brand_name=req.brand_name.strip() if req.brand_name else None,
-        category=req.category.strip(),
-        batch_number=req.batch_number.strip() if req.batch_number else None
-    )
-    db.add(new_product)
-    
-    log_audit(db, current_user.officer_id, "INSPECTION_CREATED", "inspection", new_inspection.id, new_inspection.id, details=f"Created {inspection_number}")
-    db.commit()
-    db.refresh(new_inspection)
+        notes_val = req.notes.strip() if req.notes else ""
+        if draft_marker:
+            notes_val = f"{notes_val} | {draft_marker}".strip(" |")
+
+        new_inspection = Inspection(
+            inspection_number=inspection_number,
+            inspector_id=current_user.id,
+            location=req.location.strip(),
+            status="DRAFT",
+            notes=notes_val if notes_val else None
+        )
+        db.add(new_inspection)
+        db.flush()  # assigns new_inspection.id before the commit
+
+        new_product = Product(
+            inspection_id=new_inspection.id,
+            product_name=req.product_name.strip(),
+            brand_name=req.brand_name.strip() if req.brand_name else None,
+            category=req.category.strip(),
+            batch_number=req.batch_number.strip() if req.batch_number else None
+        )
+        db.add(new_product)
+
+        log_audit(
+            db, current_user.officer_id,
+            "INSPECTION_CREATED", "inspection",
+            new_inspection.id, new_inspection.id,
+            details=f"Created {inspection_number}"
+        )
+
+        try:
+            db.commit()
+        except IntegrityError as exc:
+            # Safety net: if the DB-level UNIQUE constraint fires despite the lock
+            # (e.g., cross-process race), roll back and recover gracefully.
+            db.rollback()
+            if draft_marker:
+                winner = _fetch_existing_draft(db, current_user.id, draft_marker)
+                if winner:
+                    return winner
+            raise HTTPException(
+                status_code=409,
+                detail="Inspection number conflict — please retry."
+            ) from exc
+
+        db.refresh(new_inspection)
 
     return new_inspection
 
@@ -1522,8 +1577,32 @@ def list_all_reports(
     reports = db.query(Report).order_by(Report.generated_at.desc()).all()
     return [serialize_report(r) for r in reports]
 
+@app.get("/api/reports/{report_id}", response_model=ReportResponse, tags=["Reports"])
+def get_report_by_id(
+    report_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Retrieves a statutory inspection report by its unique Report ID."""
+    report = db.query(Report).filter(Report.id == report_id).first()
+    if not report:
+        raise HTTPException(status_code=404, detail="Report not found")
+
+    inspection = report.inspection
+    if not inspection:
+        inspection = db.query(Inspection).filter(Inspection.id == report.inspection_id).first()
+
+    if inspection and inspection.inspector_id != current_user.id and current_user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Unauthorized access to this report")
+
+    return serialize_report(report)
+
+
 @app.get("/api/rules/{rule_code}", tags=["Rules"])
-def get_rule_details(rule_code: str):
+def get_rule_details(
+    rule_code: str,
+    current_user: User = Depends(get_current_user)
+):
     """Retrieves official statutory metadata and description for a specific rule code."""
     rule = get_rule_by_code(rule_code)
     if not rule:
@@ -1550,7 +1629,10 @@ def get_inspection_audit_logs(
     return logs
 
 @app.get("/api/rules", tags=["Rules"])
-def list_rules(db: Session = Depends(get_db)):
+def list_rules(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
     """Returns the list of registered statutory Legal Metrology rules."""
     rules = db.query(RuleVersion).filter(RuleVersion.is_active == True).all()
     return [

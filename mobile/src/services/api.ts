@@ -13,7 +13,6 @@ const ENV_API_HOST = expoEnvUrl ? expoEnvUrl.replace(/\/$/, '') : null;
 // Default active API host for standalone build or local development
 export const DEFAULT_API_HOST = ENV_API_HOST || (Platform.OS === 'android' ? PC_LAN_API_HOST : LOCALHOST_API_HOST);
 
-
 let customBaseUrl: string | null = null;
 
 export const setApiBaseUrl = (url: string) => {
@@ -21,7 +20,18 @@ export const setApiBaseUrl = (url: string) => {
 };
 
 export const getApiBaseUrl = () => {
-  return customBaseUrl || DEFAULT_API_HOST;
+  if (customBaseUrl) return customBaseUrl;
+  if (ENV_API_HOST) return ENV_API_HOST;
+
+  // On Web: dynamically match current window hostname to prevent CORS/origin mismatch between localhost and 127.0.0.1
+  if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location?.hostname) {
+    const host = window.location.hostname;
+    if (host) {
+      return `http://${host}:8000`;
+    }
+  }
+
+  return Platform.OS === 'android' ? PC_LAN_API_HOST : LOCALHOST_API_HOST;
 };
 
 
@@ -171,5 +181,6 @@ export const api = {
   generateReport: (inspectionId: string) =>
     apiRequest(`/api/inspections/${inspectionId}/report`, { method: 'POST' }),
   getReportsList: () => apiRequest('/api/reports'),
+  getReportById: (reportId: string) => apiRequest(`/api/reports/${reportId}`),
   getAuditLogs: (inspectionId: string) => apiRequest(`/api/inspections/${inspectionId}/audit-logs`),
 };

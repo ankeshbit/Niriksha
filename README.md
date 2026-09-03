@@ -66,7 +66,7 @@ The implemented prototype provides a structured, digital inspection workflow:
 - **Unresolved-Finding Finalization Gate**: HTTP 409 Conflict protection prevents closing inspections with pending findings.
 - **Immutable Data & Audit Trail**: Preserves original OCR extractions separately from officer corrections and logs all lifecycle actions with timestamps and officer IDs.
 - **Automated ReportLab PDF Generation**: Compiles formal inspection reports including product metadata, findings tables, photographic evidence, and required statutory disclaimers.
-- **Offline Draft Workflow**: Allows field officers to register inspection records offline and sync when network connectivity is restored.
+- **Offline-First Workflow & On-Device Processing**: Complete inspection details and image capture functionality offline, backed by deterministic on-device OpenCV image quality checks and automatic background synchronization upon network reconnection.
 
 ---
 
@@ -152,7 +152,7 @@ flowchart TD
 | **Rule Engine** | Codified Python statutory engine | Deterministic compliance evaluation for PCR 2011 Rules 6(1)(a)–(g). |
 | **Authentication** | JWT (python-jose), bcrypt | HS256 token issuance and salted password hashing. |
 | **Report Generation** | ReportLab | Enforcement-grade multi-page inspection report PDF compiler. |
-| **Automated Testing** | Pytest, FastAPI TestClient, pypdf | 77 automated unit, lifecycle, statutory, and end-to-end integration tests. |
+| **Automated Testing** | Pytest, FastAPI TestClient, pypdf | 160 automated unit, lifecycle, statutory, and end-to-end integration tests. |
 
 ---
 
@@ -227,7 +227,7 @@ A pre-seeded demonstration inspector account is available in `backend/seed.py`:
 
 ## Automated Testing & Verification
 
-The codebase includes **77 automated tests** with 100% pass rate:
+The codebase includes **160 automated tests** with 100% pass rate:
 
 ```bash
 # Run complete test suite (Windows PowerShell)
@@ -243,7 +243,7 @@ npm run ts:check
 ```
 
 **Verified Test Metrics**:
-- Pytest Suite: **77 / 77 Passed (100%)**
+- Pytest Suite: **159 Passed, 1 Skipped**
 - TypeScript Diagnostic: **0 Errors (`tsc --noEmit`)**
 
 ---
@@ -293,6 +293,8 @@ npm run ts:check
 │   ├── test_e2e_mobile_workflow.py # Full mobile lifecycle and adjudication tests
 │   ├── test_final_corrections.py   # HTTP 409 gate and 5 adjudication action tests
 │   ├── test_foundation.py      # Health check, authentication, and static route tests
+│   ├── test_full_qa_audit.py   # Full integration scenarios and QA hardening
+│   ├── test_offline_image_quality.py # Deterministic offline image quality checks
 │   ├── test_phase2.py          # Inspection creation, sorting, and dashboard tests
 │   ├── test_phase3.py          # Image upload, MIME gating, and OpenCV quality tests
 │   ├── test_phase4.py          # OCR execution, field extraction, and patch tests

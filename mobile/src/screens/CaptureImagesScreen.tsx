@@ -8,30 +8,45 @@ import {
   Image,
   ActivityIndicator,
   Alert,
-  SafeAreaView,
   Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
 import { api, getApiBaseUrl } from '../services/api';
 import { draftStorage } from '../services/draftStorage';
+import { checkImageQuality, getQualityLabel, isQualityBlocking, ImageQualityResult } from '../services/imageQualityService';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
+
+// ─── Local image slot state (includes quality result) ─────────────────────────
+
+interface ImageSlot {
+  id: string;
+  view_type: string;
+  file_path: string;
+  is_local?: boolean;
+  quality_status?: string;    // server-side: 'GOOD' | 'WARNING' | 'POOR'
+  qualityResult?: ImageQualityResult; // on-device quality result
+  qualityChecking?: boolean;  // true while local check is running
+}
 
 export const CaptureImagesScreen: React.FC = () => {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute<RouteProp<RootStackParamList, 'CaptureImages'>>();
   const { inspectionId, inspectionNumber } = route.params;
 
-  const [images, setImages] = useState<any[]>([]);
+  const isDraftMode = Boolean(inspectionId && inspectionId.startsWith('draft-'));
+
+  const [images, setImages] = useState<ImageSlot[]>([]);
   const [uploadingSlot, setUploadingSlot] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   const loadImages = async () => {
     try {
-      if (inspectionId && inspectionId.startsWith('draft-')) {
+      if (isDraftMode) {
         const draft = await draftStorage.getDraft(inspectionId);
         if (draft && draft.images) {
           setImages(
@@ -40,7 +55,10 @@ export const CaptureImagesScreen: React.FC = () => {
               view_type: img.viewType,
               file_path: img.uri,
               is_local: true,
-              quality_status: 'GOOD',
+              quality_status: img.qualityResult
+                ? (img.qualityResult.isAcceptable ? 'GOOD' : 'POOR')
+                : 'GOOD',
+              qualityResult: img.qualityResult,
             }))
           );
         }
@@ -58,6 +76,8 @@ export const CaptureImagesScreen: React.FC = () => {
   useEffect(() => {
     loadImages();
   }, [inspectionId]);
+
+  // ─── Image picker ──────────────────────────────────────────────────────────
 
   const handlePickImage = async (viewType: 'front' | 'back' | 'side') => {
     if (Platform.OS === 'web') {
@@ -96,7 +116,8 @@ export const CaptureImagesScreen: React.FC = () => {
     });
 
     if (!result.canceled && result.assets && result.assets[0]) {
-      await uploadPickedImage(result.assets[0].uri, viewType);
+      const asset = result.assets[0];
+      await processPickedImage(asset.uri, viewType, asset.width || 0, asset.height || 0);
     }
   };
 
@@ -116,21 +137,106 @@ export const CaptureImagesScreen: React.FC = () => {
     });
 
     if (!result.canceled && result.assets && result.assets[0]) {
-      await uploadPickedImage(result.assets[0].uri, viewType);
+      const asset = result.assets[0];
+      await processPickedImage(asset.uri, viewType, asset.width || 0, asset.height || 0);
     }
   };
 
-  const uploadPickedImage = async (uri: string, viewType: string) => {
+  // ─── Core image processing pipeline ───────────────────────────────────────
+
+  /**
+   * After a photo is picked:
+   * 1. Save the image to local storage immediately (preserve original).
+   * 2. Show "Checking image quality..." spinner in the slot.
+   * 3. Run on-device quality check (no network, no API call).
+   * 4. Update the slot with the quality result.
+   * 5. If online inspection: also upload to server.
+   */
+  const processPickedImage = async (
+    uri: string,
+    viewType: string,
+    width: number,
+    height: number
+  ) => {
     setUploadingSlot(viewType);
+
     try {
-      if (inspectionId && inspectionId.startsWith('draft-')) {
+      if (isDraftMode) {
+        // ── Draft (offline) path ────────────────────────────────────────────
+
+        // Step 1: Save image locally immediately (preserve original URI)
         await draftStorage.addDraftImage(inspectionId, {
           viewType: viewType as 'front' | 'back' | 'side',
           uri,
         });
-        await loadImages();
+
+        // Optimistically show the slot while quality check runs
+        setImages((prev) => {
+          const filtered = prev.filter((img) => img.view_type !== viewType);
+          return [
+            ...filtered,
+            {
+              id: `${inspectionId}-${viewType}`,
+              view_type: viewType,
+              file_path: uri,
+              is_local: true,
+              qualityChecking: true,
+              quality_status: 'GOOD',
+            },
+          ];
+        });
+
+        // Step 2: Run on-device quality check (100% offline)
+        const qualityResult = await checkImageQuality(uri, width, height);
+
+        // Step 3: Save quality result alongside the image
+        await draftStorage.addDraftImageWithQuality(inspectionId, {
+          viewType: viewType as 'front' | 'back' | 'side',
+          uri,
+          qualityResult,
+        });
+
+        // Step 4: Update UI with quality result
+        setImages((prev) => {
+          const filtered = prev.filter((img) => img.view_type !== viewType);
+          return [
+            ...filtered,
+            {
+              id: `${inspectionId}-${viewType}`,
+              view_type: viewType,
+              file_path: uri,
+              is_local: true,
+              qualityChecking: false,
+              quality_status: qualityResult.isAcceptable ? 'GOOD' : 'POOR',
+              qualityResult,
+            },
+          ];
+        });
+
         return;
       }
+
+      // ── Online path: upload to server ─────────────────────────────────────
+
+      // Run local quality check first (saves network round trip for obvious duds)
+      const qualityResult = await checkImageQuality(uri, width, height);
+
+      // Show checking state
+      setImages((prev) => {
+        const filtered = prev.filter((img) => img.view_type !== viewType);
+        return [
+          ...filtered,
+          {
+            id: `${inspectionId}-${viewType}`,
+            view_type: viewType,
+            file_path: uri,
+            is_local: true,
+            qualityChecking: false,
+            quality_status: qualityResult.isAcceptable ? 'GOOD' : 'POOR',
+            qualityResult,
+          },
+        ];
+      });
 
       const formData = new FormData();
       const filename = uri.split('/').pop() || `${viewType}_panel.jpg`;
@@ -154,14 +260,16 @@ export const CaptureImagesScreen: React.FC = () => {
       await loadImages();
     } catch (err: any) {
       if (Platform.OS === 'web') {
-        alert(err.message || 'Could not upload image.');
+        alert(err.message || 'Could not process image.');
       } else {
-        Alert.alert('Upload Failed', err.message || 'Could not upload image.');
+        Alert.alert('Error', err.message || 'Could not process image.');
       }
     } finally {
       setUploadingSlot(null);
     }
   };
+
+  // ─── Derived state ─────────────────────────────────────────────────────────
 
   const frontImg = images.find((img) => img.view_type === 'front');
   const backImg = images.find((img) => img.view_type === 'back');
@@ -169,14 +277,49 @@ export const CaptureImagesScreen: React.FC = () => {
 
   const baseUrl = getApiBaseUrl();
 
-  const hasWarning = images.some((img) => img.quality_status === 'WARNING' || img.quality_status === 'POOR');
+  // Warning if any image has a quality issue (server-side OR on-device)
+  const hasWarning = images.some(
+    (img) =>
+      img.quality_status === 'WARNING' ||
+      img.quality_status === 'POOR' ||
+      (img.qualityResult && !img.qualityResult.isAcceptable)
+  );
   const hasAtLeastOneImage = images.length > 0;
 
-  const renderSlot = (title: 'FRONT' | 'BACK' | 'SIDE', viewType: 'front' | 'back' | 'side', imgData?: any) => {
-    const isUploading = uploadingSlot === viewType;
-    const isWarn = imgData?.quality_status === 'WARNING' || imgData?.quality_status === 'POOR';
+  // Count images with quality issues for the warning bar
+  const blurryImages = images.filter(
+    (img) =>
+      img.quality_status === 'POOR' ||
+      (img.qualityResult && !img.qualityResult.isAcceptable)
+  );
 
-    if (isUploading) {
+  // ─── Slot rendering ────────────────────────────────────────────────────────
+
+  const renderSlot = (
+    title: 'FRONT' | 'BACK' | 'SIDE',
+    viewType: 'front' | 'back' | 'side',
+    imgData?: ImageSlot
+  ) => {
+    const isUploading = uploadingSlot === viewType;
+    const isChecking = Boolean(imgData?.qualityChecking);
+
+    // Determine quality state
+    const hasOnDeviceResult = Boolean(imgData?.qualityResult);
+    const onDeviceBlurry = hasOnDeviceResult && !imgData!.qualityResult!.isAcceptable;
+    const serverWarn =
+      imgData?.quality_status === 'WARNING' || imgData?.quality_status === 'POOR';
+    const isWarn = onDeviceBlurry || serverWarn;
+
+    const qualityLabel = imgData?.qualityResult
+      ? getQualityLabel(imgData.qualityResult)
+      : imgData?.quality_status === 'GOOD'
+      ? 'Image quality acceptable'
+      : imgData?.quality_status === 'WARNING' || imgData?.quality_status === 'POOR'
+      ? 'Image appears blurry'
+      : 'Image quality acceptable';
+
+    // Loading / quality-checking state
+    if (isUploading || isChecking) {
       return (
         <View style={styles.slotCard}>
           <View style={styles.slotHeader}>
@@ -184,12 +327,15 @@ export const CaptureImagesScreen: React.FC = () => {
           </View>
           <View style={styles.uploadingBox}>
             <ActivityIndicator size="small" color={colors.primary} />
-            <Text style={styles.uploadingText}>Assessing image quality (OpenCV)...</Text>
+            <Text style={styles.uploadingText}>
+              {isChecking ? 'Checking image quality...' : 'Assessing image quality (OpenCV)...'}
+            </Text>
           </View>
         </View>
       );
     }
 
+    // Empty slot
     if (!imgData) {
       return (
         <TouchableOpacity
@@ -208,9 +354,14 @@ export const CaptureImagesScreen: React.FC = () => {
       );
     }
 
-    const imageSourceUri = imgData.is_local || imgData.file_path.startsWith('data:') || imgData.file_path.startsWith('blob:') || imgData.file_path.startsWith('file:') || imgData.file_path.startsWith('http')
-      ? imgData.file_path
-      : `${baseUrl}${imgData.file_path}`;
+    const imageSourceUri =
+      imgData.is_local ||
+      imgData.file_path.startsWith('data:') ||
+      imgData.file_path.startsWith('blob:') ||
+      imgData.file_path.startsWith('file:') ||
+      imgData.file_path.startsWith('http')
+        ? imgData.file_path
+        : `${baseUrl}${imgData.file_path}`;
 
     return (
       <View style={[styles.slotCard, isWarn && styles.slotCardWarn]}>
@@ -224,9 +375,21 @@ export const CaptureImagesScreen: React.FC = () => {
           ) : (
             <View style={styles.goodChip}>
               <MaterialIcons name="check-circle" size={14} color={colors.statusGreenText} />
-              <Text style={styles.goodChipText}>Good Quality</Text>
+              <Text style={styles.goodChipText}>Quality acceptable</Text>
             </View>
           )}
+        </View>
+
+        {/* Quality status line */}
+        <View style={[styles.qualityStatusBar, isWarn ? styles.qualityStatusBarWarn : styles.qualityStatusBarGood]}>
+          <MaterialIcons
+            name={isWarn ? 'error-outline' : 'check-circle'}
+            size={13}
+            color={isWarn ? colors.statusAmberText : colors.statusGreenText}
+          />
+          <Text style={[styles.qualityStatusText, isWarn ? styles.qualityStatusTextWarn : styles.qualityStatusTextGood]}>
+            {isWarn ? (imgData?.qualityResult?.reason || 'Image appears blurry. Please capture the image again.') : qualityLabel}
+          </Text>
         </View>
 
         <View style={styles.slotBody}>
@@ -238,7 +401,6 @@ export const CaptureImagesScreen: React.FC = () => {
             />
           </View>
 
-
           <View style={styles.slotActions}>
             <TouchableOpacity
               style={[styles.retakeBtn, isWarn && styles.retakeBtnWarn]}
@@ -246,7 +408,7 @@ export const CaptureImagesScreen: React.FC = () => {
               activeOpacity={0.8}
             >
               <Text style={[styles.retakeBtnText, isWarn && styles.retakeBtnTextWarn]}>
-                {isWarn ? 'Retake Now' : 'Retake'}
+                {isWarn ? 'Capture Again' : 'Retake'}
               </Text>
             </TouchableOpacity>
 
@@ -281,6 +443,29 @@ export const CaptureImagesScreen: React.FC = () => {
     );
   };
 
+  // ─── Continue handler ──────────────────────────────────────────────────────
+
+  const handleContinue = () => {
+    if (!hasAtLeastOneImage) {
+      Alert.alert('Image Required', 'Please capture at least 1 package image before proceeding.');
+      return;
+    }
+
+    if (isDraftMode) {
+      // Update draft status to READY_FOR_SYNC before going to the offline screen
+      draftStorage.updateDraftStatus(inspectionId, 'READY_FOR_SYNC').catch(() => {});
+      navigation.navigate('DraftOffline', { clientDraftId: inspectionId });
+      return;
+    }
+
+    navigation.navigate('Analyzing', {
+      inspectionId,
+      inspectionNumber,
+    });
+  };
+
+  // ─── Render ────────────────────────────────────────────────────────────────
+
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
@@ -297,12 +482,13 @@ export const CaptureImagesScreen: React.FC = () => {
           <View style={{ width: 40 }} />
         </View>
 
-        <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
+        <ScrollView style={{ flex: 1 }} contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
           {/* Section Header */}
           <View style={styles.instructionSection}>
             <Text style={styles.instructionTitle}>Capture Package Images</Text>
             <Text style={styles.instructionSubtitle}>
-              Capture clear images of all required label areas to ensure accurate processing.
+              Capture clear images of all required label areas.{' '}
+              {isDraftMode ? 'Each image is quality-checked on your device.' : 'Ensure accurate processing.'}
             </Text>
           </View>
 
@@ -326,20 +512,19 @@ export const CaptureImagesScreen: React.FC = () => {
               <MaterialIcons name="warning" size={18} color={colors.statusAmberText} style={{ marginTop: 1 }} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.warningStatusText}>
-                  1 image requires attention before continuing. Back label is blurry.
+                  {blurryImages.length} image{blurryImages.length > 1 ? 's require' : ' requires'} attention before continuing.
                 </Text>
                 <View style={styles.warningActionLinks}>
-                  <TouchableOpacity onPress={() => handlePickImage('back')}>
-                    <Text style={styles.warningLinkText}>Retake Now</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    onPress={() =>
-                      navigation.navigate('Analyzing', {
-                        inspectionId,
-                        inspectionNumber,
-                      })
+                  <TouchableOpacity onPress={() => {
+                    // Scroll to first blurry image and trigger retake
+                    const firstBlurry = blurryImages[0];
+                    if (firstBlurry) {
+                      handlePickImage(firstBlurry.view_type as 'front' | 'back' | 'side');
                     }
-                  >
+                  }}>
+                    <Text style={styles.warningLinkText}>Capture Again</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity onPress={handleContinue}>
                     <Text style={styles.warningLinkText}>Continue Anyway</Text>
                   </TouchableOpacity>
                 </View>
@@ -354,21 +539,7 @@ export const CaptureImagesScreen: React.FC = () => {
                 hasWarning ? styles.continueBtnWarning : styles.continueBtnPrimary,
                 !hasAtLeastOneImage && styles.continueBtnDisabled,
               ]}
-              onPress={() => {
-                if (!hasAtLeastOneImage) {
-                  Alert.alert('Image Required', 'Please capture at least 1 package image before proceeding.');
-                  return;
-                }
-                if (inspectionId && inspectionId.startsWith('draft-')) {
-                  navigation.navigate('DraftOffline', { clientDraftId: inspectionId });
-                  return;
-                }
-                navigation.navigate('Analyzing', {
-                  inspectionId,
-                  inspectionNumber,
-                });
-              }}
-
+              onPress={handleContinue}
               disabled={!hasAtLeastOneImage}
               activeOpacity={0.85}
             >
@@ -378,11 +549,15 @@ export const CaptureImagesScreen: React.FC = () => {
                     <MaterialIcons name="warning" size={18} color={colors.onPrimary} />
                     <Text style={styles.continueBtnText}>Continue with Warning</Text>
                   </View>
-                  <Text style={styles.continueBtnSubtext}>1 image needs attention</Text>
+                  <Text style={styles.continueBtnSubtext}>
+                    {blurryImages.length} image{blurryImages.length > 1 ? 's need' : ' needs'} attention
+                  </Text>
                 </View>
               ) : (
                 <View style={styles.btnContentRow}>
-                  <Text style={styles.continueBtnText}>Continue to Analysis</Text>
+                  <Text style={styles.continueBtnText}>
+                    {isDraftMode ? 'Save Draft & Wait for Connection' : 'Continue to Analysis'}
+                  </Text>
                   <MaterialIcons name="arrow-forward" size={18} color={colors.onPrimary} />
                 </View>
               )}
@@ -479,6 +654,34 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     fontWeight: '600',
     color: colors.primary,
+  },
+  qualityStatusBar: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    paddingHorizontal: spacing.gutter,
+    paddingVertical: 5,
+    gap: 5,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle,
+  },
+  qualityStatusBarGood: {
+    backgroundColor: colors.statusGreenBg,
+  },
+  qualityStatusBarWarn: {
+    backgroundColor: colors.statusAmberBg,
+  },
+  qualityStatusText: {
+    fontSize: 11,
+    lineHeight: 15,
+    flex: 1,
+  },
+  qualityStatusTextGood: {
+    color: colors.statusGreenText,
+    fontWeight: '500',
+  },
+  qualityStatusTextWarn: {
+    color: colors.statusAmberText,
+    fontWeight: '500',
   },
   goodChip: {
     flexDirection: 'row',

@@ -1,11 +1,40 @@
 import { Platform } from 'react-native';
 import * as SecureStore from 'expo-secure-store';
+import type { ImageQualityResult } from './imageQualityService';
 
 export interface DraftImage {
   viewType: 'front' | 'back' | 'side';
   uri: string;
   savedAt: string;
+  /** On-device quality check result — populated after checkImageQuality() */
+  qualityResult?: ImageQualityResult;
 }
+
+/**
+ * Draft lifecycle states.
+ *
+ * LOCAL_CAPTURE    — Images being captured offline; draft not yet complete.
+ * READY_FOR_SYNC   — Capture phase complete; waiting for connectivity.
+ * SYNCING          — Sync in progress (inspection creation + image upload).
+ * SYNCED           — Backend inspection created and all images uploaded.
+ * ANALYSIS_PENDING — Sync complete; waiting to trigger OCR/AI analysis.
+ * ANALYZING        — OCR/AI analysis triggered on server.
+ * COMPLETED        — Full workflow complete.
+ *
+ * Legacy aliases (preserved for backwards compatibility):
+ *  LOCAL_DRAFT  → equivalent to LOCAL_CAPTURE
+ *  PENDING_SYNC → equivalent to READY_FOR_SYNC
+ */
+export type DraftStatus =
+  | 'LOCAL_DRAFT'       // legacy alias for LOCAL_CAPTURE
+  | 'LOCAL_CAPTURE'     // actively capturing images offline
+  | 'PENDING_SYNC'      // legacy alias for READY_FOR_SYNC
+  | 'READY_FOR_SYNC'    // capture complete, waiting for connectivity
+  | 'SYNCING'           // sync in progress
+  | 'SYNCED'            // backend inspection + images confirmed
+  | 'ANALYSIS_PENDING'  // about to trigger OCR
+  | 'ANALYZING'         // OCR running
+  | 'COMPLETED';        // full workflow done
 
 export interface LocalDraft {
   clientDraftId: string; // e.g. "draft-9b1deb4d-3b7d-4bad-9bdd-2b0d7b3dcb6d"
@@ -19,12 +48,18 @@ export interface LocalDraft {
   inspectionContext?: 'Retail' | 'Warehouse' | 'E-commerce';
   notes?: string;
   images: DraftImage[];
-  status: 'LOCAL_DRAFT' | 'PENDING_SYNC' | 'SYNCING' | 'SYNCED';
+  status: DraftStatus;
   createdAt: string;
   updatedAt: string;
   syncedInspectionId?: string;
   syncedInspectionNumber?: string;
   syncError?: string;
+}
+
+/** Returns true for any status that means the draft needs to be synced. */
+export function isPendingSync(status: DraftStatus): boolean {
+  return status === 'LOCAL_DRAFT' || status === 'LOCAL_CAPTURE' ||
+    status === 'PENDING_SYNC' || status === 'READY_FOR_SYNC';
 }
 
 const DRAFTS_STORAGE_KEY = 'legal_metrology_offline_drafts_v1';
@@ -105,7 +140,7 @@ export const draftStorage = {
 
   async updateDraftStatus(
     clientDraftId: string,
-    status: LocalDraft['status'],
+    status: DraftStatus,
     extra?: Partial<LocalDraft>
   ): Promise<void> {
     const drafts = await this.getDrafts();
@@ -134,6 +169,40 @@ export const draftStorage = {
       updatedImages.push({
         ...image,
         savedAt: new Date().toISOString(),
+      });
+      drafts[idx] = {
+        ...drafts[idx],
+        images: updatedImages,
+        updatedAt: new Date().toISOString(),
+      };
+      memoryDrafts = drafts;
+      await this.persistDrafts(drafts);
+    }
+  },
+
+  /**
+   * Saves a draft image WITH its on-device quality check result.
+   * Replaces any existing image for the same viewType slot.
+   * Never deletes a previously stored image until this call succeeds.
+   */
+  async addDraftImageWithQuality(
+    clientDraftId: string,
+    image: {
+      viewType: 'front' | 'back' | 'side';
+      uri: string;
+      qualityResult: ImageQualityResult;
+    }
+  ): Promise<void> {
+    const drafts = await this.getDrafts();
+    const idx = drafts.findIndex((d) => d.clientDraftId === clientDraftId);
+    if (idx >= 0) {
+      const existingImages = drafts[idx].images || [];
+      const updatedImages = existingImages.filter((img) => img.viewType !== image.viewType);
+      updatedImages.push({
+        viewType: image.viewType,
+        uri: image.uri,
+        savedAt: new Date().toISOString(),
+        qualityResult: image.qualityResult,
       });
       drafts[idx] = {
         ...drafts[idx],
@@ -180,4 +249,3 @@ export const draftStorage = {
     });
   },
 };
-

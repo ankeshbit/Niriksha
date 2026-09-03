@@ -7,9 +7,9 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
-  SafeAreaView,
   Platform,
 } from 'react-native';
+import { SafeAreaView } from 'react-native-safe-area-context';
 import * as FileSystem from 'expo-file-system';
 import * as Sharing from 'expo-sharing';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -59,9 +59,7 @@ export const ReportPreviewScreen: React.FC = () => {
 
       if (Platform.OS === 'web') {
         const response = await fetch(pdfUrl, {
-          headers: {
-            Authorization: `Bearer ${token}`,
-          },
+          headers: { Authorization: `Bearer ${token}` },
         });
         if (!response.ok) {
           throw new Error(`Server returned error generating PDF (${response.status})`);
@@ -79,11 +77,8 @@ export const ReportPreviewScreen: React.FC = () => {
       }
 
       const fileUri = `${FileSystem.documentDirectory}${filename}`;
-
       const downloadRes = await FileSystem.downloadAsync(pdfUrl, fileUri, {
-        headers: {
-          Authorization: `Bearer ${token}`,
-        },
+        headers: { Authorization: `Bearer ${token}` },
       });
 
       if (downloadRes.status === 200) {
@@ -125,7 +120,7 @@ export const ReportPreviewScreen: React.FC = () => {
   return (
     <SafeAreaView style={styles.safeArea}>
       <View style={styles.container}>
-        {/* Stitch TopAppBar Header */}
+        {/* TopAppBar */}
         <View style={styles.topHeader}>
           <TouchableOpacity
             style={styles.headerIconButton}
@@ -147,7 +142,7 @@ export const ReportPreviewScreen: React.FC = () => {
         </View>
 
         <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
-          {/* Back to Inspection Link */}
+          {/* Back link */}
           <TouchableOpacity
             style={styles.backLink}
             onPress={() => navigation.goBack()}
@@ -177,11 +172,7 @@ export const ReportPreviewScreen: React.FC = () => {
               <View
                 style={[
                   styles.statusBanner,
-                  isCompliant
-                    ? styles.statusBannerGreen
-                    : isNonCompliant
-                    ? styles.statusBannerAmber
-                    : styles.statusBannerAmber,
+                  isCompliant ? styles.statusBannerGreen : styles.statusBannerAmber,
                 ]}
               >
                 <MaterialIcons
@@ -205,16 +196,17 @@ export const ReportPreviewScreen: React.FC = () => {
               <View style={styles.statutoryNote}>
                 <MaterialIcons name="info" size={14} color={colors.onSurfaceVariant} style={{ marginTop: 1 }} />
                 <Text style={styles.statutoryNoteText}>
-                  This report covers a limited set of machine-verifiable Legal Metrology requirements only. Final legal determination rests with the authorized inspecting officer.
+                  This report covers a limited set of machine-verifiable Legal Metrology requirements only.
+                  Final legal determination rests with the authorized inspecting officer.
                 </Text>
               </View>
 
-              {/* Details Section */}
+              {/* Details */}
               <View style={styles.detailsGrid}>
                 <View style={styles.detailItem}>
                   <Text style={styles.detailLabel}>INSPECTION ID</Text>
                   <Text style={styles.detailValueBold}>
-                    {report?.inspection_number || inspectionNumber || 'LM-2026-00891'}
+                    {report?.inspection_number || inspectionNumber || 'LM-2026-00001'}
                   </Text>
                 </View>
                 <View style={styles.detailItem}>
@@ -223,11 +215,11 @@ export const ReportPreviewScreen: React.FC = () => {
                 </View>
                 <View style={styles.detailItem}>
                   <Text style={styles.detailLabel}>PRODUCT</Text>
-                  <Text style={styles.detailValue}>{report?.product_name || 'Premium Basmati Rice'}</Text>
+                  <Text style={styles.detailValue}>{report?.product_name || '—'}</Text>
                 </View>
                 <View style={styles.detailItem}>
                   <Text style={styles.detailLabel}>LOCATION</Text>
-                  <Text style={styles.detailValue}>{report?.location || 'Sector 4 Market'}</Text>
+                  <Text style={styles.detailValue}>{report?.location || '—'}</Text>
                 </View>
                 <View style={styles.detailItem}>
                   <Text style={styles.detailLabel}>MANUFACTURER</Text>
@@ -235,7 +227,15 @@ export const ReportPreviewScreen: React.FC = () => {
                 </View>
               </View>
 
-              {/* Action Buttons */}
+              {/* Immutable record notice */}
+              <View style={styles.immutableNotice}>
+                <MaterialIcons name="lock" size={14} color={colors.onSurfaceVariant} />
+                <Text style={styles.immutableNoticeText}>
+                  Official inspection record — retained permanently per statutory requirements.
+                </Text>
+              </View>
+
+              {/* Actions */}
               <View style={styles.actionsBox}>
                 <TouchableOpacity
                   style={styles.downloadPdfBtn}
@@ -272,14 +272,8 @@ export const ReportPreviewScreen: React.FC = () => {
 };
 
 const styles = StyleSheet.create({
-  safeArea: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
-  container: {
-    flex: 1,
-    backgroundColor: colors.background,
-  },
+  safeArea: { flex: 1, backgroundColor: colors.background },
+  container: { flex: 1, backgroundColor: colors.background },
   topHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -290,10 +284,7 @@ const styles = StyleSheet.create({
     height: 56,
     paddingHorizontal: spacing.gutter,
   },
-  headerIconButton: {
-    padding: 6,
-    borderRadius: borderRadius.round,
-  },
+  headerIconButton: { padding: 6, borderRadius: borderRadius.round },
   headerTitle: {
     ...typography.headlineLg,
     fontSize: 18,
@@ -388,12 +379,8 @@ const styles = StyleSheet.create({
     borderBottomColor: colors.borderSubtle,
     gap: 8,
   },
-  statusBannerGreen: {
-    backgroundColor: colors.statusGreenBg,
-  },
-  statusBannerAmber: {
-    backgroundColor: colors.statusAmberBg,
-  },
+  statusBannerGreen: { backgroundColor: colors.statusGreenBg },
+  statusBannerAmber: { backgroundColor: colors.statusAmberBg },
   statusBannerText: {
     ...typography.sectionHeader,
     fontSize: 14,
@@ -416,10 +403,7 @@ const styles = StyleSheet.create({
     color: colors.onSurfaceVariant,
     flex: 1,
   },
-  detailsGrid: {
-    padding: spacing.gutter,
-    gap: 12,
-  },
+  detailsGrid: { padding: spacing.gutter, gap: 12 },
   detailItem: {
     gap: 2,
     borderBottomWidth: 1,
@@ -431,16 +415,29 @@ const styles = StyleSheet.create({
     fontSize: 11,
     color: colors.onSurfaceVariant,
   },
-  detailValue: {
-    ...typography.bodyMd,
-    fontSize: 14,
-    color: colors.onSurface,
-  },
+  detailValue: { ...typography.bodyMd, fontSize: 14, color: colors.onSurface },
   detailValueBold: {
     ...typography.bodyMd,
     fontSize: 14,
     fontWeight: '700',
     color: colors.primary,
+  },
+  immutableNotice: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingHorizontal: spacing.gutter,
+    paddingVertical: 10,
+    backgroundColor: 'rgba(218, 224, 233, 0.2)',
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSubtle,
+  },
+  immutableNoticeText: {
+    ...typography.caption,
+    fontSize: 11,
+    color: colors.onSurfaceVariant,
+    fontStyle: 'italic',
+    flex: 1,
   },
   actionsBox: {
     padding: spacing.gutter,
@@ -456,11 +453,7 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     justifyContent: 'center',
   },
-  btnRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 8,
-  },
+  btnRow: { flexDirection: 'row', alignItems: 'center', gap: 8 },
   downloadPdfText: {
     ...typography.sectionHeader,
     fontSize: 14,
@@ -483,3 +476,4 @@ const styles = StyleSheet.create({
     fontWeight: '600',
   },
 });
+

@@ -8,8 +8,8 @@ The system includes an automated test suite implemented in **Pytest** covering a
 
 ## 1. Test Suite Summary
 
-- **Total Automated Tests**: **77 tests**
-- **Test Status**: **77 / 77 Passed (100%)**
+- **Total Automated Tests**: **160 tests**
+- **Test Status**: **159 Passed, 1 Skipped**
 - **TypeScript Type Check**: **0 Errors (`tsc --noEmit`)**
 - **Validation Scope**: Authentication, Inspection Lifecycle, OpenCV Image Quality Assessment, Modular OCR & Field Extraction, Deterministic Rule Engine, Human Adjudication (all 5 actions), HTTP 409 Finalization Gate, ReportLab PDF Binary Generation, and Immutable Audit Trail.
 
@@ -34,7 +34,7 @@ The system includes an automated test suite implemented in **Pytest** covering a
 
 ### 3.1 Run Complete Test Suite
 
-Execute all 77 automated tests using Pytest:
+Execute all 160 automated tests using Pytest:
 
 **On Windows (PowerShell):**
 ```powershell

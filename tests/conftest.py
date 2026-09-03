@@ -44,21 +44,25 @@ db_module.SessionLocal = TestSessionLocal
 
 @pytest.fixture(scope="session", autouse=True)
 def setup_test_environment():
-    """Initializes a clean test database and tears it down after tests complete."""
+    """Initializes a clean test database and tears it down after tests complete.
+
+    On Windows, SQLite holds an open file handle as soon as the engine is
+    created (above, at module-import time). Calling TEST_DB_PATH.unlink() at
+    fixture time therefore silently fails.  Instead we drop-and-recreate all
+    tables via SQLAlchemy metadata, which is equivalent to a fresh database
+    but works even when the file is locked.
+    """
     # Defensive Runtime Verification: Check engine connection URL
     engine_url_str = str(db_module.engine.url).replace("\\", "/")
     if engine_url_str.endswith("legal_metrology.db") and not engine_url_str.endswith("test_legal_metrology.db"):
         raise RuntimeError("SAFETY ERROR: Tests cannot run against the development database (legal_metrology.db). Tests must use test_legal_metrology.db.")
-    # Ensure fresh test database file
-    if TEST_DB_PATH.exists():
-        try:
-            TEST_DB_PATH.unlink()
-        except Exception:
-            pass
 
-    # Create tables and seed default officer + statutory rules
+    # --- GUARANTEED CLEAN SLATE ---
+    # Drop all existing tables (clears accumulated rows from previous runs),
+    # then recreate them.  This always works even when the .db file is open.
+    Base.metadata.drop_all(bind=test_engine)
     Base.metadata.create_all(bind=test_engine)
-    
+
     # Run seed in test db
     db = TestSessionLocal()
     try:
@@ -104,7 +108,13 @@ def setup_test_environment():
 
     yield
 
-    # Clean up test database file after all tests finish
+    # Best-effort cleanup: dispose pool connections then delete the file.
+    # On Windows the file may still be locked; that is acceptable — the
+    # drop_all at the next session start guarantees a clean slate regardless.
+    try:
+        test_engine.dispose()
+    except Exception:
+        pass
     if TEST_DB_PATH.exists():
         try:
             TEST_DB_PATH.unlink()
