@@ -13,6 +13,7 @@ import {
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
+import * as Location from 'expo-location';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
 import { BottomNav } from '../components/BottomNav';
 import { ProfileAvatar } from '../components/ProfileAvatar';
@@ -34,6 +35,11 @@ export const NewInspectionScreen: React.FC = () => {
   const [brandName, setBrandName] = useState('');
   const [category, setCategory] = useState<'Packaged Food' | 'Household/Personal Care'>('Packaged Food');
   const [location, setLocation] = useState('');
+
+  // Location detection state
+  const [locationLoading, setLocationLoading] = useState(false);
+  const [locationStatus, setLocationStatus] = useState<'idle' | 'success' | 'error'>('idle');
+  const locationLoadingRef = useRef(false);
 
   // Additional Details Accordion State & Fields
   const [additionalDetailsOpen, setAdditionalDetailsOpen] = useState(false);
@@ -61,6 +67,9 @@ export const NewInspectionScreen: React.FC = () => {
       setBrandName('');
       setCategory('Packaged Food');
       setLocation('');
+      setLocationLoading(false);
+      setLocationStatus('idle');
+      locationLoadingRef.current = false;
       setAdditionalDetailsOpen(false);
       setBatchNumber('');
       setManufacturer('');
@@ -70,6 +79,302 @@ export const NewInspectionScreen: React.FC = () => {
       setLoading(false);
     }, [])
   );
+
+  /**
+   * Detects current GPS location and reverse-geocodes it into the Location field.
+   * Only runs when the inspector explicitly taps "Use Current Location".
+   * Never blocks manual entry. Handles all failure modes gracefully.
+   */
+  /**
+   * Helper to run a promise with a timeout so GPS/network operations never hang indefinitely.
+   */
+  const withTimeout = <T,>(promise: Promise<T>, ms: number, timeoutMsg: string): Promise<T> => {
+    return Promise.race([
+      promise,
+      new Promise<T>((_, reject) => setTimeout(() => reject(new Error(timeoutMsg)), ms)),
+    ]);
+  };
+
+  /**
+   * Formats a reverse-geocoded place into a clean, human-readable address.
+   * Handles Indian postal structures as well as standard global formats.
+   */
+  const formatGeocodedAddress = (place: Location.LocationGeocodedAddress): string => {
+    // If a full formattedAddress is already provided by the OS geocoder (Android), prefer it
+    if (place.formattedAddress && typeof place.formattedAddress === 'string' && place.formattedAddress.trim()) {
+      return place.formattedAddress.trim();
+    }
+
+    const candidateParts: string[] = [];
+
+    // 1. Place / Building / Market Name (skip if it's purely numbers, coordinates or plus-codes)
+    if (place.name && typeof place.name === 'string' && place.name.trim()) {
+      const n = place.name.trim();
+      const isPureCodeOrCoord = /^[0-9+.,\s-]+$/.test(n) || /^[A-Z0-9]{4}\+[A-Z0-9]{2,}/.test(n);
+      if (!isPureCodeOrCoord) {
+        candidateParts.push(n);
+      }
+    }
+
+    // 2. Street number + Street (e.g., "12 Main Road")
+    const streetComponents = [place.streetNumber, place.street]
+      .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+      .map((s) => s.trim());
+    const combinedStreet = streetComponents.join(' ');
+    if (combinedStreet && !candidateParts.includes(combinedStreet)) {
+      candidateParts.push(combinedStreet);
+    }
+
+    // 3. District / Subregion (e.g., "Azadpur", "South West Delhi")
+    const area = place.district || place.subregion;
+    if (area && typeof area === 'string' && area.trim()) {
+      const a = area.trim();
+      if (!candidateParts.includes(a)) {
+        candidateParts.push(a);
+      }
+    }
+
+    // 4. City (e.g., "New Delhi")
+    if (place.city && typeof place.city === 'string' && place.city.trim()) {
+      const c = place.city.trim();
+      if (!candidateParts.includes(c)) {
+        candidateParts.push(c);
+      }
+    }
+
+    // 5. Region / State (e.g., "Delhi", "Jharkhand")
+    if (place.region && typeof place.region === 'string' && place.region.trim()) {
+      const r = place.region.trim();
+      if (!candidateParts.includes(r)) {
+        candidateParts.push(r);
+      }
+    }
+
+    // 6. Postal Code (e.g., "110033", "834001")
+    if (place.postalCode && typeof place.postalCode === 'string' && place.postalCode.trim()) {
+      const p = place.postalCode.trim();
+      if (!candidateParts.includes(p)) {
+        candidateParts.push(p);
+      }
+    }
+
+    // 7. Country (e.g., "India")
+    if (place.country && typeof place.country === 'string' && place.country.trim()) {
+      const cty = place.country.trim();
+      if (!candidateParts.includes(cty)) {
+        candidateParts.push(cty);
+      }
+    }
+
+    // Filter out unwanted placeholder strings
+    const cleanParts = candidateParts.filter(
+      (p) => p && !['null', 'undefined', 'unnamed road', 'unknown location'].includes(p.toLowerCase())
+    );
+
+    return cleanParts.join(', ').trim();
+  };
+
+  /**
+   * Detects current GPS location and reverse-geocodes it into the Location field.
+   * Only runs when the inspector explicitly taps "Use Current Location".
+   * Never blocks manual entry. Handles all failure modes gracefully.
+   * Platform-aware:
+   *   - Native (Android/iOS): full GPS + reverseGeocodeAsync + human-readable address formatting.
+   *   - Web: browser geolocation only; does NOT call reverseGeocodeAsync() (removed in SDK 49).
+   */
+  const handleUseCurrentLocation = async () => {
+    // Prevent multiple simultaneous requests
+    if (locationLoadingRef.current) return;
+    locationLoadingRef.current = true;
+    setLocationLoading(true);
+    setLocationStatus('idle');
+
+    console.log(`[Location] Platform: ${Platform.OS}`);
+
+    // --- WEB IMPLEMENTATION ---
+    if (Platform.OS === 'web') {
+      try {
+        console.log('[Location] Web platform detected, requesting browser geolocation...');
+        const coords = await new Promise<{ latitude: number; longitude: number }>((resolve, reject) => {
+          if (typeof navigator !== 'undefined' && navigator.geolocation) {
+            navigator.geolocation.getCurrentPosition(
+              (pos) => resolve({ latitude: pos.coords.latitude, longitude: pos.coords.longitude }),
+              (err) => reject(err),
+              { timeout: 10000, enableHighAccuracy: true }
+            );
+          } else {
+            reject(new Error('Browser geolocation is not supported in this environment'));
+          }
+        });
+
+        console.log(`[Location] Coordinates: lat=${coords.latitude}, lon=${coords.longitude}`);
+        console.log('[Location] Reverse geocoding: skipped on Web (Geocoding API removed in SDK 49)');
+        console.log('[Location] Final address: (manual entry requested)');
+        setLocationStatus('idle');
+        Alert.alert(
+          'Location Detected',
+          'Current location detected. Please enter the location manually.',
+          [{ text: 'OK' }]
+        );
+      } catch (webErr: any) {
+        console.warn('[Location] Web geolocation failed:', webErr);
+        setLocationStatus('error');
+        Alert.alert(
+          'Location Detection Failed',
+          'Unable to detect browser location. Please enter the location manually.',
+          [{ text: 'OK' }]
+        );
+      } finally {
+        locationLoadingRef.current = false;
+        setLocationLoading(false);
+      }
+      return;
+    }
+
+    // --- NATIVE (ANDROID / iOS) IMPLEMENTATION ---
+    try {
+      // 1. Check if device location services (GPS) are enabled
+      console.log('[Location] Checking location services enabled...');
+      let servicesEnabled = true;
+      try {
+        servicesEnabled = await Location.hasServicesEnabledAsync();
+      } catch (svcErr) {
+        console.warn('[Location] hasServicesEnabledAsync threw, proceeding to permission check:', svcErr);
+      }
+      console.log(`[Location] Services enabled: ${servicesEnabled}`);
+
+      if (!servicesEnabled) {
+        setLocationStatus('error');
+        Alert.alert(
+          'Location Services Disabled',
+          'Device location (GPS) is turned off. Please enable location services in your device settings and try again.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
+      // 2. Request foreground location permission
+      console.log('[Location] Requesting foreground permissions...');
+      const permResult = await Location.requestForegroundPermissionsAsync();
+      console.log(`[Location] Permission: ${permResult.status} (granted=${permResult.granted})`);
+
+      if (permResult.status !== 'granted' && !permResult.granted) {
+        setLocationStatus('error');
+        Alert.alert(
+          'Location Permission Denied',
+          'Unable to detect location. Please enter it manually or allow location access in your device settings.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
+      // 3. Obtain current position with timeout & fallback (High -> Balanced -> LastKnown)
+      console.log('[Location] Obtaining position...');
+      let coords: Location.LocationObjectCoords | null = null;
+
+      // Primary attempt: High accuracy (10s timeout)
+      try {
+        const pos = await withTimeout(
+          Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.High }),
+          10000,
+          'High accuracy timeout'
+        );
+        coords = pos.coords;
+      } catch (highErr) {
+        // Secondary attempt: Balanced accuracy (8s timeout)
+        try {
+          const pos = await withTimeout(
+            Location.getCurrentPositionAsync({ accuracy: Location.Accuracy.Balanced }),
+            8000,
+            'Balanced accuracy timeout'
+          );
+          coords = pos.coords;
+        } catch (balErr) {
+          // Tertiary attempt: Last known position
+          try {
+            const lastKnown = await Location.getLastKnownPositionAsync({});
+            if (lastKnown && lastKnown.coords) {
+              coords = lastKnown.coords;
+            }
+          } catch (lastErr) {
+            console.warn('[Location] Last known position lookup failed:', lastErr);
+          }
+        }
+      }
+
+      if (!coords) {
+        setLocationStatus('error');
+        Alert.alert(
+          'GPS Unavailable',
+          'Unable to obtain your current position. Please ensure GPS is enabled or enter the location manually.',
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
+      console.log(`[Location] Coordinates: lat=${coords.latitude}, lon=${coords.longitude}`);
+
+      // Accuracy guard: warn if accuracy is extremely poor (> 2000 meters)
+      if (coords.accuracy !== null && coords.accuracy !== undefined && coords.accuracy > 2000) {
+        setLocationStatus('error');
+        Alert.alert(
+          'Poor GPS Accuracy',
+          `Location accuracy is very low (±${Math.round(coords.accuracy / 1000)} km). Please enter the location manually.`,
+          [{ text: 'OK' }]
+        );
+        return;
+      }
+
+      // 4. Reverse geocode coordinates to a human-readable address
+      console.log('[Location] Reverse geocoding: started');
+      let resolvedAddress = '';
+
+      try {
+        const places = await withTimeout(
+          Location.reverseGeocodeAsync({
+            latitude: coords.latitude,
+            longitude: coords.longitude,
+          }),
+          8000,
+          'Reverse geocode timeout'
+        );
+
+        if (places && places.length > 0) {
+          resolvedAddress = formatGeocodedAddress(places[0]);
+        }
+      } catch (geoErr) {
+        console.warn('[Location] Reverse geocoding failed or timed out:', geoErr);
+      }
+
+      console.log(`[Location] Final address: ${resolvedAddress || '(empty)'}`);
+
+      if (resolvedAddress) {
+        console.log(`[Location] Location field updated: ${resolvedAddress}`);
+        setLocation(resolvedAddress);
+        setLocationStatus('success');
+      } else {
+        // Reverse geocoding produced no address (e.g. offline or geocoding service unavailable)
+        console.log('[Location] Reverse geocoding produced no address (offline mode)');
+        setLocationStatus('error');
+        Alert.alert(
+          'Could Not Fetch Address',
+          'Location detected, but reverse geocoding is unavailable offline. Please enter the location manually.',
+          [{ text: 'OK' }]
+        );
+      }
+    } catch (unhandledErr: any) {
+      console.error('[Location] Unhandled error in location detection:', unhandledErr);
+      setLocationStatus('error');
+      Alert.alert(
+        'Location Detection Error',
+        unhandledErr?.message || 'Unable to detect location. Please enter it manually.',
+        [{ text: 'OK' }]
+      );
+    } finally {
+      locationLoadingRef.current = false;
+      setLocationLoading(false);
+    }
+  };
 
   /**
    * Saves a local draft and navigates to CaptureImages so the officer can
@@ -337,14 +642,49 @@ export const NewInspectionScreen: React.FC = () => {
 
               {/* Location */}
               <View style={styles.fieldGroup}>
-                <Text style={styles.fieldLabel}>Location</Text>
+                <Text style={styles.fieldLabel}>
+                  Location <Text style={{ color: colors.error }}>*</Text>
+                </Text>
                 <TextInput
                   style={styles.textInput}
                   value={location}
-                  onChangeText={setLocation}
+                  onChangeText={(text) => {
+                    setLocation(text);
+                    // If the user edits manually after auto-fill, reset success badge
+                    if (locationStatus === 'success') setLocationStatus('idle');
+                  }}
                   placeholder="e.g. Sector 4 Market"
                   placeholderTextColor={colors.outline}
                 />
+                {/* Use Current Location button */}
+                <TouchableOpacity
+                  style={[
+                    styles.locationBtn,
+                    locationLoading && styles.locationBtnDisabled,
+                    locationStatus === 'success' && styles.locationBtnSuccess,
+                  ]}
+                  onPress={handleUseCurrentLocation}
+                  disabled={locationLoading}
+                  activeOpacity={0.8}
+                  testID="use-location-btn"
+                >
+                  {locationLoading ? (
+                    <>
+                      <ActivityIndicator size="small" color={colors.primary} style={{ marginRight: 6 }} />
+                      <Text style={styles.locationBtnText}>Detecting Location...</Text>
+                    </>
+                  ) : locationStatus === 'success' ? (
+                    <>
+                      <MaterialIcons name="check-circle" size={15} color={colors.statusGreenText ?? '#16a34a'} style={{ marginRight: 5 }} />
+                      <Text style={[styles.locationBtnText, styles.locationBtnTextSuccess]}>Current Location Used</Text>
+                    </>
+                  ) : (
+                    <>
+                      <MaterialIcons name="my-location" size={15} color={colors.primary} style={{ marginRight: 5 }} />
+                      <Text style={styles.locationBtnText}>Use Current Location</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
               </View>
             </View>
           </View>
@@ -648,5 +988,33 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.onPrimary,
   },
+  // ── Location button ───────────────────────────────────────────────────────
+  locationBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    paddingVertical: 7,
+    paddingHorizontal: 12,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    borderRadius: borderRadius.DEFAULT,
+    backgroundColor: colors.surfaceContainerLow,
+    marginTop: 4,
+  },
+  locationBtnDisabled: {
+    opacity: 0.6,
+  },
+  locationBtnSuccess: {
+    borderColor: '#bbf7d0',
+    backgroundColor: '#f0fdf4',
+  },
+  locationBtnText: {
+    ...typography.bodySm,
+    fontSize: 13,
+    color: colors.primary,
+    fontWeight: '500',
+  },
+  locationBtnTextSuccess: {
+    color: '#15803d',
+  },
 });
-

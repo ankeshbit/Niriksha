@@ -31,6 +31,13 @@
         {
           "photosPermission": "Allow NiriKsha to access gallery for selecting package images."
         }
+      ],
+      [
+        "expo-location",
+        {
+          "locationAlwaysAndWhenInUsePermission": "Allow NiriKsha to access your location to auto-fill the inspection site address.",
+          "locationWhenInUsePermission": "Allow NiriKsha to access your location to auto-fill the inspection site address."
+        }
       ]
     ]
   }

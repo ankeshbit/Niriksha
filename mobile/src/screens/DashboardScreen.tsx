@@ -377,18 +377,6 @@ export const DashboardScreen: React.FC = () => {
           )}
         </ScrollView>
 
-        {/* Mobile Floating Action Button (FAB) */}
-        <TouchableOpacity
-          style={[
-            styles.fab,
-            // Sit just above the BottomNav, which itself already accounts for insets.bottom
-            { bottom: BOTTOM_NAV_TAB_HEIGHT + Math.max(insets.bottom, 6) + 12 },
-          ]}
-          onPress={() => navigation.navigate('NewInspection')}
-          activeOpacity={0.85}
-        >
-          <MaterialIcons name="add" size={24} color="#ffffff" />
-        </TouchableOpacity>
 
         {/* Bottom Navigation Bar */}
         <BottomNav />
@@ -581,24 +569,5 @@ const styles = StyleSheet.create({
     ...typography.caption,
     fontSize: 12,
     lineHeight: 16,
-  },
-  fab: {
-    position: 'absolute',
-    right: spacing.marginX,
-    // bottom is set dynamically in JSX using insets.bottom + BOTTOM_NAV_TAB_HEIGHT
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: '#1A2B4B',
-    borderWidth: 1,
-    borderColor: colors.primary,
-    alignItems: 'center',
-    justifyContent: 'center',
-    zIndex: 40,
-    elevation: 6,
-    shadowColor: '#000',
-    shadowOffset: { width: 0, height: 4 },
-    shadowOpacity: 0.3,
-    shadowRadius: 6,
   },
 });
