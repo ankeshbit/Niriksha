@@ -1,0 +1,654 @@
+AI-Assisted Legal MetrologyPackaged-Commodity Inspection System
+Simplified Product Requirements Document (MVP)
+Smart India Hackathon 2026 • Problem Statement 26034
+Organization: Ministry of Consumer Affairs, Food & Public Distribution — Department of Consumer Affairs (DoCA)
+1. Guiding Principle
+This is an AI-assisted inspection and decision-support tool. It can read package labels, extract information and flag possible issues, but it does not make a final legal decision.
+A human enforcement officer always makes the final inspection decision. If the AI or rule engine is unsure, the system must say “Needs Manual Verification” instead of guessing.
+Important: OCR uncertainty is not a legal violation.
+2. Executive Summary
+The MVP helps Legal Metrology officers inspect packaged-product labels using images.
+The system will:
+Capture or upload package images.
+Check whether the images are clear enough.
+Use OCR to read text from the package.
+Extract important declarations such as MRP, quantity and manufacturer details.
+Apply a small, verified set of machine-checkable Legal Metrology rules.
+Show the exact image evidence behind each finding.
+Allow the inspector to correct, confirm or reject findings.
+Generate a PDF inspection report after review.
+Core workflow: Image → Quality Check → OCR → Extraction → Rule Check → Evidence → Inspector Review → Report
+3. Problem Statement
+Packaged products sold in India must show required information such as product name, manufacturer/packer/importer details, net quantity, MRP, date information and consumer-care details.
+Manual checking is slow and can be difficult when many products and images have to be inspected.
+The proposed system helps inspectors by automatically reading package labels, identifying possible issues and showing the evidence needed for human verification.
+Authoritative source for actual legal requirements: Department of Consumer Affairs / Legal Metrology official sources.
+4. USP and Key Differentiators
+The USP is not simply “AI + OCR”. The main difference is the complete evidence-based inspection workflow.
+Differentiator
+Simple Explanation
+Evidence-first findings
+Every finding is connected to the original image, relevant image region, extracted value, confidence and rule.
+Human verification
+The inspector confirms, rejects or corrects findings. AI never makes the final legal decision.
+Rule-version tracking
+Each finding records the exact rule version used, so old inspections remain understandable after rules change.
+OCR uncertainty handling
+Unreadable or uncertain text goes to manual verification instead of automatically becoming a violation.
+Audit-ready history
+Images, AI results, rule results, inspector actions and report versions are preserved.
+Legal Metrology focused
+The workflow is designed specifically for Indian packaged-commodity inspections, not generic OCR.
+Compared with a normal OCR scanner, this system connects extracted text to rules, evidence, human review and an inspection report.
+5. Product Vision
+A mobile-first inspection system that helps officers move from package images to a verified, evidence-backed inspection report.
+Log in.
+Create an inspection.
+Capture or upload package images.
+Check image quality.
+Run OCR and extract declarations.
+Run verified rules.
+Review evidence.
+Confirm/correct/reject findings.
+Generate and store the PDF report.
+6. Final Inspection Statuses
+Status
+Meaning
+No Potential Violations Detected
+All checks used by the MVP passed with enough evidence. This does not mean full legal compliance.
+Potential Non-Compliance Identified
+The inspector confirmed at least one potential issue.
+Needs Manual Verification
+One or more findings still need human review.
+Insufficient Evidence
+Images or coverage are too poor to evaluate reliably.
+Not Applicable
+Used when a specific rule does not apply to the product.
+The word “Compliant” is not used as the final status because the MVP checks only a limited set of requirements.
+7. MVP Goals
+Build a working mobile-first inspection flow within 4 weeks.
+Extract 7 core declaration fields plus Country of Origin when applicable.
+Evaluate about 6–7 focused machine-verifiable legal rules.
+Keep legal rules separate from simple data-format checks.
+Send uncertain OCR/extraction results to manual verification.
+Show evidence for every important finding.
+Keep the original AI result even after an inspector changes it.
+Generate a structured PDF report.
+Use a simple modular-monolith architecture.
+8. Out of Scope
+Complete interpretation of every Legal Metrology rule.
+Exact statutory font-size certification from a photograph.
+E-commerce crawling or a nationwide product database.
+3D package reconstruction.
+Automatic legal decisions or penalties.
+Court-grade evidence certification.
+Large-scale GIS/analytics.
+Custom foundation models.
+Microservices, Kubernetes or Kafka.
+Complex offline synchronization.
+Manufacturer risk scoring.
+Full government-system integration.
+9. Users
+User
+What they do
+Main Device
+Inspector
+Creates inspections, captures images, reviews findings and generates reports.
+Flutter mobile app
+Supervisor/Admin
+Views inspections, dashboard, reports and limited rule configuration.
+React/Next.js web app
+10. User Stories
+Inspector can log in securely.
+Inspector can create an inspection with product and location details.
+Inspector can capture front/back/side images.
+Inspector receives a warning when an image is blurry, dark or incomplete.
+Inspector can see extracted fields and confidence.
+Inspector can see the image evidence behind a finding.
+Inspector can correct OCR results without losing the original AI result.
+Inspector can confirm, reject, correct, request a new image or mark a finding not applicable.
+Inspector can generate a PDF report.
+Supervisor can see inspection counts and statuses.
+Supervisor can search and filter past inspections.
+Inspector sees “Needs Manual Verification” when the system is uncertain.
+Supervisor can see which rule version produced a finding.
+11. MVP Scope
+11.1 Inspection Information
+Required: Inspection ID, product name, brand, category, date/time, location and inspector ID.
+Optional: batch number, manufacturer, source, retail/warehouse/e-commerce, notes.
+MVP product categories: (1) packaged food and (2) household/personal-care products.
+11.2 Core MVP Modules
+Authentication
+Inspection creation
+Image capture/upload
+OCR + declaration extraction
+Rule-based evaluation
+Evidence + human verification
+Report generation
+12. Functional Requirements
+ID
+Requirement
+Priority
+FR-01
+Login with username/email and password.
+P0
+FR-02
+Create an inspection record.
+P0
+FR-03
+Capture/upload multiple package images.
+P0
+FR-04
+Check image quality before OCR.
+P0
+FR-05
+Run OCR and store text, confidence and bounding boxes.
+P0
+FR-06
+Extract structured declarations.
+P0
+FR-07
+Combine information from multiple images and detect conflicts.
+P0
+FR-08
+Evaluate rules and return a defined result state.
+P0
+FR-09
+Send missing/uncertain fields to manual verification.
+P0
+FR-10
+Show image evidence for findings.
+P0
+FR-11
+Allow confirm/reject/correct/request-new-image/not-applicable.
+P0
+FR-12
+Preserve original AI results separately.
+P0
+FR-13
+Store the rule version used for each finding.
+P0
+FR-14
+Allow final PDF only after required findings are reviewed.
+P0
+FR-15
+Supervisor dashboard with summary counts.
+P1
+FR-16
+Search/filter inspection history.
+P1
+FR-17
+Local draft storage.
+P1
+FR-18
+Admin rule enable/disable controls.
+P2
+FR-19
+Offline OCR, rule execution and sync.
+P2
+13. Image Capture and Quality Checks
+Camera capture and gallery/file upload.
+Multiple images per inspection.
+Tag images as front/back/side.
+Preview, delete and retake images.
+Check blur, brightness, glare, resolution, cropping, text size and missing package views.
+Quality checks produce warnings only; they never create legal violations.
+Example warning: “The back label appears blurry. Capture another image for reliable analysis.”
+14. OCR and Extraction
+OCR pipeline: Image → Preprocessing → Perspective correction → Contrast/noise processing → Text detection → OCR → Text + bounding boxes + confidence.
+Preferred OCR: PaddleOCR. Tesseract may be used as an alternative.
+Extraction uses Python regex/structured logic. An optional lightweight NLP/LLM fallback may help with difficult text grouping, but it is never required and never decides compliance.
+Manufacturer/address parsing is best-effort. Low-confidence results go to manual verification.
+15. Declaration Fields
+Product/commodity name
+Manufacturer/packer/importer details
+Net quantity
+MRP
+Date of manufacture/packing/import
+Consumer-care information
+Other required declaration information
+Country of Origin — conditional for imported goods
+The number of fields is independent of the number of legal rules and data-quality checks.
+16. Rule Engine
+There are two separate types of checks.
+16.1 Category A — Legal/Compliance Rules
+These are machine-verifiable legal checks. Every rule must have an official source and provision reference.
+If the provision is not verified, it is marked “Needs Legal Verification” and cannot produce a live legal finding.
+16.2 Category B — Data Quality Checks
+MRP is numeric and non-negative.
+Quantity has a recognized unit.
+Date has a recognizable format.
+Phone number has a valid format.
+Email has a valid format.
+Data-quality failures are warnings, not legal violations.
+16.3 Rule Result States
+State
+Use
+PASS
+Evidence supports the check.
+POTENTIAL NON-COMPLIANCE
+Enough evidence suggests a possible legal issue; inspector confirmation is still required.
+WARNING
+Data-quality or unusual-format issue.
+UNREADABLE
+Text cannot be read reliably.
+NOT APPLICABLE
+Rule does not apply.
+NEEDS MANUAL VERIFICATION
+Evidence is missing, unclear or conflicting.
+When uncertain, the system defaults to “Needs Manual Verification”.
+17. Legal Rule Verification Gate
+No Category A legal rule can be enabled for live legal findings until its official source and provision are manually verified against the authoritative Department of Consumer Affairs / Legal Metrology source.
+The system must never invent legal provisions.
+AI/LLM-generated legal references are not authoritative.
+Unverified rules stay marked “Needs Legal Verification.”
+Only verified rules can produce live legal findings.
+18. Evidence System
+Every finding should connect the rule to the evidence that produced it:
+Finding → Rule Version → Extracted Value → OCR Confidence → Source Image → Bounding Box/Crop → Explanation → Inspector Decision
+The inspector should never receive a bare finding without supporting evidence when evidence is available.
+19. Human Verification
+Human verification is mandatory before a final report is generated.
+Correct extracted text, MRP, quantity or date.
+Enter a value manually when OCR says not_found.
+Confirm or reject a finding.
+Mark not applicable.
+Add comments.
+Request a new image.
+The original AI/OCR result is immutable. Inspector corrections are stored separately with the inspector, time and action.
+20. Four-Layer Result Model
+Layer
+Meaning
+Stored In
+1. AI/OCR result
+Raw text, confidence and bounding boxes.
+OCR results + original declaration value
+2. Rule result
+Deterministic result for a specific rule version.
+Compliance check
+3. Inspector decision
+Confirm, reject, correct, request image or N/A.
+Inspector review log
+4. Final inspection status
+Overall result after review.
+Inspection record
+No later layer overwrites an earlier layer.
+21. Report Rules
+A final report cannot be generated while required findings are unresolved.
+Unresolved examples: Needs Manual Verification, Unreadable, or Potential Non-Compliance waiting for confirmation.
+If a finalized inspection needs correction later, reopen it and create a new report version. Older reports remain available.
+22. Report Contents
+Inspection and product information.
+Original images and evidence crops.
+Extracted declarations, values, confidence and verification status.
+Rule results and rule versions.
+Inspector decisions and remarks.
+Final inspection status.
+Legal Safety Statement.
+The report must clearly distinguish AI-generated findings from inspector-verified findings and legal findings from data-quality warnings.
+23. Dashboard (P1)
+Total inspections.
+Potential non-compliance cases.
+Manual verification cases.
+Verified inspections.
+Recent inspections.
+Search/filter by date, category, status and Inspection ID.
+The dashboard is not required for the core P0 inspection workflow.
+24. Inspection Lifecycle
+Draft
+Processing
+Analysis Complete
+Needs Manual Verification
+Potential Non-Compliance Identified
+No Potential Violations Detected
+Report Generated
+Synchronized (P2/offline only)
+25. Database Design
+Table
+Purpose
+users
+Inspectors/admins and authentication information.
+inspections
+One record for each inspection.
+products
+Product information.
+product_images
+Uploaded images and view type.
+ocr_results
+Raw OCR text, confidence and bounding boxes; immutable.
+declarations
+Structured extracted values and original AI values.
+rules
+Current rule definitions.
+rule_versions
+Immutable historical versions of rules.
+compliance_checks
+Rule results; references exactly one rule_version_id.
+evidence
+Image regions/crops and explanations.
+inspector_reviews
+Append-only inspector actions.
+reports
+PDF reports and report versions.
+audit_logs
+Security and important user actions.
+P2/future: sync_queue for offline synchronization.
+26. API Overview
+Area
+Main API Capability
+Auth
+Login, token/session handling.
+Inspections
+Create, view and update inspections.
+Images
+Upload and analyze images.
+Declarations
+View and correct extracted declarations.
+Checks
+View rule results, evidence and latest inspector decisions.
+Review
+Confirm, reject, correct, request image, mark N/A.
+Reports
+Generate, view and download reports.
+Dashboard
+P1 summary and search data.
+The API must preserve the four-layer result model and report-version history.
+27. Technology Stack
+Layer
+Technology
+Mobile app
+Flutter
+Admin dashboard
+React / Next.js
+Backend
+Python + FastAPI
+Database
+PostgreSQL
+Local storage
+SQLite / Drift (P1/P2)
+OCR
+PaddleOCR preferred; Tesseract alternative
+Computer vision
+OpenCV
+Extraction
+Python regex + optional lightweight NLP/LLM
+Rule engine
+Python + JSON/database-backed rules
+PDF
+ReportLab
+Authentication
+JWT / secure sessions
+File storage
+Local disk for development; S3-compatible storage for deployment
+Deployment
+Docker
+No microservices, Kubernetes, Kafka or Redis are needed unless a real MVP requirement appears.
+28. Dataset Strategy
+Legal knowledge: official Legal Metrology documents.
+Product images: self-collected photos, properly licensed public datasets and staged test cases.
+Annotations: text regions, declaration type, bounding boxes and product category.
+Target demo dataset: about 50–150 images across the two MVP categories and controlled edge cases.
+The system uses a deterministic rule engine, so a large machine-learning training dataset is not required for the core MVP.
+29. UI/UX
+Main navigation:
+Login → Dashboard → New Inspection → Product Details → Capture/Upload → Processing → Extracted Declarations → Findings → Evidence → Inspector Verification → Report
+Mobile-first inspector workflow.
+Clear status text plus icons; never rely on color alone.
+Large touch targets.
+Simple error messages.
+Evidence shown directly with each finding.
+Separate Legal Findings and Data Quality warnings.
+30. Security
+Password hashing.
+JWT authentication and role-based access.
+HTTPS in deployment.
+File type and size validation.
+Safe file naming and path handling.
+Access control on inspection/report APIs.
+Audit logging.
+Authenticated report access.
+Enterprise controls such as WAF/SOC2 are outside the prototype scope.
+31. Privacy
+Collect package images, extracted text, inspector identity/time and inspection location.
+Use the data only to perform and document inspections.
+Store files securely; keep structured metadata in the database.
+Allow access only to the inspector and authorized supervisors/admins.
+Use an organizational retention period.
+Admin can delete inspection-related images/results when policy allows.
+Collect only necessary personal data.
+32. Error Handling
+Problem
+System Response
+OCR failure
+Mark unreadable and ask for a better image; never invent text.
+No text detected
+Mark fields not_found and send to manual verification.
+Blurry/dark image
+Show quality warning and allow retake.
+Unsupported file
+Reject with clear error.
+No product category
+Block analysis until selected.
+Missing required field
+Manual verification first; potential issue only with sufficient evidence and inspector review.
+Conflicting values
+Show both values and request manual verification.
+Unverified legal rule
+Show “Needs Legal Verification.”
+LLM unavailable
+Continue using OCR/regex results.
+Backend unavailable
+Show retry and preserve local draft if P1 storage exists.
+Report failure
+Show error and allow retry without losing inspection data.
+33. Edge Cases
+Blur, darkness or glare → warn/retake.
+Curved or rotated packaging → attempt correction; low confidence if unresolved.
+Very small text → mark as difficult to read.
+Unsupported language/script → extract what is supported; otherwise manual verification.
+Partial label → request better coverage.
+Multiple MRP values → flag conflict.
+Sticker covering information → low confidence/manual verification.
+Unreadable manufacturer/address → manual verification.
+Duplicate/conflicting fields across images → show conflict.
+Network failure → preserve draft where P1 storage is available.
+34. Testing
+Unit tests: rule engine, regex extraction and data validators.
+Integration tests: OCR → extraction → rule engine → report.
+UI tests: complete inspection flow and evidence review.
+AI tests: OCR accuracy and declaration extraction precision/recall/F1.
+End-to-end tests: controlled Products A, B and C.
+35. MVP Priority
+Priority
+Features
+P0 — Must Have
+Authentication, inspection, image capture, image quality, OCR, extraction, rule engine, evidence, human verification, PDF report.
+P1 — Should Have
+Dashboard, inspection history/search, local drafts, basic analytics.
+P2 — Nice to Have
+Offline OCR, synchronization, advanced dashboard, more categories/rules, admin rule controls, evidence hashing.
+Future
+E-commerce crawling, full rule coverage, exact font measurement, 3D reconstruction, risk scoring, government integration, advanced GIS, autonomous legal decisions.
+36. 4-Week Development Plan
+Week
+Focus
+Expected Result
+Week 1
+Flutter + FastAPI + PostgreSQL + login + inspection + image upload
+Inspector can log in, create an inspection and upload images.
+Week 2
+OpenCV + OCR + extraction + image quality
+System extracts key fields with confidence and handles not_found correctly.
+Week 3
+Rule engine + evidence + inspector verification
+Potential issues are shown with evidence and can be confirmed/corrected.
+Week 4
+PDF reports + dashboard + testing + deployment + demo
+Complete image-to-verified-report demo works.
+Offline OCR/sync must not delay the Week 1–4 core MVP.
+37. Team Responsibilities
+Role
+Main Work
+Frontend/Mobile
+Flutter app and navigation.
+Backend
+FastAPI, database and APIs.
+AI/OCR/CV
+OpenCV, OCR and extraction.
+Database/DevOps
+Schema, migrations, Docker and deployment.
+UI/UX
+Screens, evidence view and dashboard.
+Legal/QA/Presentation
+Rule verification, test cases and demo.
+38. Demo Plan
+Use three controlled products and do not claim a real brand is violating the law.
+Product
+Purpose
+A
+All key declarations are clear and present.
+B
+A staged/mock label has a missing or unclear declaration.
+C
+Two conflicting values or a low-quality image.
+5-minute demo:
+Login
+Create inspection
+Upload 2–3 package images
+Show OCR progress
+Show extracted fields and confidence
+Run rules
+Show a potential finding
+Open highlighted evidence
+Inspector confirms/corrects
+Generate PDF
+Return to dashboard and show saved inspection
+39. Success Metrics
+Metric Group
+Examples
+AI
+OCR accuracy, extraction precision/recall/F1, confidence calibration.
+System
+Processing time, report generation time, successful inspection completion rate.
+Human-in-the-loop
+Correction rate, manual-review rate, average review time.
+Do not use “legal compliance accuracy” as a metric because the MVP does not have a legally validated ground-truth method.
+40. Main Risks
+Risk
+Mitigation
+OCR errors
+Confidence thresholds and manual verification.
+False positives
+Conservative rules and inspector confirmation.
+False negatives
+Decision-support framing and full inspector review.
+Poor image quality
+Pre-OCR quality checks and retake prompts.
+Multilingual packaging
+Limit supported scripts and use manual verification for unsupported text.
+Curved packaging
+Perspective correction and low-confidence handling.
+Limited dataset
+Small curated dataset plus controlled test cases.
+Legal ambiguity
+Manual legal-source verification before live rule use.
+41. Future Scope
+More Legal Metrology rules and product categories.
+E-commerce product scanning.
+Advanced font-size measurement.
+Offline OCR and synchronization.
+Advanced dashboards and analytics.
+3D package analysis.
+Manufacturer risk scoring.
+Government-system integration.
+Advanced GIS.
+More complete inspection versioning.
+Autonomous legal decision-making is not a planned feature.
+42. Final Architecture
+P0 architecture:
+Flutter Inspector App → FastAPI Backend → Inspection Module → OpenCV → PaddleOCR/Tesseract → Declaration Extraction → Rule Engine → Evidence + Human Verification → Report Generator → PostgreSQL/File Storage
+React/Next.js Supervisor Dashboard is P1 and is not required for the core workflow.
+Optional offline path: SQLite local draft → optional offline processing → sync queue → FastAPI when the network returns.
+43. Final MVP Definition
+The MVP is complete when an inspector can create an inspection, capture/upload package images, extract key declarations with OCR, evaluate a small set of verified machine-readable rules, review evidence, manually verify findings and generate a structured report.
+Core modules:
+Authentication
+Inspection creation
+Image capture/upload
+OCR + declaration extraction
+Rule-based evaluation
+Evidence + human verification
+Report generation
+44. Acceptance Criteria — Simplified
+The following keeps the meaning of the original 35 acceptance criteria but uses simpler language.
+Valid login creates an authenticated session/token.
+Invalid login shows an error and does not create a session.
+Valid inspection details create a Draft inspection with a unique ID.
+Missing required inspection details show validation errors.
+Supported images are stored with their view type.
+Blurry images produce a quality warning before analysis.
+Unsupported image files are rejected.
+Analysis cannot start without an image.
+Clear MRP text is extracted with confidence and bounding-box evidence.
+Unreadable text is marked not_found, not guessed.
+Low-confidence OCR is marked low_confidence.
+Valid phone-like text can populate the phone field; invalid format becomes a data-quality warning.
+Date-like text is extracted with a recognized-format indicator or marked unrecognized.
+Ambiguous manufacturer text becomes low_confidence rather than a forced guess.
+Different MRP values across images create a conflict requiring manual review.
+Uncertain OCR sends the related rule to Needs Manual Verification.
+A genuinely missing required declaration with sufficient evidence creates Potential Non-Compliance pending inspector confirmation.
+A clearly present field with enough confidence can pass the applicable legal rule.
+Rules that do not apply are marked Not Applicable.
+Conflicting/ambiguous evidence requires manual verification.
+Very low OCR confidence can produce UNREADABLE.
+Data-quality failures appear as WARNING, not Potential Non-Compliance.
+Unverified legal rules are visibly tagged Needs Legal Verification and cannot create live legal findings.
+Opening a finding shows image evidence, bounding box, value, rule/version, explanation and confidence.
+If an evidence crop cannot be created, show the full source image instead.
+Confirming a finding stores the inspector decision and time.
+Correcting a value stores the corrected value while preserving the original AI value.
+Marking a finding Not Applicable removes it from the final issue count.
+Requesting a new image causes the finding to be re-evaluated.
+Unresolved findings block final report generation.
+If all findings are reviewed and none are confirmed, the report says No Potential Violations Detected, never Compliant.
+If an issue is confirmed, the report says Potential Non-Compliance Identified and includes the Legal Safety Statement.
+Reports visually separate AI findings from inspector-verified findings and legal findings from data-quality warnings.
+The P1 dashboard shows counts and summaries that match stored inspection data.
+If the backend fails during upload, the image is not lost and a retry/local draft option is provided when P1 storage is implemented.
+45. Final Safety and Readiness Checklist
+AI never makes the final legal decision.
+OCR uncertainty never automatically becomes a violation.
+Every legal rule has a source/provision or Needs Legal Verification.
+Only verified legal rules can produce live legal findings.
+AI results, rule results, inspector decisions and final status remain separate.
+Inspector verification is mandatory before a final report.
+Original AI output is preserved.
+The dashboard remains P1.
+Offline work cannot delay the core MVP.
+No unsupported legal provisions are invented.
+The architecture remains a simple modular monolith.
+The PRD is ready to freeze for development, subject to verification of the actual legal provisions used in Category A rules.
+Appendix A — Key Terms
+Term
+Simple Meaning
+OCR
+Technology that reads text from an image.
+Bounding box
+The image area around detected text.
+Category A
+Legal/compliance rule.
+Category B
+Data-quality/format check.
+Rule version
+The exact saved version of a rule used for an evaluation.
+Evidence
+Image and information supporting a finding.
+Inspector verification
+Human review of an AI/rule result.
+P0
+Must have for MVP.
+P1
+Useful but not required for the core MVP.
+P2
+Optional if time allows.
