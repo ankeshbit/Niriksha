@@ -57,3 +57,23 @@ export const formatLastLogin = (lastLoginAt?: string | Date | null): string => {
     return `${day} ${month} ${year}, ${timeStr} from Current Device`;
   }
 };
+
+/**
+ * Returns a dynamic greeting based on the local time:
+ * - Before 12:00 PM (00:00 - 11:59): "Good morning"
+ * - 12:00 PM through 4:59 PM (12:00 - 16:59): "Good afternoon"
+ * - 5:00 PM onward (17:00 - 23:59): "Good evening"
+ *
+ * @param date Optional Date instance for deterministic evaluation/testing (defaults to new Date())
+ */
+export const getTimeBasedGreeting = (date: Date = new Date()): string => {
+  const hours = date.getHours();
+  if (hours < 12) {
+    return 'Good morning';
+  } else if (hours < 17) {
+    return 'Good afternoon';
+  } else {
+    return 'Good evening';
+  }
+};
+

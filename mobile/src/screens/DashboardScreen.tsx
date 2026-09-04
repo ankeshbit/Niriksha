@@ -17,6 +17,7 @@ import { BottomNav, BOTTOM_NAV_TAB_HEIGHT } from '../components/BottomNav';
 import { ProfileAvatar } from '../components/ProfileAvatar';
 import { api } from '../services/api';
 import { authStorage } from '../services/authStorage';
+import { getTimeBasedGreeting } from '../services/dateUtils';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
@@ -114,6 +115,7 @@ export const DashboardScreen: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [selectedChipId, setSelectedChipId] = useState<string | null>(null);
+  const [currentDate, setCurrentDate] = useState(() => new Date());
 
   const loadData = async () => {
     try {
@@ -135,16 +137,18 @@ export const DashboardScreen: React.FC = () => {
 
   useFocusEffect(
     useCallback(() => {
+      setCurrentDate(new Date());
       loadData();
     }, [])
   );
 
   const onRefresh = () => {
     setRefreshing(true);
+    setCurrentDate(new Date());
     loadData();
   };
 
-  const todayStr = new Date().toLocaleDateString('en-GB', {
+  const todayStr = currentDate.toLocaleDateString('en-GB', {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
@@ -223,7 +227,7 @@ export const DashboardScreen: React.FC = () => {
             <View style={styles.welcomeHeaderRow}>
               <View style={styles.welcomeHeaderTextCol}>
                 <Text style={styles.welcomeGreeting}>
-                  Good morning, {profile?.full_name || 'Inspector'}
+                  {`${getTimeBasedGreeting(currentDate)}, ${profile?.full_name || 'Inspector'}`}
                 </Text>
                 <Text style={styles.welcomeSubtext}>
                   ID: {profile?.officer_id || 'DOCA-INSP-842'} • {todayStr}
