@@ -1,4 +1,4 @@
-﻿import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect } from 'react';
 import {
   View,
   Text,
@@ -163,8 +163,8 @@ export const EvidenceReviewScreen: React.FC = () => {
 
               {/* Metadata row */}
               <View style={styles.metaRow}>
-                <Text style={styles.metaText}>Inspection ID: {finding?.rule_code || 'LM-2026-00891'}</Text>
-                <Text style={styles.metaText}>Inspector: {profile?.full_name || 'Rajesh Kumar'}</Text>
+                <Text style={styles.metaText}>Inspection: {inspectionId ? inspectionId.substring(0, 8).toUpperCase() : '—'}</Text>
+                <Text style={styles.metaText}>Inspector: {profile?.full_name || profile?.officer_id || 'Inspecting Officer'}</Text>
               </View>
 
               {/* Why was this flagged? Card */}

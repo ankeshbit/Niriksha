@@ -296,9 +296,10 @@ export const CaptureImagesScreen: React.FC = () => {
   // ─── Slot rendering ────────────────────────────────────────────────────────
 
   const renderSlot = (
-    title: 'FRONT' | 'BACK' | 'SIDE',
+    title: string,
     viewType: 'front' | 'back' | 'side',
-    imgData?: ImageSlot
+    imgData?: ImageSlot,
+    isRequired: boolean = false
   ) => {
     const isUploading = uploadingSlot === viewType;
     const isChecking = Boolean(imgData?.qualityChecking);
@@ -323,7 +324,14 @@ export const CaptureImagesScreen: React.FC = () => {
       return (
         <View style={styles.slotCard}>
           <View style={styles.slotHeader}>
-            <Text style={styles.slotHeaderLabel}>{title}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={styles.slotHeaderLabel}>{title}</Text>
+              <View style={[styles.requirementBadge, isRequired ? styles.requiredBadge : styles.optionalBadge]}>
+                <Text style={[styles.requirementBadgeText, isRequired ? styles.requiredBadgeText : styles.optionalBadgeText]}>
+                  {isRequired ? 'REQUIRED' : 'OPTIONAL'}
+                </Text>
+              </View>
+            </View>
           </View>
           <View style={styles.uploadingBox}>
             <ActivityIndicator size="small" color={colors.primary} />
@@ -344,11 +352,21 @@ export const CaptureImagesScreen: React.FC = () => {
           activeOpacity={0.7}
         >
           <View style={styles.emptySlotHeader}>
-            <Text style={styles.emptySlotHeaderLabel}>{title}</Text>
+            <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+              <Text style={styles.emptySlotHeaderLabel}>{title}</Text>
+              <View style={[styles.requirementBadge, isRequired ? styles.requiredBadge : styles.optionalBadge]}>
+                <Text style={[styles.requirementBadgeText, isRequired ? styles.requiredBadgeText : styles.optionalBadgeText]}>
+                  {isRequired ? 'REQUIRED' : 'OPTIONAL'}
+                </Text>
+              </View>
+            </View>
           </View>
           <View style={styles.emptySlotContent}>
             <MaterialIcons name="add-a-photo" size={28} color={colors.secondary} />
             <Text style={styles.emptySlotText}>Tap to Add Image</Text>
+            <Text style={styles.emptySlotSubtext}>
+              {isRequired ? 'Mandatory package view' : 'Capture side view if needed'}
+            </Text>
           </View>
         </TouchableOpacity>
       );
@@ -366,16 +384,23 @@ export const CaptureImagesScreen: React.FC = () => {
     return (
       <View style={[styles.slotCard, isWarn && styles.slotCardWarn]}>
         <View style={styles.slotHeader}>
-          <Text style={styles.slotHeaderLabel}>{title}</Text>
+          <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+            <Text style={styles.slotHeaderLabel}>{title}</Text>
+            <View style={[styles.requirementBadge, isRequired ? styles.requiredBadge : styles.optionalBadge]}>
+              <Text style={[styles.requirementBadgeText, isRequired ? styles.requiredBadgeText : styles.optionalBadgeText]}>
+                {isRequired ? 'REQUIRED' : 'OPTIONAL'}
+              </Text>
+            </View>
+          </View>
           {isWarn ? (
             <View style={styles.warnChip}>
               <MaterialIcons name="warning" size={14} color={colors.statusAmberText} />
-              <Text style={styles.warnChipText}>Blurry — Capture Again</Text>
+              <Text style={styles.warnChipText}>Image appears blurry</Text>
             </View>
           ) : (
             <View style={styles.goodChip}>
               <MaterialIcons name="check-circle" size={14} color={colors.statusGreenText} />
-              <Text style={styles.goodChipText}>Quality acceptable</Text>
+              <Text style={styles.goodChipText}>Image quality acceptable</Text>
             </View>
           )}
         </View>
@@ -445,9 +470,26 @@ export const CaptureImagesScreen: React.FC = () => {
 
   // ─── Continue handler ──────────────────────────────────────────────────────
 
+  const hasRequiredImages = Boolean(frontImg && backImg);
+
   const handleContinue = () => {
-    if (!hasAtLeastOneImage) {
-      Alert.alert('Image Required', 'Please capture at least 1 package image before proceeding.');
+    if (!hasRequiredImages) {
+      const msg = 'Please capture both Front and Back package images before proceeding. Side image is optional.';
+      if (Platform.OS === 'web') {
+        alert(msg);
+      } else {
+        Alert.alert('Required Images', msg);
+      }
+      return;
+    }
+
+    if (blurryImages.length > 0) {
+      const msg = 'Image appears blurry. Please capture the image again before continuing.';
+      if (Platform.OS === 'web') {
+        alert(msg);
+      } else {
+        Alert.alert('Image Appears Blurry', msg);
+      }
       return;
     }
 
@@ -487,7 +529,7 @@ export const CaptureImagesScreen: React.FC = () => {
           <View style={styles.instructionSection}>
             <Text style={styles.instructionTitle}>Capture Package Images</Text>
             <Text style={styles.instructionSubtitle}>
-              Capture clear images of all required label areas.{' '}
+              Capture clear images of Front and Back label areas (Side is optional).{' '}
               {isDraftMode ? 'Each image is quality-checked on your device.' : 'Ensure accurate processing.'}
             </Text>
           </View>
@@ -496,9 +538,9 @@ export const CaptureImagesScreen: React.FC = () => {
             <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 30 }} />
           ) : (
             <View style={styles.slotsContainer}>
-              {renderSlot('FRONT', 'front', frontImg)}
-              {renderSlot('BACK', 'back', backImg)}
-              {renderSlot('SIDE', 'side', sideImg)}
+              {renderSlot('FRONT IMAGE', 'front', frontImg, true)}
+              {renderSlot('BACK IMAGE', 'back', backImg, true)}
+              {renderSlot('SIDE IMAGE', 'side', sideImg, false)}
             </View>
           )}
 
@@ -512,7 +554,7 @@ export const CaptureImagesScreen: React.FC = () => {
               <MaterialIcons name="warning" size={18} color={colors.statusAmberText} style={{ marginTop: 1 }} />
               <View style={{ flex: 1 }}>
                 <Text style={styles.warningStatusText}>
-                  {blurryImages.length} image{blurryImages.length > 1 ? 's require' : ' requires'} attention before continuing.
+                  {blurryImages.length} image{blurryImages.length > 1 ? 's appear' : ' appears'} blurry. Please capture again before proceeding.
                 </Text>
                 <View style={styles.warningActionLinks}>
                   <TouchableOpacity onPress={() => {
@@ -524,9 +566,6 @@ export const CaptureImagesScreen: React.FC = () => {
                   }}>
                     <Text style={styles.warningLinkText}>Capture Again</Text>
                   </TouchableOpacity>
-                  <TouchableOpacity onPress={handleContinue}>
-                    <Text style={styles.warningLinkText}>Continue Anyway</Text>
-                  </TouchableOpacity>
                 </View>
               </View>
             </View>
@@ -537,26 +576,30 @@ export const CaptureImagesScreen: React.FC = () => {
               style={[
                 styles.continueBtn,
                 hasWarning ? styles.continueBtnWarning : styles.continueBtnPrimary,
-                !hasAtLeastOneImage && styles.continueBtnDisabled,
+                (!hasRequiredImages || hasWarning) && styles.continueBtnDisabled,
               ]}
               onPress={handleContinue}
-              disabled={!hasAtLeastOneImage}
+              disabled={!hasRequiredImages || hasWarning}
               activeOpacity={0.85}
             >
               {hasWarning ? (
                 <View style={styles.btnContentCol}>
                   <View style={styles.btnContentRow}>
                     <MaterialIcons name="warning" size={18} color={colors.onPrimary} />
-                    <Text style={styles.continueBtnText}>Continue with Warning</Text>
+                    <Text style={styles.continueBtnText}>Image Appears Blurry — Capture Again</Text>
                   </View>
                   <Text style={styles.continueBtnSubtext}>
-                    {blurryImages.length} image{blurryImages.length > 1 ? 's need' : ' needs'} attention
+                    {blurryImages.length} image{blurryImages.length > 1 ? 's need' : ' needs'} retake.
                   </Text>
                 </View>
               ) : (
                 <View style={styles.btnContentRow}>
                   <Text style={styles.continueBtnText}>
-                    {isDraftMode ? 'Save Draft & Wait for Connection' : 'Continue to Analysis'}
+                    {!hasRequiredImages
+                      ? 'Capture Front & Back to Continue'
+                      : isDraftMode
+                      ? 'Save Draft & Wait for Connection'
+                      : 'Continue to Analysis'}
                   </Text>
                   <MaterialIcons name="arrow-forward" size={18} color={colors.onPrimary} />
                 </View>
@@ -654,6 +697,28 @@ const styles = StyleSheet.create({
     letterSpacing: 0.5,
     fontWeight: '600',
     color: colors.primary,
+  },
+  requirementBadge: {
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  requiredBadge: {
+    backgroundColor: '#EEF2FF',
+  },
+  optionalBadge: {
+    backgroundColor: '#F3F4F6',
+  },
+  requirementBadgeText: {
+    fontSize: 9,
+    fontWeight: '700',
+    letterSpacing: 0.5,
+  },
+  requiredBadgeText: {
+    color: '#4F46E5',
+  },
+  optionalBadgeText: {
+    color: '#6B7280',
   },
   qualityStatusBar: {
     flexDirection: 'row',
@@ -804,6 +869,13 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: '500',
     color: colors.secondary,
+  },
+  emptySlotSubtext: {
+    ...typography.caption,
+    fontSize: 11,
+    lineHeight: 15,
+    color: colors.outline,
+    marginTop: 2,
   },
   uploadingBox: {
     padding: 24,

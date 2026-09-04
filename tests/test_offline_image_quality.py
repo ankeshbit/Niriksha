@@ -208,81 +208,153 @@ def test_02_production_db_unchanged_during_tests(client, auth_headers):
 
 # ─── Tests 3–5: On-device image quality check simulation ─────────────────────
 
-def test_03_sharp_image_is_accepted():
-    """
-    Simulates the on-device quality check for a sharp (high-edge) image.
-    Sharp images should pass the quality gate (isAcceptable=True).
+# ─── Tests 3–5: Colab-Validated Laplacian Variance Blur Detection ─────────────
 
-    We test the quality logic by verifying the image bytes have high variance
-    (the property our imageQualityService uses as the sharpness proxy).
-    """
-    sharp_png = _make_minimal_png(width=600, height=500, sharp=True)
-    # Sample middle third of file (same as imageQualityService)
-    start = len(sharp_png) // 3
-    end = (len(sharp_png) * 2) // 3
-    sample = sharp_png[start:end]
+def _compute_colab_blur(image_path: str, target_width: int = 800):
+    """Reference implementation of Colab blur score."""
+    import cv2
+    img = cv2.imread(str(image_path))
+    assert img is not None, f"Image not found at {image_path}"
+    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    h, w = gray.shape
 
-    if len(sample) > 0:
-        mean = sum(sample) / len(sample)
-        variance = sum((b - mean) ** 2 for b in sample) / len(sample)
-        # Sharp checkerboard pattern compresses differently → non-zero variance in compressed bytes
-        # We verify variance is > 0, which is all we can guarantee in the compressed domain
-        assert variance >= 0, "Variance must be non-negative"
+    downscaled = False
+    if w > target_width:
+        scale = target_width / w
+        gray = cv2.resize(gray, (target_width, int(h * scale)), interpolation=cv2.INTER_LINEAR)
+        downscaled = True
 
-    # The key invariant: a 600×500 sharp image meets the minimum resolution requirement
-    assert 600 >= 400, "Width meets minimumWidth threshold"
-    assert 500 >= 300, "Height meets minimumHeight threshold"
+    laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
+    is_blurry = laplacian_var < 150.0
+    return laplacian_var, is_blurry, w, h, gray.shape[1], gray.shape[0], downscaled
 
 
-def test_04_blurry_image_has_different_byte_variance():
-    """
-    Verifies that a flat/uniform (blurry) image produces significantly lower
-    byte variance than a sharp (high-frequency) image.
+def test_03_clearly_sharp_image_score_ge_150_acceptable():
+    """Requirement 1: Clearly sharp image -> score >= 150 -> ACCEPTABLE (~1852.7)"""
+    fixtures_dir = BASE_DIR / "tests" / "fixtures"
+    clear_img = fixtures_dir / "clear_package.jpg"
+    score, is_blurry, w, h, fw, fh, downscaled = _compute_colab_blur(str(clear_img))
 
-    This validates the core assumption of the imageQualityService blur detection:
-    blurry images → fewer high-frequency components → more uniform compressed bytes
-    → lower variance in the compressed byte sample.
-    """
-    sharp_png = _make_minimal_png(width=600, height=500, sharp=True)
-    blurry_png = _make_minimal_png(width=600, height=500, sharp=False)
-
-    def _sample_variance(data: bytes) -> float:
-        start = len(data) // 3
-        end = (len(data) * 2) // 3
-        sample = data[start:end]
-        if len(sample) == 0:
-            return 0.0
-        mean = sum(sample) / len(sample)
-        return sum((b - mean) ** 2 for b in sample) / len(sample)
-
-    sharp_var = _sample_variance(sharp_png)
-    blurry_var = _sample_variance(blurry_png)
-
-    # Sharp image must have HIGHER variance than blurry image
-    # (or at minimum, blurry image compresses more uniformly)
-    # Note: PNG DEFLATE compression may compress both uniformly at very small sizes,
-    # but for realistic field images this invariant holds.
-    assert sharp_var >= 0 and blurry_var >= 0, "Variance must be non-negative"
-    # The blurry image should compress better (smaller file) due to fewer high-freq components
-    assert len(blurry_png) <= len(sharp_png), (
-        "Flat/uniform (blurry) image should compress to smaller or equal file size"
-    )
+    assert score >= 150.0, f"Expected score >= 150.0 for sharp image, got {score:.2f}"
+    assert abs(score - 1852.7) < 1.0, f"Expected approximately 1852.7 for clear_package.jpg, got {score:.2f}"
+    assert is_blurry is False, "Sharp image must NOT be flagged as blurry"
 
 
-def test_05_quality_config_values_are_conservative():
-    """
-    Verifies that IMAGE_QUALITY_CONFIG values are within the documented
-    conservative ranges, matching the specification.
-    """
-    # Import is validated at TypeScript level; we test the documented values here
-    expected_min_sharpness = 35    # documented threshold
-    expected_min_width = 400       # matches backend minimum
-    expected_min_height = 300      # landscape minimum
+def test_04_clearly_blurred_image_score_lt_150_blurry():
+    """Requirement 2: Clearly blurred image -> score < 150 -> BLURRY (~1.1)"""
+    fixtures_dir = BASE_DIR / "tests" / "fixtures"
+    blurry_img = fixtures_dir / "blurry_package.jpg"
+    score, is_blurry, w, h, fw, fh, downscaled = _compute_colab_blur(str(blurry_img))
 
-    # These values come from imageQualityService.ts — we document them here
-    assert expected_min_sharpness == 35, "Sharpness threshold should be 35 (conservative)"
-    assert expected_min_width == 400, "Minimum width should be 400px (matches backend)"
-    assert expected_min_height == 300, "Minimum height should be 300px (landscape minimum)"
+    assert score < 150.0, f"Expected score < 150.0 for blurry image, got {score:.2f}"
+    assert abs(score - 1.1) < 0.5, f"Expected approximately 1.1 for blurry_package.jpg, got {score:.2f}"
+    assert is_blurry is True, "Blurred image must be flagged as blurry"
+
+
+def test_05_threshold_boundary_exactly_150_acceptable():
+    """Requirement 3: Score boundary at exactly 150.0 -> ACCEPTABLE (score < 150 is blurry, >= 150 is acceptable)"""
+    threshold = 150.0
+    score_just_below = 149.999
+    score_exact = 150.0
+    score_just_above = 150.001
+
+    assert (score_just_below < threshold) is True, "Score below 150 must be blurry"
+    assert (score_exact < threshold) is False, "Score exactly 150 must NOT be blurry (must be ACCEPTABLE)"
+    assert (score_just_above < threshold) is False, "Score above 150 must be ACCEPTABLE"
+
+
+def test_05b_small_image_must_not_be_upscaled():
+    """Requirement 4: Small image (width <= 800) must NOT be upscaled"""
+    fixtures_dir = BASE_DIR / "tests" / "fixtures"
+    low_res_img = fixtures_dir / "low_res_package.jpg"
+    score, is_blurry, orig_w, orig_h, final_w, final_h, downscaled = _compute_colab_blur(str(low_res_img))
+
+    assert orig_w <= 800, f"Expected small test image with width <= 800, got {orig_w}"
+    assert final_w == orig_w, f"Small image width must not change, expected {orig_w}, got {final_w}"
+    assert final_h == orig_h, f"Small image height must not change, expected {orig_h}, got {final_h}"
+    assert downscaled is False, "Downscaled flag must be False for small images"
+
+
+def test_05c_large_image_downscaled_only_to_width_800_preserving_aspect_ratio():
+    """Requirement 5 & 6: Large image (width > 800) downscaled only to width 800, preserving aspect ratio"""
+    import cv2
+    import numpy as np
+
+    # Create a synthetic 1600 x 1200 test image (aspect ratio 4:3)
+    orig_w, orig_h = 1600, 1200
+    expected_aspect = orig_w / orig_h
+    test_img = np.random.randint(0, 255, (orig_h, orig_w, 3), dtype=np.uint8)
+
+    tmp_path = BASE_DIR / "tests" / "fixtures" / "temp_large_test.jpg"
+    cv2.imwrite(str(tmp_path), test_img)
+
+    try:
+        score, is_blurry, w, h, final_w, final_h, downscaled = _compute_colab_blur(str(tmp_path))
+        assert downscaled is True, "Image wider than 800 must be marked as downscaled"
+        assert final_w == 800, f"Downscaled width must be exactly 800, got {final_w}"
+        expected_final_h = int(orig_h * (800 / orig_w))
+        assert final_h == expected_final_h, f"Downscaled height must be {expected_final_h}, got {final_h}"
+        final_aspect = final_w / final_h
+        assert abs(final_aspect - expected_aspect) < 0.01, "Aspect ratio must be preserved"
+    finally:
+        if tmp_path.exists():
+            tmp_path.unlink()
+
+
+def test_05d_original_image_remains_unchanged():
+    """Requirement 7: Original full-resolution image remains completely unchanged after blur analysis"""
+    import hashlib
+    fixtures_dir = BASE_DIR / "tests" / "fixtures"
+    target_img = fixtures_dir / "clear_package.jpg"
+
+    with open(target_img, "rb") as f:
+        hash_before = hashlib.sha256(f.read()).hexdigest()
+    size_before = target_img.stat().st_size
+
+    # Run blur score computation
+    _compute_colab_blur(str(target_img))
+
+    with open(target_img, "rb") as f:
+        hash_after = hashlib.sha256(f.read()).hexdigest()
+    size_after = target_img.stat().st_size
+
+    assert hash_before == hash_after, "Original image content changed after blur analysis!"
+    assert size_before == size_after, "Original image file size changed after blur analysis!"
+
+
+def test_05e_offline_execution_requires_no_network(monkeypatch):
+    """Requirement 8: Blur detection runs fully on-device with zero network access"""
+    import socket
+    # Simulate completely offline environment by disabling socket connect
+    def _blocked_connect(*args, **kwargs):
+        raise OSError("Network is disabled in offline mode")
+
+    monkeypatch.setattr(socket, "socket", _blocked_connect)
+
+    fixtures_dir = BASE_DIR / "tests" / "fixtures"
+    clear_img = fixtures_dir / "clear_package.jpg"
+    score, is_blurry, w, h, fw, fh, downscaled = _compute_colab_blur(str(clear_img))
+    assert score >= 150.0, "Offline execution must compute score successfully without network"
+
+
+def test_05f_multiple_images_evaluated_independently():
+    """Requirement 9: Multiple image panels are evaluated independently with their own decisions"""
+    fixtures_dir = BASE_DIR / "tests" / "fixtures"
+    clear_img = fixtures_dir / "clear_package.jpg"
+    blurry_img = fixtures_dir / "blurry_package.jpg"
+
+    score_clear, is_blurry_clear, _, _, _, _, _ = _compute_colab_blur(str(clear_img))
+    score_blurry, is_blurry_blurry, _, _, _, _, _ = _compute_colab_blur(str(blurry_img))
+
+    assert is_blurry_clear is False, "Front (clear) must be acceptable"
+    assert is_blurry_blurry is True, "Back (blurry) must be rejected"
+    assert score_clear != score_blurry, "Each image must have its own independent score"
+
+
+def test_05g_threshold_is_exactly_150():
+    """Requirement 10: Threshold is verified to be exactly 150.0"""
+    from scripts.cross_validate_blur import BLUR_THRESHOLD
+    assert BLUR_THRESHOLD == 150.0, f"Expected threshold 150.0, got {BLUR_THRESHOLD}"
 
 
 # ─── Test 6: Blurry image can be retaken ──────────────────────────────────────

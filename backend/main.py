@@ -75,7 +75,7 @@ from backend.auth_utils import verify_password, hash_password
 from backend.auth_service import create_access_token, get_current_user
 from backend.image_quality import assess_image_quality
 from backend.ocr_service import ocr_service
-from backend.extraction_service import extraction_service
+from backend.extraction_service import extraction_service, cross_image_verification
 from backend.rule_engine import rule_engine, get_rule_by_code
 from backend.report_service import report_generator
 from backend.supabase_storage import storage_service
@@ -232,6 +232,25 @@ def serialize_declaration(decl: Declaration) -> DeclarationResponse:
         except Exception:
             bbox = None
 
+    has_conflict = getattr(decl, "extraction_status", "") == "CONFLICTING"
+    conflicts = None
+    source_images = None
+    if decl.correction_reason and decl.correction_reason.startswith('{"conflict":'):
+        try:
+            cdata = json.loads(decl.correction_reason)
+            has_conflict = cdata.get("conflict", has_conflict)
+            conflicts = cdata.get("candidates", [])
+            source_images = cdata.get("source_images", [])
+        except Exception:
+            pass
+
+    if decl.verification_status == "CORRECTED":
+        extraction_method = "INSPECTOR_CORRECTED"
+    elif decl.extraction_status in ["NOT_FOUND", "OCR_UNAVAILABLE"]:
+        extraction_method = "MANUAL"
+    else:
+        extraction_method = "AI/OCR"
+
     return DeclarationResponse(
         id=decl.id,
         inspection_id=decl.inspection_id,
@@ -242,6 +261,7 @@ def serialize_declaration(decl: Declaration) -> DeclarationResponse:
         confidence=decl.confidence,
         bounding_box=bbox,
         extraction_status=decl.extraction_status,
+        extraction_method=extraction_method,
         corrected_value=decl.corrected_value,
         is_applicable=decl.is_applicable,
         verification_status=decl.verification_status,
@@ -249,6 +269,9 @@ def serialize_declaration(decl: Declaration) -> DeclarationResponse:
         verified_at=decl.verified_at,
         correction_reason=decl.correction_reason,
         source_image_id=decl.source_image_id,
+        has_conflict=has_conflict,
+        conflicts=conflicts,
+        source_images=source_images,
         created_at=decl.created_at
     )
 
@@ -856,6 +879,13 @@ def run_inspection_ocr_and_extraction(
     all_raw_text_parts = []
     all_boxes = []
     saved_ocr_results = []
+    per_image_declarations = {}
+
+    product_ctx = {
+        "product_name": inspection.product.product_name if inspection.product else "",
+        "brand_name": inspection.product.brand_name if inspection.product else "",
+        "category": inspection.product.category if inspection.product else "Packaged Food"
+    }
 
     for img in images:
         clean_rel = img.file_path.lstrip("/")
@@ -888,27 +918,61 @@ def run_inspection_ocr_and_extraction(
             all_raw_text_parts.append(ocr_data.raw_text)
         all_boxes.extend(ocr_data.text_boxes)
 
+        # Extract declarations for this individual image
+        img_ctx = dict(product_ctx)
+        img_ctx["ocr_status"] = getattr(ocr_data, "ocr_status", "OCR_SUCCESS")
+        img_items = extraction_service.extract_declarations(
+            full_text=ocr_data.raw_text,
+            text_boxes=ocr_data.text_boxes,
+            product_context=img_ctx,
+            image_id=img.id
+        )
+        per_image_declarations[img.id] = img_items
+
     combined_full_text = "\n".join(all_raw_text_parts)
     primary_image_id = images[0].id if images else None
 
-    product_ctx = {
-        "product_name": inspection.product.product_name if inspection.product else "",
-        "brand_name": inspection.product.brand_name if inspection.product else "",
-        "category": inspection.product.category if inspection.product else "Packaged Food"
-    }
+    # Cross-image verification and conflict detection across all images
+    merged_items, detected_conflicts = cross_image_verification(per_image_declarations)
 
-    extracted_items = extraction_service.extract_declarations(
+    # Fallback to combined text if any field was not found in per-image scans
+    combined_items = extraction_service.extract_declarations(
         full_text=combined_full_text,
         text_boxes=all_boxes,
         product_context=product_ctx,
         image_id=primary_image_id
     )
+    combined_map = {item.field_name: item for item in combined_items if item.extracted_value and item.extraction_status not in ["NOT_FOUND", "OCR_UNAVAILABLE"]}
+
+    for item in merged_items:
+        if (not item.extracted_value or item.extraction_status in ["NOT_FOUND", "OCR_UNAVAILABLE"]) and item.field_name in combined_map:
+            fb = combined_map[item.field_name]
+            item.extracted_value = fb.extracted_value
+            item.normalized_value = fb.normalized_value
+            item.confidence = fb.confidence
+            item.bounding_box = fb.bounding_box
+            item.extraction_status = fb.extraction_status
+            item.source_image_id = primary_image_id
 
     db.query(Declaration).filter(Declaration.inspection_id == inspection_id).delete()
     db.flush()
 
     saved_declarations = []
-    for item in extracted_items:
+    for item in merged_items:
+        reason_val = None
+        if item.has_conflict:
+            reason_val = json.dumps({
+                "conflict": True,
+                "candidates": item.conflicts,
+                "source_images": item.source_images
+            })
+            item.extraction_status = "CONFLICTING"
+            v_status = "NEEDS_MANUAL_VERIFICATION"
+        elif item.extraction_status in ["NOT_FOUND", "OCR_UNAVAILABLE"]:
+            v_status = "NEEDS_MANUAL_VERIFICATION"
+        else:
+            v_status = "UNVERIFIED"
+
         decl = Declaration(
             inspection_id=inspection_id,
             field_name=item.field_name,
@@ -918,14 +982,23 @@ def run_inspection_ocr_and_extraction(
             bounding_box_json=json.dumps(item.bounding_box) if item.bounding_box else None,
             extraction_status=item.extraction_status,
             is_applicable=item.is_applicable,
-            verification_status="UNVERIFIED",
+            verification_status=v_status,
+            correction_reason=reason_val,
             source_image_id=item.source_image_id or primary_image_id
         )
         db.add(decl)
         saved_declarations.append(decl)
 
     inspection.status = "EXTRACTION_COMPLETE"
-    log_audit(db, current_user.officer_id, "OCR_AND_EXTRACTION_COMPLETED", "inspection", inspection_id, inspection_id, details=f"Extracted {len(saved_declarations)} statutory declarations")
+    log_audit(
+        db,
+        current_user.officer_id,
+        "OCR_AND_EXTRACTION_COMPLETED",
+        "inspection",
+        inspection_id,
+        inspection_id,
+        details=f"Extracted {len(saved_declarations)} statutory declarations. Conflicts: {len(detected_conflicts)}"
+    )
     db.commit()
     db.refresh(inspection)
 
@@ -935,7 +1008,8 @@ def run_inspection_ocr_and_extraction(
         total_images_processed=len(images),
         declarations_count=len(saved_declarations),
         ocr_results=[serialize_ocr_result(r) for r in saved_ocr_results],
-        declarations=[serialize_declaration(d) for d in saved_declarations]
+        declarations=[serialize_declaration(d) for d in saved_declarations],
+        conflicts=detected_conflicts
     )
 
 @app.get("/api/inspections/{inspection_id}/ocr", response_model=List[OCRResultResponse], tags=["OCR & Declarations"])
@@ -1126,7 +1200,7 @@ def evaluate_inspection_rules(
             passed_count += 1
         elif res.result_state == "POTENTIAL_NON_COMPLIANCE":
             non_comp_count += 1
-        elif res.result_state == "INSUFFICIENT_EVIDENCE":
+        elif res.result_state in ["INSUFFICIENT_EVIDENCE", "NEEDS_MANUAL_VERIFICATION"]:
             insufficient_count += 1
 
     # Update Inspection Status based on Rule Results
@@ -1139,6 +1213,20 @@ def evaluate_inspection_rules(
 
     inspection.status = "RULE_EVALUATION_COMPLETE"
 
+    # Collect conflicts from declarations for audit and response
+    conflicts_list = []
+    for d in declarations:
+        if getattr(d, "extraction_status", "") == "CONFLICTING" or (d.correction_reason and d.correction_reason.startswith('{"conflict":')):
+            try:
+                cdata = json.loads(d.correction_reason)
+                conflicts_list.append({
+                    "field_name": d.field_name,
+                    "candidates": cdata.get("candidates", []),
+                    "source_images": cdata.get("source_images", [])
+                })
+            except Exception:
+                pass
+
     log_audit(
         db,
         current_user.officer_id,
@@ -1146,7 +1234,7 @@ def evaluate_inspection_rules(
         "inspection",
         inspection_id,
         inspection_id,
-        details=f"Evaluated {len(eval_results)} statutory rules. Passed: {passed_count}, Potential Violations: {non_comp_count}, Insufficient: {insufficient_count}"
+        details=f"Evaluated {len(eval_results)} statutory rules. Passed: {passed_count}, Potential Violations: {non_comp_count}, Insufficient/Manual: {insufficient_count}, Conflicts: {len(conflicts_list)}"
     )
 
     db.commit()
@@ -1160,6 +1248,7 @@ def evaluate_inspection_rules(
         passed_count=passed_count,
         potential_non_compliance_count=non_comp_count,
         insufficient_evidence_count=insufficient_count,
+        conflicts=conflicts_list,
         findings=[serialize_finding(c) for c in saved_checks]
     )
 
@@ -1510,6 +1599,17 @@ def finalize_inspection(
     if inspection.inspector_id != current_user.id and current_user.role != "ADMIN":
         raise HTTPException(status_code=403, detail="Unauthorized access to this inspection")
 
+    # Fast-path idempotency: If already finalized and report exists, return existing record
+    if inspection.status == "COMPLETED" and inspection.report:
+        return FinalizeInspectionResponse(
+            inspection_id=inspection.id,
+            inspection_number=inspection.inspection_number,
+            status=inspection.status,
+            overall_status=inspection.overall_status,
+            finalized_at=inspection.finalized_at,
+            report=serialize_report(inspection.report)
+        )
+
     all_checks = db.query(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection.id).all()
 
     # REPORT-BLOCKING GATE: Block finalization if any non-PASS finding is still PENDING adjudication
@@ -1554,7 +1654,14 @@ def finalize_inspection(
         inspection.notes = req.officer_notes.strip()
 
     # Generate statutory PDF report
-    report_res = generate_inspection_report(inspection_id, db, current_user)
+    try:
+        report_res = generate_inspection_report(inspection_id, db, current_user)
+    except Exception as e:
+        db.commit()  # Preserve finalized status, decisions, and audit trail
+        raise HTTPException(
+            status_code=500,
+            detail=f"Inspection submitted, but the official report could not be generated: {str(e)}. Please retry report generation."
+        )
 
     log_audit(
         db,

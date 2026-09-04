@@ -2,10 +2,13 @@ import os
 import cv2
 import numpy as np
 import time
+import shutil
+import subprocess
 from abc import ABC, abstractmethod
 from typing import List, Dict, Any, Optional
 from pathlib import Path
 from pydantic import BaseModel
+from backend.config import settings
 
 class OCRTextBox(BaseModel):
     text: str
@@ -20,6 +23,7 @@ class OCRResultData(BaseModel):
     text_boxes: List[OCRTextBox]
     processing_time_ms: float
     engine_used: str
+    ocr_status: str = "OCR_SUCCESS"  # 'OCR_SUCCESS', 'OCR_UNAVAILABLE', 'OCR_FAILED'
 
 class BaseOCREngine(ABC):
     @abstractmethod
@@ -29,9 +33,11 @@ class BaseOCREngine(ABC):
 
 class MorphologicalOpenCVOCREngine(BaseOCREngine):
     """
-    Deterministic OpenCV text region segmenter & reader.
-    Identifies high-contrast horizontal text lines, calculates exact bounding boxes [x1, y1, x2, y2],
-    and extracts standard label declarations.
+    Deterministic OpenCV text region segmenter.
+    Identifies high-contrast horizontal text lines and calculates exact bounding boxes [x1, y1, x2, y2].
+    CRITICAL STATUTORY INVARIANT:
+    OpenCV morphological processing alone detects geometric regions, but NEVER manufactures
+    or hallucinates character text. Text is strictly empty when no OCR engine runs.
     """
     def extract_text_boxes(self, image_path: str) -> List[OCRTextBox]:
         img = cv2.imread(image_path)
@@ -67,66 +73,12 @@ class MorphologicalOpenCVOCREngine(BaseOCREngine):
 
         # Sort top-to-bottom
         boxes.sort(key=lambda b: b[1])
-        
-        # Statutory standard declaration text sets
-        standard_lines = [
-            "PREMIUM BASMATI RICE",
-            "NET QUANTITY: 5 kg",
-            "MRP Rs. 450.00 (INCL. OF ALL TAXES)",
-            "MFD: 08/2026",
-            "MFG BY: AGRO FOODS PVT LTD, GORAKHPUR UP",
-            "CUSTOMER CARE: 1800-11-2233 / CARE@AGRO.IN",
-            "COUNTRY OF ORIGIN: INDIA"
-        ]
-        imported_lines = [
-            "EXTRA VIRGIN OLIVE OIL",
-            "NET VOLUME: 1 L",
-            "MRP Rs. 1450.00 (INCL. OF ALL TAXES)",
-            "IMPORTED & PACKED BY: MEDITERRANEAN IMPORTS DELHI",
-            "MFD / IMPORT DATE: 04/2026",
-            "CONSUMER CARE: 1800-77-8899 / CARE@MEDIMPORTS.IN",
-            "COUNTRY OF ORIGIN: SPAIN"
-        ]
-        multipanel_lines = [
-            "NUTRITIONAL FACTS & DETAILS",
-            "PACKED BY: GREEN MILLS PVT LTD",
-            "NET CONTENT: 1000 g",
-            "MAX RETAIL PRICE: Rs. 120.00 (INCL. TAXES)",
-            "FOR COMPLAINTS: 1800-44-5566 / HELP@GREENMILLS.COM",
-            "BATCH: GM-2026-X1"
-        ]
-        missing_lines = [
-            "ORGANIC WHEAT FLOUR",
-            "MRP Rs. 280.00",
-            "MFG BY: NATURAL FARMS INDIA"
-        ]
-
-        active_lines = standard_lines
-        if "imported" in image_path.lower():
-            active_lines = imported_lines
-        elif "multi_panel" in image_path.lower() or "back" in image_path.lower():
-            active_lines = multipanel_lines
-        elif "missing" in image_path.lower():
-            active_lines = missing_lines
-        elif len(boxes) <= 4:
-            active_lines = missing_lines
 
         results: List[OCRTextBox] = []
         for idx, bbox in enumerate(boxes):
-            x1, y1, x2, y2 = bbox
-            roi = gray[max(0, y1):min(height, y2), max(0, x1):min(width, x2)]
-            conf = 0.90
-            if roi.size > 0:
-                lap = cv2.Laplacian(roi, cv2.CV_64F).var()
-                conf = min(0.98, max(0.60, float(lap / 250.0) + 0.65))
-            
-            line_text = ""
-            if idx < len(active_lines):
-                line_text = active_lines[idx]
-            
             results.append(OCRTextBox(
-                text=line_text,
-                confidence=round(conf, 2),
+                text="",
+                confidence=0.0,
                 bbox=bbox,
                 sequence=idx + 1
             ))
@@ -134,29 +86,105 @@ class MorphologicalOpenCVOCREngine(BaseOCREngine):
         return results
 
 class TesseractOCREngine(BaseOCREngine):
-    """Pytesseract OCR integration with graceful fallback if binary is absent."""
+    """
+    Production Pytesseract OCR engine with automated binary auto-detection.
+    Supports configurable TESSERACT_CMD, PATH discovery, and Windows/Linux standard paths.
+    """
+    def __init__(self):
+        self.cmd_path: Optional[str] = None
+        self._detect_tesseract()
+
+    def _detect_tesseract(self):
+        # 1. Check settings or environment variable
+        candidate = getattr(settings, "TESSERACT_CMD", None) or os.environ.get("TESSERACT_CMD")
+        
+        # 2. Check system PATH
+        if not candidate:
+            candidate = shutil.which("tesseract")
+            
+        # 3. Check known standard Windows/Linux installation paths
+        if not candidate:
+            common_paths = [
+                r"C:\Program Files\PDF24\tesseract\tesseract.exe",
+                r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+                r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+                str(Path.home() / "AppData" / "Local" / "Programs" / "Tesseract-OCR" / "tesseract.exe"),
+                "/usr/bin/tesseract",
+                "/usr/local/bin/tesseract",
+            ]
+            for p in common_paths:
+                if os.path.isfile(p):
+                    candidate = p
+                    break
+
+        if candidate and os.path.isfile(candidate):
+            self.cmd_path = candidate
+            try:
+                import pytesseract
+                pytesseract.pytesseract.tesseract_cmd = self.cmd_path
+            except Exception:
+                pass
+
+        # Configure TESSDATA_PREFIX
+        tessdata_dir = getattr(settings, "TESSDATA_PREFIX", None) or os.environ.get("TESSDATA_PREFIX")
+        if not tessdata_dir:
+            local_tessdata = Path(__file__).resolve().parent / "tessdata"
+            if local_tessdata.exists() and (local_tessdata / "eng.traineddata").exists():
+                tessdata_dir = str(local_tessdata)
+        if tessdata_dir and os.path.isdir(tessdata_dir):
+            os.environ["TESSDATA_PREFIX"] = tessdata_dir
+
+    def is_available(self) -> bool:
+        if not self.cmd_path or not os.path.isfile(self.cmd_path):
+            self._detect_tesseract()
+        if not self.cmd_path:
+            return False
+        try:
+            res = subprocess.run([self.cmd_path, "--version"], capture_output=True, text=True, timeout=3)
+            return res.returncode == 0
+        except Exception:
+            return False
+
     def extract_text_boxes(self, image_path: str) -> List[OCRTextBox]:
+        if not self.is_available():
+            return []
         try:
             import pytesseract
             from pytesseract import Output
             img = cv2.imread(image_path)
+            if img is None:
+                return []
+                
             data = pytesseract.image_to_data(img, output_type=Output.DICT)
             
-            boxes: List[OCRTextBox] = []
-            n_boxes = len(data['text'])
-            seq = 1
+            # Group words by line block (block_num, par_num, line_num)
+            lines_dict: Dict[tuple, List[tuple]] = {}
+            n_boxes = len(data.get('text', []))
             for i in range(n_boxes):
-                text = data['text'][i].strip()
+                text = str(data['text'][i]).strip()
                 conf_val = float(data['conf'][i])
                 if text and conf_val > 0:
-                    x, y, w, h = data['left'][i], data['top'][i], data['width'][i], data['height'][i]
-                    boxes.append(OCRTextBox(
-                        text=text,
-                        confidence=round(conf_val / 100.0, 2),
-                        bbox=[x, y, x + w, y + h],
-                        sequence=seq
-                    ))
-                    seq += 1
+                    key = (int(data['block_num'][i]), int(data['par_num'][i]), int(data['line_num'][i]))
+                    x, y, w, h = int(data['left'][i]), int(data['top'][i]), int(data['width'][i]), int(data['height'][i])
+                    lines_dict.setdefault(key, []).append((text, conf_val, [x, y, x + w, y + h]))
+
+            boxes: List[OCRTextBox] = []
+            seq = 1
+            for key, words in lines_dict.items():
+                line_text = " ".join([w[0] for w in words])
+                min_x = min(w[2][0] for w in words)
+                min_y = min(w[2][1] for w in words)
+                max_x = max(w[2][2] for w in words)
+                max_y = max(w[2][3] for w in words)
+                avg_conf = sum(w[1] for w in words) / (len(words) * 100.0)
+                boxes.append(OCRTextBox(
+                    text=line_text,
+                    confidence=round(avg_conf, 2),
+                    bbox=[min_x, min_y, max_x, max_y],
+                    sequence=seq
+                ))
+                seq += 1
+
             return boxes
         except Exception:
             return []
@@ -164,8 +192,8 @@ class TesseractOCREngine(BaseOCREngine):
 class ModularOCRService:
     """
     Modular OCR coordinator.
-    Preprocesses images, runs available OCR backends, aggregates bounding boxes,
-    and returns standardized structured OCR outputs.
+    Preprocesses images, runs real OCR, aggregates bounding boxes,
+    and returns standardized structured OCR outputs with explicit status.
     """
     def __init__(self):
         self.tesseract_engine = TesseractOCREngine()
@@ -194,15 +222,28 @@ class ModularOCRService:
     def process_image(self, image_path: str, image_id: Optional[str] = None) -> OCRResultData:
         start_time = time.time()
         
+        if not self.tesseract_engine.is_available():
+            elapsed_ms = (time.time() - start_time) * 1000.0
+            return OCRResultData(
+                raw_text="",
+                mean_confidence=0.0,
+                text_boxes=[],
+                processing_time_ms=round(elapsed_ms, 2),
+                engine_used="None",
+                ocr_status="OCR_UNAVAILABLE"
+            )
+
         # Preprocessing on derived copy
         prep_path = self.preprocess_image(image_path)
-        
-        boxes = self.tesseract_engine.extract_text_boxes(prep_path)
+        boxes: List[OCRTextBox] = []
+        ocr_status = "OCR_SUCCESS"
         engine_used = "Tesseract"
         
-        if not boxes:
-            boxes = self.morph_engine.extract_text_boxes(prep_path)
-            engine_used = "OpenCV-Morphological"
+        try:
+            boxes = self.tesseract_engine.extract_text_boxes(prep_path)
+        except Exception:
+            ocr_status = "OCR_FAILED"
+            boxes = []
 
         if prep_path != image_path and os.path.exists(prep_path):
             try:
@@ -213,9 +254,10 @@ class ModularOCRService:
         for b in boxes:
             b.image_id = image_id
             
-        mean_conf = float(np.mean([b.confidence for b in boxes])) if boxes else 0.85
+        confs = [b.confidence for b in boxes if b.text]
+        mean_conf = float(np.mean(confs)) if confs else (0.0 if not boxes else 0.5)
         raw_text = "\n".join([b.text for b in boxes if b.text])
-        
+
         elapsed_ms = (time.time() - start_time) * 1000.0
 
         return OCRResultData(
@@ -223,7 +265,8 @@ class ModularOCRService:
             mean_confidence=round(mean_conf, 2),
             text_boxes=boxes,
             processing_time_ms=round(elapsed_ms, 2),
-            engine_used=engine_used
+            engine_used=engine_used,
+            ocr_status=ocr_status
         )
 
 ocr_service = ModularOCRService()

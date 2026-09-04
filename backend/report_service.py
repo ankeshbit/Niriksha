@@ -217,8 +217,102 @@ class StatutoryReportGenerator:
         story.append(prod_table)
         story.append(Spacer(1, 8))
 
+        # 4b. Package Image Evidence & Quality Audit
+        story.append(Paragraph("2. PACKAGE IMAGE EVIDENCE & QUALITY AUDIT", styles["SectionHeading"]))
+        images = getattr(inspection, "images", []) or []
+        img_evidence_rows = [
+            [
+                Paragraph("<b>Package Panel View</b>", styles["BodySmallBold"]),
+                Paragraph("<b>Capture Status</b>", styles["BodySmallBold"]),
+                Paragraph("<b>Image Quality Assessment</b>", styles["BodySmallBold"]),
+                Paragraph("<b>Evidence Reference</b>", styles["BodySmallBold"])
+            ]
+        ]
+        
+        # Front image
+        front_img = next((img for img in images if img.view_type == "front"), None)
+        if front_img:
+            q_status = "Acceptable Quality" if front_img.quality_status in ["GOOD", "ACCEPTABLE"] else "Quality Warning (Blurry / Low Contrast)"
+            ref_name = Path(front_img.file_path).name if front_img.file_path else "front_panel.jpg"
+            img_evidence_rows.append([
+                Paragraph("<b>Front Panel (Required)</b>", styles["BodySmall"]),
+                Paragraph("<font color='green'>Captured</font>", styles["BodySmallBold"]),
+                Paragraph(q_status, styles["BodySmall"]),
+                Paragraph(ref_name, styles["BodySmall"])
+            ])
+        else:
+            img_evidence_rows.append([
+                Paragraph("<b>Front Panel (Required)</b>", styles["BodySmall"]),
+                Paragraph("<font color='red'>Not Provided</font>", styles["BodySmallBold"]),
+                Paragraph("—", styles["BodySmall"]),
+                Paragraph("—", styles["BodySmall"])
+            ])
+
+        # Back image
+        back_img = next((img for img in images if img.view_type == "back"), None)
+        if back_img:
+            q_status = "Acceptable Quality" if back_img.quality_status in ["GOOD", "ACCEPTABLE"] else "Quality Warning (Blurry / Low Contrast)"
+            ref_name = Path(back_img.file_path).name if back_img.file_path else "back_panel.jpg"
+            img_evidence_rows.append([
+                Paragraph("<b>Back Panel (Required)</b>", styles["BodySmall"]),
+                Paragraph("<font color='green'>Captured</font>", styles["BodySmallBold"]),
+                Paragraph(q_status, styles["BodySmall"]),
+                Paragraph(ref_name, styles["BodySmall"])
+            ])
+        else:
+            img_evidence_rows.append([
+                Paragraph("<b>Back Panel (Required)</b>", styles["BodySmall"]),
+                Paragraph("<font color='red'>Not Provided</font>", styles["BodySmallBold"]),
+                Paragraph("—", styles["BodySmall"]),
+                Paragraph("—", styles["BodySmall"])
+            ])
+
+        # Side image (Optional)
+        side_img = next((img for img in images if img.view_type in ["side", "panel"]), None)
+        if side_img:
+            q_status = "Acceptable Quality" if side_img.quality_status in ["GOOD", "ACCEPTABLE"] else "Quality Warning (Blurry / Low Contrast)"
+            ref_name = Path(side_img.file_path).name if side_img.file_path else "side_panel.jpg"
+            img_evidence_rows.append([
+                Paragraph("<b>Side Panel (Optional)</b>", styles["BodySmall"]),
+                Paragraph("<font color='green'>Captured</font>", styles["BodySmallBold"]),
+                Paragraph(q_status, styles["BodySmall"]),
+                Paragraph(ref_name, styles["BodySmall"])
+            ])
+        else:
+            img_evidence_rows.append([
+                Paragraph("<b>Side Panel (Optional)</b>", styles["BodySmall"]),
+                Paragraph("<font color='#6b7280'>Optional — Not Captured</font>", styles["BodySmall"]),
+                Paragraph("N/A", styles["BodySmall"]),
+                Paragraph("No side view required", styles["BodySmall"])
+            ])
+
+        # Additional evidence images if any
+        other_imgs = [img for img in images if img.view_type not in ["front", "back", "side", "panel"]]
+        for o_img in other_imgs:
+            q_status = "Acceptable Quality" if o_img.quality_status in ["GOOD", "ACCEPTABLE"] else "Quality Warning"
+            ref_name = Path(o_img.file_path).name if o_img.file_path else "evidence_panel.jpg"
+            img_evidence_rows.append([
+                Paragraph(f"<b>Additional: {o_img.view_type.title()}</b>", styles["BodySmall"]),
+                Paragraph("<font color='green'>Captured</font>", styles["BodySmallBold"]),
+                Paragraph(q_status, styles["BodySmall"]),
+                Paragraph(ref_name, styles["BodySmall"])
+            ])
+
+        img_table = Table(img_evidence_rows, colWidths=[130, 110, 150, 130])
+        img_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), BG_LIGHT),
+            ('BOX', (0, 0), (-1, -1), 0.5, BORDER_COLOR),
+            ('INNERGRID', (0, 0), (-1, -1), 0.5, BORDER_COLOR),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+            ('LEFTPADDING', (0, 0), (-1, -1), 5),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+        ]))
+        story.append(img_table)
+        story.append(Spacer(1, 8))
+
         # 5. Statutory Declarations Table (Preserving Baseline OCR vs Verified Effective)
-        story.append(Paragraph("2. STATUTORY DECLARATIONS AUDIT (PCR 2011 RULE 6)", styles["SectionHeading"]))
+        story.append(Paragraph("3. STATUTORY DECLARATIONS AUDIT (PCR 2011 RULE 6)", styles["SectionHeading"]))
         decl_rows = [
             [
                 Paragraph("<b>Statutory Field</b>", styles["BodySmallBold"]),
@@ -241,22 +335,46 @@ class StatutoryReportGenerator:
         for d in declarations:
             fname = getattr(d, "field_name", "")
             flabel = field_labels.get(fname, fname.replace("_", " ").title())
-            extracted_val = getattr(d, "extracted_value", "None") or "None / Not Detected"
-            effective_val = getattr(d, "effective_value", None) or extracted_val
+            ext_status = getattr(d, "extraction_status", "EXTRACTED")
             v_status = getattr(d, "verification_status", "UNVERIFIED")
 
-            status_style = styles["BodySmall"]
+            if ext_status == "OCR_UNAVAILABLE":
+                extracted_val = "<i>OCR Unavailable</i>"
+                provenance = "Manual Verification Required"
+            elif ext_status == "NOT_FOUND" or not getattr(d, "extracted_value", None):
+                extracted_val = "<i>Not Detected on Label</i>"
+                provenance = "Pending Verification"
+            else:
+                extracted_val = getattr(d, "extracted_value", "")
+                provenance = "AI/OCR Extracted"
+
+            effective_val = getattr(d, "effective_value", None) or getattr(d, "extracted_value", None)
+            if not effective_val:
+                if fname == "commodity_name" and prod_name:
+                    effective_val = f"{prod_name} (Inspector Input)"
+                else:
+                    effective_val = "Not Declared"
+
+            if v_status == "CORRECTED":
+                status_display = "<b>Inspector Corrected</b>"
+            elif v_status == "NEEDS_MANUAL_VERIFICATION":
+                status_display = "<font color='#b45309'>Needs Verification</font>"
+            elif v_status == "VERIFIED":
+                status_display = "<font color='green'>Verified</font>"
+            else:
+                status_display = v_status
+
             decl_rows.append([
                 Paragraph(flabel, styles["BodySmall"]),
                 Paragraph(extracted_val, styles["BodySmall"]),
-                Paragraph(f"<b>{effective_val}</b>", styles["BodySmallBold"]),
-                Paragraph(v_status, status_style)
+                Paragraph(f"<b>{effective_val}</b>", styles["BodySmall"]),
+                Paragraph(status_display, styles["BodySmall"])
             ])
 
         if len(decl_rows) == 1:
             decl_rows.append([Paragraph("No declarations recorded.", styles["BodySmall"]), Paragraph("-", styles["BodySmall"]), Paragraph("-", styles["BodySmall"]), Paragraph("-", styles["BodySmall"])])
 
-        decl_table = Table(decl_rows, colWidths=[150, 150, 140, 80])
+        decl_table = Table(decl_rows, colWidths=[150, 145, 145, 80])
         decl_table.setStyle(TableStyle([
             ('BACKGROUND', (0, 0), (-1, 0), BG_LIGHT),
             ('BOX', (0, 0), (-1, -1), 0.5, BORDER_COLOR),
@@ -269,19 +387,72 @@ class StatutoryReportGenerator:
         story.append(decl_table)
         story.append(Spacer(1, 8))
 
+        # 2b. Cross-Image Conflicts & Verification Section
+        conflict_rows = [
+            [
+                Paragraph("<b>Field Name</b>", styles["BodySmallBold"]),
+                Paragraph("<b>Conflicting Observations Across Images</b>", styles["BodySmallBold"]),
+                Paragraph("<b>Adjudication Requirement</b>", styles["BodySmallBold"])
+            ]
+        ]
+        has_any_conflict = False
+        for d in declarations:
+            fname = getattr(d, "field_name", "")
+            flabel = field_labels.get(fname, fname.replace("_", " ").title())
+            is_conf = getattr(d, "extraction_status", "") == "CONFLICTING"
+            reason = getattr(d, "correction_reason", "")
+            if is_conf or (reason and reason.startswith('{"conflict":')):
+                has_any_conflict = True
+                cand_str = getattr(d, "extracted_value", "Conflicting values detected across panels")
+                if reason and reason.startswith('{"conflict":'):
+                    try:
+                        cdata = json.loads(reason)
+                        cand_list = [f"{c.get('value')} ({c.get('source_image_id') or 'view'})" for c in cdata.get("candidates", [])]
+                        if cand_list:
+                            cand_str = " vs ".join(cand_list)
+                    except Exception:
+                        pass
+                conflict_rows.append([
+                    Paragraph(flabel, styles["BodySmallBold"]),
+                    Paragraph(f"<font color='#b45309'>{cand_str}</font>", styles["BodySmall"]),
+                    Paragraph("<b>NEEDS MANUAL VERIFICATION</b><br/><font color='#475569'><i>Inspector must verify physical package</i></font>", styles["BodySmall"])
+                ])
+
+        story.append(Paragraph("4. CROSS-IMAGE VERIFICATION & CONFLICT AUDIT", styles["SectionHeading"]))
+        if has_any_conflict:
+            conf_table = Table(conflict_rows, colWidths=[140, 240, 140])
+            conf_table.setStyle(TableStyle([
+                ('BACKGROUND', (0, 0), (-1, 0), BG_LIGHT),
+                ('BOX', (0, 0), (-1, -1), 0.5, colors.HexColor("#f59e0b")),
+                ('INNERGRID', (0, 0), (-1, -1), 0.5, BORDER_COLOR),
+                ('TOPPADDING', (0, 0), (-1, -1), 3),
+                ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+                ('LEFTPADDING', (0, 0), (-1, -1), 5),
+                ('RIGHTPADDING', (0, 0), (-1, -1), 5),
+            ]))
+            story.append(conf_table)
+        else:
+            story.append(Paragraph(
+                "<i>No cross-image conflicts detected. Declaration values are consistent across all captured package views.</i>",
+                styles["BodySmall"]
+            ))
+        story.append(Spacer(1, 8))
+
         # 6. Compliance Evaluation & Potential Findings Summary
         passed_cnt = sum(1 for c in compliance_checks if getattr(c, "result_state", "") == "PASS")
         noncomp_cnt = sum(1 for c in compliance_checks if getattr(c, "result_state", "") == "POTENTIAL_NON_COMPLIANCE")
-        insufficient_cnt = sum(1 for c in compliance_checks if getattr(c, "result_state", "") == "INSUFFICIENT_EVIDENCE")
+        insufficient_cnt = sum(1 for c in compliance_checks if getattr(c, "result_state", "") in ["INSUFFICIENT_EVIDENCE", "NEEDS_MANUAL_VERIFICATION"])
         notapp_cnt = sum(1 for c in compliance_checks if getattr(c, "result_state", "") == "NOT_APPLICABLE")
 
-        story.append(Paragraph("3. DETERMINISTIC LEGAL METROLOGY EVALUATION RESULTS", styles["SectionHeading"]))
+        story.append(Paragraph("5. AI-ASSISTED PRELIMINARY OBSERVATIONS VS. INSPECTOR ADJUDICATIONS", styles["SectionHeading"]))
+        story.append(Paragraph("<i>Core Principle: AI detects and assists. Rules evaluate. Evidence supports. Inspector decides.</i>", styles["DisclaimerText"]))
+        story.append(Spacer(1, 4))
         
         summary_text = (
             f"<b>Rules Evaluated:</b> {len(compliance_checks)} | "
             f"<b>Pass:</b> <font color='green'>{passed_cnt}</font> | "
             f"<b>Potential Non-Compliance:</b> <font color='red'>{noncomp_cnt}</font> | "
-            f"<b>Insufficient Evidence:</b> <font color='orange'>{insufficient_cnt}</font> | "
+            f"<b>Needs Manual Verification:</b> <font color='orange'>{insufficient_cnt}</font> | "
             f"<b>Not Applicable:</b> {notapp_cnt}"
         )
         story.append(Paragraph(summary_text, styles["BodySmallBold"]))
@@ -292,8 +463,8 @@ class StatutoryReportGenerator:
             [
                 Paragraph("<b>Rule & Reference</b>", styles["BodySmallBold"]),
                 Paragraph("<b>Evaluated Value</b>", styles["BodySmallBold"]),
-                Paragraph("<b>Rule Result</b>", styles["BodySmallBold"]),
-                Paragraph("<b>Adjudication</b>", styles["BodySmallBold"]),
+                Paragraph("<b>AI System Finding</b>", styles["BodySmallBold"]),
+                Paragraph("<b>Inspector Decision</b>", styles["BodySmallBold"]),
                 Paragraph("<b>Inspector Remarks</b>", styles["BodySmallBold"])
             ]
         ]
@@ -369,11 +540,24 @@ class StatutoryReportGenerator:
             ('VALIGN', (0, 0), (-1, -1), 'MIDDLE'),
         ]))
         story.append(status_table)
-        story.append(Spacer(1, 10))
+        story.append(Spacer(1, 8))
 
-        # 8. Legal Disclaimer & Statutory Safety Statement
+        # 8. Physical Quantity Limitation Notice
+        quantity_limitation_text = (
+            "<b>PHYSICAL NET QUANTITY LIMITATION:</b><br/>"
+            "Physical net quantity cannot be verified from package images alone. Measurement using appropriate physical verification equipment is required where applicable. "
+            "A package photograph can evaluate the printed net-quantity declaration under Rule 6(1)(c) but cannot verify "
+            "whether the package physically contains the declared quantity. Physical quantity verification requires physical "
+            "measurement/weighing and the applicable sampling/testing procedures under Rule 19 and the schedules of the "
+            "Legal Metrology (Packaged Commodities) Rules, 2011."
+        )
+        story.append(Paragraph(quantity_limitation_text, styles["DisclaimerText"]))
+        story.append(Spacer(1, 6))
+
+        # 9. Legal Disclaimer & Statutory Safety Statement
         disclaimer_text = (
             "<b>STATUTORY DISCLAIMER & AI SAFETY NOTICE:</b><br/>"
+            "Authoritative Legal Source: <i>The Legal Metrology (Packaged Commodities) Rules, 2011</i>.<br/>"
             "This report is generated by NiriKsha (AI-Assisted Legal Metrology Packaged-Commodity Inspection System, SIH Prototype 2026) for inspection-support purposes. "
             "Computer Vision and Machine Learning algorithms are employed exclusively for optical text extraction and data normalization. "
             "All compliance checks are deterministically evaluated against configured statutory rules under the Legal Metrology (Packaged Commodities) "

@@ -120,7 +120,30 @@ class DeterministicRuleEngine:
         source_image_id = self._get_decl_field(decl, "source_image_id") or fallback_image_id
         bbox = self._get_bbox(decl)
 
-        # 2. Insufficient Evidence Check (Poor image quality or unverified low confidence)
+        # 2. Cross-Image Conflict Check
+        has_conflict = self._get_decl_field(decl, "has_conflict", False) or extraction_status == "CONFLICTING"
+        if not is_verified and has_conflict:
+            evidence_item = EvidencePayload(
+                image_id=source_image_id,
+                bounding_box=bbox,
+                highlight_text=effective_val or "[CONFLICTING DECLARATIONS]",
+                reason=f"Conflicting values detected across package images for {rule.title}. Requires inspector manual verification."
+            )
+            return RuleEvaluationResult(
+                rule_code=rule_code,
+                rule_version=rule.rule_version,
+                title=rule.title,
+                statutory_reference=rule.statutory_reference,
+                severity=rule.severity,
+                result_state=RuleResultState.NEEDS_MANUAL_VERIFICATION,
+                effective_value_used=effective_val,
+                original_ocr_value=original_val,
+                is_verified_by_officer=is_verified,
+                explanation=f"Needs Manual Verification: Conflicting values detected across package images for {rule.title}. Requires human adjudication.",
+                evidence_items=[evidence_item]
+            )
+
+        # 3. Insufficient Evidence Check (Poor image quality or unverified low confidence)
         if not is_verified and (has_poor_quality or extraction_status in ["LOW_CONFIDENCE", "NEEDS_REVIEW"]):
             evidence_item = EvidencePayload(
                 image_id=source_image_id,
@@ -279,7 +302,11 @@ class DeterministicRuleEngine:
                 effective_value_used=effective_val,
                 original_ocr_value=original_val,
                 is_verified_by_officer=is_verified,
-                explanation="Net quantity declared in standard metric units conforming to Rule 6(1)(c).",
+                explanation=(
+                    "Net quantity declared in standard metric units conforming to Rule 6(1)(c). "
+                    "Note: Physical net quantity requires appropriate physical verification/testing "
+                    "and cannot be conclusively determined from package photographs alone."
+                ),
                 evidence_items=[evidence_item]
             )
 

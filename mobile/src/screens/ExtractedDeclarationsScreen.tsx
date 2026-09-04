@@ -124,7 +124,7 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
             <View>
               <Text style={styles.headerTitle}>NiriKsha</Text>
               <Text style={styles.headerSubtitle}>
-                ID: {inspectionNumber || 'LM-2026-00891'} • {todayStr}
+                {inspectionNumber ? `ID: ${inspectionNumber}` : (inspectionId ? `ID: ${inspectionId.substring(0, 8).toUpperCase()}` : 'Inspection')} • {todayStr}
               </Text>
             </View>
           </View>
@@ -148,10 +148,13 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
           ) : (
             <View style={styles.tableContainer}>
               {declarations.map((decl, idx) => {
-                const label = FIELD_LABELS[decl.field_type] || decl.field_type.replace(/_/g, ' ');
-                const isConflict = decl.ocr_confidence === 'CONFLICT' || decl.has_conflict;
-                const isNotFound =
-                  !decl.extracted_value && (!decl.effective_value || decl.effective_value === 'NOT_FOUND');
+                const label = FIELD_LABELS[decl.field_name] || FIELD_LABELS[decl.field_type] || (decl.field_name || decl.field_type || '').replace(/_/g, ' ');
+                const isConflict = decl.ocr_confidence === 'CONFLICT' || decl.has_conflict || decl.extraction_status === 'CONFLICTING';
+                const isOcrUnavailable = decl.extraction_status === 'OCR_UNAVAILABLE';
+                const isNotFound = !isConflict && !isOcrUnavailable && (
+                  (!decl.extracted_value && (!decl.effective_value || decl.effective_value === 'NOT_FOUND')) ||
+                  decl.extraction_status === 'NOT_FOUND'
+                );
                 const isLast = idx === declarations.length - 1;
 
                 return (
@@ -160,7 +163,7 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
                     style={[
                       styles.tableRow,
                       isConflict && styles.rowConflict,
-                      isNotFound && styles.rowNotFound,
+                      (isNotFound || isOcrUnavailable) && styles.rowNotFound,
                       !isLast && styles.rowBorder,
                     ]}
                   >
@@ -169,7 +172,7 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
                         style={[
                           styles.fieldLabelCaps,
                           isConflict && styles.textRed,
-                          isNotFound && styles.textAmber,
+                          (isNotFound || isOcrUnavailable) && styles.textAmber,
                         ]}
                       >
                         {label}
@@ -196,13 +199,30 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
                           Two different values found across images. Manual verification required.
                         </Text>
                       </View>
+                    ) : isOcrUnavailable ? (
+                      <View style={styles.notFoundContent}>
+                        <View style={styles.alertHeaderRow}>
+                          <MaterialIcons name="info-outline" size={18} color={colors.statusAmberText} />
+                          <Text style={styles.notFoundTitle}>OCR Unavailable</Text>
+                        </View>
+                        <Text style={styles.notFoundSubtext}>
+                          OCR could not process this package view. Manual verification required.
+                        </Text>
+                        <TouchableOpacity
+                          style={styles.manualEntryBtn}
+                          onPress={() => openEditModal(decl)}
+                          activeOpacity={0.7}
+                        >
+                          <Text style={styles.manualEntryText}>[ Enter Value Manually ]</Text>
+                        </TouchableOpacity>
+                      </View>
                     ) : isNotFound ? (
                       <View style={styles.notFoundContent}>
                         <View style={styles.alertHeaderRow}>
                           <MaterialIcons name="error" size={18} color={colors.statusAmberText} />
-                          <Text style={styles.notFoundTitle}>Field Not Found</Text>
+                          <Text style={styles.notFoundTitle}>Field Not Found on Package</Text>
                         </View>
-                        <Text style={styles.notFoundSubtext}>OCR could not detect this field.</Text>
+                        <Text style={styles.notFoundSubtext}>OCR did not detect this field on the label.</Text>
                         <TouchableOpacity
                           style={styles.manualEntryBtn}
                           onPress={() => openEditModal(decl)}
@@ -224,13 +244,23 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
                       <View style={styles.sourceChip}>
                         <MaterialIcons name="memory" size={14} color={colors.onSurfaceVariant} />
                         <Text style={styles.sourceChipText}>
-                          {decl.verification_status === 'CORRECTED' ? 'Inspector Corrected' : 'AI/OCR Extracted'}
+                          {decl.verification_status === 'CORRECTED'
+                            ? 'Inspector Corrected'
+                            : isOcrUnavailable
+                            ? 'Manual Verification Required'
+                            : isNotFound
+                            ? 'Pending Verification'
+                            : 'AI/OCR Extracted'}
                         </Text>
                       </View>
 
                       {isConflict ? (
                         <View style={styles.conflictChip}>
                           <Text style={styles.conflictChipText}>CONFLICT — NEEDS MANUAL VERIFICATION</Text>
+                        </View>
+                      ) : isOcrUnavailable ? (
+                        <View style={styles.notFoundChip}>
+                          <Text style={styles.notFoundChipText}>OCR: unavailable</Text>
                         </View>
                       ) : isNotFound ? (
                         <View style={styles.notFoundChip}>
@@ -239,7 +269,7 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
                       ) : (
                         <View style={styles.goodChip}>
                           <Text style={styles.goodChipText}>
-                            OCR Confidence: {decl.ocr_confidence || 'High'}
+                            OCR Confidence: {decl.ocr_confidence || (decl.confidence ? `${Math.round(decl.confidence * 100)}%` : 'High')}
                           </Text>
                         </View>
                       )}

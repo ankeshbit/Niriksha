@@ -26,6 +26,8 @@ export const ReviewAndSubmitScreen: React.FC = () => {
 
   const [inspection, setInspection] = useState<any | null>(null);
   const [images, setImages] = useState<any[]>([]);
+  const [declarations, setDeclarations] = useState<any[]>([]);
+  const [findings, setFindings] = useState<any[]>([]);
   const [officerNotes, setOfficerNotes] = useState('Finalized by Inspecting Officer after human verification.');
   const [loading, setLoading] = useState(true);
   const [finalizing, setFinalizing] = useState(false);
@@ -33,12 +35,16 @@ export const ReviewAndSubmitScreen: React.FC = () => {
   useEffect(() => {
     const loadAll = async () => {
       try {
-        const [insp, imgs] = await Promise.all([
+        const [insp, imgs, decls, fnds] = await Promise.all([
           api.getInspection(inspectionId),
           api.getInspectionImages(inspectionId),
+          api.getDeclarations(inspectionId).catch(() => []),
+          api.getFindings(inspectionId).catch(() => []),
         ]);
         setInspection(insp);
         setImages(imgs || []);
+        setDeclarations(decls || []);
+        setFindings(fnds || []);
       } catch (err) {
         console.error('Failed to load review summary:', err);
       } finally {
@@ -49,19 +55,62 @@ export const ReviewAndSubmitScreen: React.FC = () => {
     loadAll();
   }, [inspectionId]);
 
+  const unadjudicatedFindings = findings.filter((f) => {
+    const s = (f.status || f.check_status || '').toUpperCase();
+    const isNonPass =
+      s === 'POTENTIAL_NON_COMPLIANCE' ||
+      s === 'WARNING' ||
+      s === 'NEEDS_MANUAL_VERIFICATION' ||
+      s === 'FAIL';
+    const action = (f.inspector_action || '').toUpperCase();
+    const isPending = !action || action === 'PENDING';
+    return isNonPass && isPending;
+  });
+
   const handleFinalize = async () => {
+    if (unadjudicatedFindings.length > 0) {
+      Alert.alert(
+        'Action Required: Pending Adjudication',
+        `Cannot finalize inspection: ${unadjudicatedFindings.length} finding(s) require inspector adjudication. Please review and adjudicate before submitting.`,
+        [
+          {
+            text: 'Review Findings',
+            onPress: () =>
+              navigation.navigate('Findings', {
+                inspectionId,
+                inspectionNumber: inspection?.inspection_number || inspectionNumber,
+              }),
+          },
+          { text: 'Cancel', style: 'cancel' },
+        ]
+      );
+      return;
+    }
+
     setFinalizing(true);
     try {
-      await api.finalizeInspection(inspectionId, {
+      const res = await api.finalizeInspection(inspectionId, {
         officer_notes: officerNotes.trim(),
       });
 
       navigation.replace('ReportPreview', {
         inspectionId,
-        inspectionNumber: inspection?.inspection_number || inspectionNumber,
+        inspectionNumber: res?.inspection_number || inspection?.inspection_number || inspectionNumber,
       });
     } catch (err: any) {
-      Alert.alert('Finalization Error', err.message || 'Could not finalize inspection.');
+      const errMsg = err?.message || 'Could not finalize inspection.';
+      if (errMsg.includes('report could not be generated')) {
+        Alert.alert(
+          'Report Generation Notice',
+          'Inspection submitted, but the official report could not be generated. Please retry report generation.',
+          [
+            { text: 'Cancel', style: 'cancel' },
+            { text: 'Retry Report', onPress: () => handleFinalize() },
+          ]
+        );
+      } else {
+        Alert.alert('Finalization Error', errMsg);
+      }
     } finally {
       setFinalizing(false);
     }
@@ -124,30 +173,30 @@ export const ReviewAndSubmitScreen: React.FC = () => {
                   <View style={styles.summaryItemRow}>
                     <Text style={styles.summaryItemLabel}>ID</Text>
                     <Text style={styles.summaryItemValueBold}>
-                      {inspection?.inspection_number || inspectionNumber || 'LM-2026-00891'}
+                      {inspection?.inspection_number || inspectionNumber || (inspectionId ? inspectionId.substring(0, 8).toUpperCase() : '—')}
                     </Text>
                   </View>
                   <View style={styles.summaryItemRow}>
                     <Text style={styles.summaryItemLabel}>Product</Text>
                     <Text style={styles.summaryItemValue}>
-                      {inspection?.product?.product_name || 'Premium Basmati Rice'}
+                      {inspection?.product?.product_name || '—'}
                     </Text>
                   </View>
                   <View style={styles.summaryItemRow}>
                     <Text style={styles.summaryItemLabel}>Brand</Text>
                     <Text style={styles.summaryItemValue}>
-                      {inspection?.product?.brand_name || 'Agro Foods'}
+                      {inspection?.product?.brand_name || '—'}
                     </Text>
                   </View>
                   <View style={styles.summaryItemRow}>
                     <Text style={styles.summaryItemLabel}>Category</Text>
                     <Text style={styles.summaryItemValue}>
-                      {inspection?.product?.category || 'Packaged Food'}
+                      {inspection?.product?.category || '—'}
                     </Text>
                   </View>
                   <View style={styles.summaryItemRow}>
                     <Text style={styles.summaryItemLabel}>Location</Text>
-                    <Text style={styles.summaryItemValue}>{inspection?.location || 'Sector 4 Market'}</Text>
+                    <Text style={styles.summaryItemValue}>{inspection?.location || '—'}</Text>
                   </View>
                   <View style={[styles.summaryItemRow, { borderBottomWidth: 0 }]}>
                     <Text style={styles.summaryItemLabel}>Date</Text>
@@ -186,12 +235,12 @@ export const ReviewAndSubmitScreen: React.FC = () => {
 
                   <View style={styles.imageSlotRow}>
                     <MaterialIcons
-                      name={sideCaptured ? 'check-circle' : 'radio-button-unchecked'}
+                      name={sideCaptured ? 'check-circle' : 'remove-circle-outline'}
                       size={20}
                       color={sideCaptured ? colors.statusGreenText : colors.outline}
                     />
-                    <Text style={[styles.imageSlotText, !sideCaptured && { color: colors.outline }]}>
-                      Side
+                    <Text style={[styles.imageSlotText, !sideCaptured && { color: colors.secondary }]}>
+                      Side {sideCaptured ? '' : '(Optional — Not Captured)'}
                     </Text>
                   </View>
 
@@ -242,6 +291,33 @@ export const ReviewAndSubmitScreen: React.FC = () => {
                 </View>
               </View>
 
+              {/* Section 4: CROSS-IMAGE VERIFICATION */}
+              <View style={styles.cardSection}>
+                <View style={styles.cardHeader}>
+                  <Text style={styles.cardHeaderText}>CROSS-IMAGE VERIFICATION</Text>
+                </View>
+                <View style={styles.cardBody}>
+                  {declarations.filter((d: any) => d.has_conflict || d.extraction_status === 'CONFLICTING').length > 0 ? (
+                    <View style={styles.checklistWarnBox}>
+                      <MaterialIcons name="warning" size={18} color={colors.statusAmberText} />
+                      <Text style={styles.checklistWarnText}>
+                        {declarations.filter((d: any) => d.has_conflict || d.extraction_status === 'CONFLICTING').length} conflicting declaration(s) detected across views. Requires inspector adjudication.
+                      </Text>
+                    </View>
+                  ) : (
+                    <View style={styles.checklistRow}>
+                      <MaterialIcons name="check-circle" size={18} color={colors.statusGreenText} />
+                      <Text style={styles.checklistText}>Declarations consistent across all captured package views</Text>
+                    </View>
+                  )}
+                  <View style={{ marginTop: 8 }}>
+                    <Text style={[styles.summaryItemLabel, { fontSize: 11, fontStyle: 'italic' }]}>
+                      Notice: Physical net quantity requires appropriate physical verification/testing and cannot be conclusively determined from package photographs alone.
+                    </Text>
+                  </View>
+                </View>
+              </View>
+
               {/* Section 4: Officer Final Notes */}
               <View style={styles.cardSection}>
                 <View style={styles.cardHeader}>
@@ -259,6 +335,33 @@ export const ReviewAndSubmitScreen: React.FC = () => {
                   />
                 </View>
               </View>
+
+              {/* Unadjudicated Findings Gate Banner */}
+              {unadjudicatedFindings.length > 0 && (
+                <View style={styles.adjudicationAlertBox}>
+                  <View style={styles.adjudicationAlertHeader}>
+                    <MaterialIcons name="gavel" size={20} color={colors.statusRedText} />
+                    <Text style={styles.adjudicationAlertTitle}>
+                      {unadjudicatedFindings.length} Finding{unadjudicatedFindings.length > 1 ? 's' : ''} Pending Adjudication
+                    </Text>
+                  </View>
+                  <Text style={styles.adjudicationAlertText}>
+                    Statutory regulations require inspector adjudication of all non-compliant findings before generating the official report.
+                  </Text>
+                  <TouchableOpacity
+                    style={styles.adjudicateLink}
+                    onPress={() =>
+                      navigation.navigate('Findings', {
+                        inspectionId,
+                        inspectionNumber: inspection?.inspection_number || inspectionNumber,
+                      })
+                    }
+                    activeOpacity={0.8}
+                  >
+                    <Text style={styles.adjudicateLinkText}>Review & Adjudicate Findings →</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
 
               {/* Action Buttons Row */}
               <View style={styles.footerActionRow}>
@@ -281,7 +384,7 @@ export const ReviewAndSubmitScreen: React.FC = () => {
                   ) : (
                     <View style={styles.submitBtnContent}>
                       <MaterialIcons name="assignment-turned-in" size={18} color={colors.onPrimary} />
-                      <Text style={styles.submitBtnText}>Finalize & Submit</Text>
+                      <Text style={styles.submitBtnText}>Submit Inspection & Generate Report</Text>
                     </View>
                   )}
                 </TouchableOpacity>
@@ -540,6 +643,42 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.onPrimary,
     fontWeight: '700',
+  },
+  adjudicationAlertBox: {
+    backgroundColor: colors.statusRedBg,
+    borderWidth: 1,
+    borderColor: colors.statusRedText,
+    borderRadius: borderRadius.DEFAULT,
+    padding: 12,
+    marginBottom: 8,
+    gap: 6,
+  },
+  adjudicationAlertHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  adjudicationAlertTitle: {
+    ...typography.sectionHeader,
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.statusRedText,
+  },
+  adjudicationAlertText: {
+    ...typography.bodySm,
+    fontSize: 12,
+    color: colors.onSurface,
+  },
+  adjudicateLink: {
+    alignSelf: 'flex-start',
+    marginTop: 4,
+  },
+  adjudicateLinkText: {
+    ...typography.labelCaps,
+    fontSize: 12,
+    color: colors.primary,
+    fontWeight: '700',
+    textDecorationLine: 'underline',
   },
 });
 

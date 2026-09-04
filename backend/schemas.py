@@ -130,6 +130,7 @@ class DeclarationResponse(BaseModel):
     confidence: float = 0.0
     bounding_box: Optional[List[int]] = None
     extraction_status: str = "EXTRACTED"
+    extraction_method: Optional[str] = "AI/OCR"
     corrected_value: Optional[str] = None
     is_applicable: bool = True
     verification_status: str = "UNVERIFIED"
@@ -137,6 +138,9 @@ class DeclarationResponse(BaseModel):
     verified_at: Optional[datetime] = None
     correction_reason: Optional[str] = None
     source_image_id: Optional[str] = None
+    has_conflict: bool = False
+    conflicts: Optional[List[Dict[str, Any]]] = None
+    source_images: Optional[List[str]] = None
     created_at: datetime
 
 class UpdateDeclarationRequest(BaseModel):
@@ -190,6 +194,7 @@ class RunOCRResponse(BaseModel):
     declarations_count: int
     ocr_results: List[OCRResultResponse]
     declarations: List[DeclarationResponse]
+    conflicts: List[Dict[str, Any]] = []
 
 class EvaluateInspectionResponse(BaseModel):
     inspection_id: str
@@ -199,6 +204,11 @@ class EvaluateInspectionResponse(BaseModel):
     passed_count: int
     potential_non_compliance_count: int
     insufficient_evidence_count: int
+    conflicts: List[Dict[str, Any]] = []
+    physical_quantity_disclaimer: Optional[str] = (
+        "Physical net quantity requires appropriate physical verification/testing "
+        "and cannot be conclusively determined from package photographs alone."
+    )
     findings: List[FindingResponse]
 
 class ReportResponse(BaseModel):

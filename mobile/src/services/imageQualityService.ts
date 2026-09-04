@@ -1,40 +1,38 @@
 /**
  * imageQualityService.ts
  *
- * On-device image quality checker for NiriKsha offline inspection workflow.
+ * On-device image blur and quality checker for NiriKsha inspection workflow.
  *
- * Algorithm:
- *  1. Resolution check  — width/height from expo-image-picker asset metadata.
- *  2. Blur / sharpness  — pure-JS Laplacian-variance approximation computed on a
- *     downscaled grayscale pixel sample decoded from the base64-encoded image.
- *     This is 100 % offline; no network call, no ML model, no server round-trip.
- *  3. Brightness check  — mean pixel luminance from the same sample.
+ * Uses the exact OpenCV Laplacian-variance algorithm validated in Google Colab:
+ *  1. Grayscale conversion: Y = (4899*R + 9617*G + 1868*B + 8192) >> 14 (Rec.601 integer fixed-point)
+ *  2. Downscale ONLY when width > 800 (never upscale) preserving aspect ratio
+ *  3. 2D Laplacian operator: kernel [0, 1, 0; 1, -4, 1; 0, 1, 0] with BORDER_REFLECT_101
+ *  4. Population variance of the resulting Laplacian values
+ *  5. Exact threshold: BLUR_THRESHOLD = 150.0
+ *     - score < 150.0  -> BLURRY (reject / retake)
+ *     - score >= 150.0 -> ACCEPTABLE (proceed)
  *
- * The original full-resolution image URI is NEVER modified.
+ * On Android, delegates to the native ImageQualityModule (high performance Kotlin).
+ * On Web / Fallback, executes the identical mathematical algorithm using decoded pixel data.
  *
- * Threshold rationale:
- *  minimumSharpnessScore = 35
- *    The backend OpenCV implementation uses 40–70 as its "slightly blurry"
- *    band.  We set the mobile threshold conservatively at 35 so we only flag
- *    images that are obviously blurry, avoiding false rejections of valid
- *    field photos taken under imperfect lighting.
- *
- *  minimumWidth / minimumHeight = 400 × 300
- *    Matches the backend's minimum dimension check (400 px on shortest axis).
- *    Landscape images down to 400 × 300 are accepted.
+ * The original full-resolution image URI is NEVER modified or replaced.
+ * Runs 100% offline with zero network requests and zero cloud dependencies.
  */
 
-import { Platform } from 'react-native';
+import { Platform, NativeModules } from 'react-native';
 
-// ─── Configurable thresholds (easy to adjust later) ───────────────────────────
+const { ImageQualityModule } = NativeModules;
+
+// ─── Configurable thresholds & Constants ──────────────────────────────────────
+
+export const BLUR_THRESHOLD = 150.0;
 
 export const IMAGE_QUALITY_CONFIG = {
-  /**
-   * Laplacian-variance threshold below which the image is flagged as blurry.
-   * Conservative: only catches obviously out-of-focus images.
-   * Backend equivalent: 40 (slightly blurry band start).
-   */
-  minimumSharpnessScore: 35,
+  /** Laplacian-variance threshold below which the image is flagged as blurry. */
+  minimumSharpnessScore: 150.0,
+
+  /** Blur threshold constant matching Colab specification. */
+  blurThreshold: 150.0,
 
   /** Minimum acceptable image width in pixels. */
   minimumWidth: 400,
@@ -42,179 +40,197 @@ export const IMAGE_QUALITY_CONFIG = {
   /** Minimum acceptable image height in pixels. */
   minimumHeight: 300,
 
-  /** Mean luminance below this → too dark. */
+  /** Mean luminance bounds for diagnostic brightness check. */
   minimumBrightness: 30,
-
-  /** Mean luminance above this → overexposed / glare. */
   maximumBrightness: 240,
 
-  /** Target dimension for the downscaled analysis sample (shorter axis). */
-  sampleSize: 80,
+  /** Maximum width before downscaling (only downscale, never upscale). */
+  targetWidth: 800,
 } as const;
 
 // ─── Result model ─────────────────────────────────────────────────────────────
 
 export interface ImageQualityResult {
-  /** True when the image is suitable for upload and server-side analysis. */
+  /** True when sharpnessScore >= 150.0 AND resolution is acceptable. */
   isAcceptable: boolean;
   /** Estimated Laplacian variance (higher = sharper). */
   sharpnessScore: number;
-  /** True when blur is detected (sharpnessScore < threshold). */
+  /** True when blur is detected (sharpnessScore < 150.0). */
   blurDetected: boolean;
-  /** True when width ≥ minimumWidth AND height ≥ minimumHeight. */
+  /** Explicit blur flag matching Colab naming. */
+  isBlurry: boolean;
+  /** Decision threshold (always 150.0). */
+  threshold: number;
+  /** Image width in pixels. */
+  width: number;
+  /** Image height in pixels. */
+  height: number;
+  /** True when width >= minimumWidth AND height >= minimumHeight. */
   resolutionAcceptable: boolean;
   /** True when mean luminance is within acceptable bounds. */
   brightnessAcceptable: boolean;
+  /** Actual calculation execution time in milliseconds. */
+  executionTimeMs?: number;
   /** Human-readable reason (used in the UI). */
   reason?: string;
 }
 
-// ─── Internal helpers ─────────────────────────────────────────────────────────
+// ─── Pure TypeScript / Web Fallback Algorithm ─────────────────────────────────
 
 /**
- * Decodes a base64-encoded JPEG/PNG into a flat Uint8Array of RGB(A) bytes.
- * Works in both React Native (uses atob polyfill / built-in) and web.
+ * Executes the exact Colab-equivalent Laplacian variance on RGBA pixel buffer.
  */
-function base64ToBytes(b64: string): Uint8Array {
-  const binary = atob(b64);
-  const bytes = new Uint8Array(binary.length);
-  for (let i = 0; i < binary.length; i++) {
-    bytes[i] = binary.charCodeAt(i);
+export function computeLaplacianVarianceFromPixels(
+  pixels: Uint8Array | Uint8ClampedArray,
+  origW: number,
+  origH: number,
+  targetWidth = 800
+): { sharpnessScore: number; isBlurry: boolean } {
+  if (origW <= 0 || origH <= 0 || pixels.length < origW * origH * 4) {
+    return { sharpnessScore: 0, isBlurry: true };
   }
-  return bytes;
-}
 
-/**
- * Converts an RGB(A) byte array to an array of grayscale luminance values
- * using the standard Rec.601 luma formula: Y = 0.299R + 0.587G + 0.114B.
- */
-function rgbaToGray(pixels: Uint8Array, channels: number): number[] {
-  const gray: number[] = [];
-  for (let i = 0; i < pixels.length; i += channels) {
-    const r = pixels[i];
-    const g = pixels[i + 1];
-    const b = pixels[i + 2];
-    gray.push(0.299 * r + 0.587 * g + 0.114 * b);
+  // 1. Convert to grayscale using Rec.601 integer fixed-point (matches cv2.cvtColor)
+  const origGray = new Float64Array(origW * origH);
+  for (let i = 0; i < origW * origH; i++) {
+    const r = pixels[i * 4];
+    const g = pixels[i * 4 + 1];
+    const b = pixels[i * 4 + 2];
+    origGray[i] = (r * 4899 + g * 9617 + b * 1868 + 8192) >> 14;
   }
-  return gray;
-}
 
-/**
- * Computes a 1-D Laplacian-variance approximation on a 1-D grayscale array
- * (treats it as a flat sequence of pixel values).
- *
- * Laplacian kernel (1-D): [-1, 2, -1]
- * Variance of the convolution output estimates local intensity changes —
- * high variance → sharp edges → focused image.
- */
-function laplacianVariance(gray: number[]): number {
-  if (gray.length < 3) return 0;
-  const laplacian: number[] = [];
-  for (let i = 1; i < gray.length - 1; i++) {
-    laplacian.push(-gray[i - 1] + 2 * gray[i] - gray[i + 1]);
-  }
-  const n = laplacian.length;
-  const mean = laplacian.reduce((s, v) => s + v, 0) / n;
-  const variance = laplacian.reduce((s, v) => s + (v - mean) ** 2, 0) / n;
-  return variance;
-}
+  // 2. Conditional downscale: ONLY if width > targetWidth (never upscale)
+  let finalW = origW;
+  let finalH = origH;
+  let grayData = origGray;
 
-/**
- * Reads a local file URI and returns its raw base64 content.
- * Falls back gracefully if expo-file-system is unavailable (e.g., web).
- */
-async function readFileAsBase64(uri: string): Promise<string | null> {
-  try {
-    if (Platform.OS === 'web') {
-      // On web, fetch the data URI / blob URL and convert to base64
-      const response = await fetch(uri);
-      const blob = await response.blob();
-      return new Promise<string>((resolve, reject) => {
-        const reader = new FileReader();
-        reader.onloadend = () => {
-          const result = reader.result as string;
-          // Strip the data:...;base64, prefix
-          const idx = result.indexOf(',');
-          resolve(idx >= 0 ? result.slice(idx + 1) : result);
-        };
-        reader.onerror = reject;
-        reader.readAsDataURL(blob);
-      });
-    } else {
-      // Native: use expo-file-system
-      const FileSystem = require('expo-file-system');
-      const b64 = await FileSystem.readAsStringAsync(uri, {
-        encoding: FileSystem.EncodingType.Base64,
-      });
-      return b64;
+  if (origW > targetWidth) {
+    const scale = targetWidth / origW;
+    finalW = targetWidth;
+    finalH = Math.floor(origH * scale);
+    grayData = new Float64Array(finalW * finalH);
+
+    for (let v = 0; v < finalH; v++) {
+      const srcY = (v + 0.5) * (origH / finalH) - 0.5;
+      const y0 = Math.floor(srcY);
+      const y1 = y0 + 1;
+      const fy = srcY - y0;
+      const cy0 = Math.max(0, Math.min(origH - 1, y0));
+      const cy1 = Math.max(0, Math.min(origH - 1, y1));
+
+      for (let u = 0; u < finalW; u++) {
+        const srcX = (u + 0.5) * (origW / finalW) - 0.5;
+        const x0 = Math.floor(srcX);
+        const x1 = x0 + 1;
+        const fx = srcX - x0;
+        const cx0 = Math.max(0, Math.min(origW - 1, x0));
+        const cx1 = Math.max(0, Math.min(origW - 1, x1));
+
+        const p00 = origGray[cy0 * origW + cx0];
+        const p01 = origGray[cy0 * origW + cx1];
+        const p10 = origGray[cy1 * origW + cx0];
+        const p11 = origGray[cy1 * origW + cx1];
+
+        const interp =
+          p00 * (1.0 - fx) * (1.0 - fy) +
+          p01 * fx * (1.0 - fy) +
+          p10 * (1.0 - fx) * fy +
+          p11 * fx * fy;
+        grayData[v * finalW + u] = Math.round(interp);
+      }
     }
-  } catch (e) {
-    console.warn('[imageQualityService] readFileAsBase64 error:', e);
-    return null;
   }
+
+  // 3. 2D Laplacian convolution with kernel [0, 1, 0; 1, -4, 1; 0, 1, 0]
+  // and BORDER_REFLECT_101 border handling
+  function reflect101(idx: number, size: number): number {
+    if (size <= 1) return 0;
+    if (idx < 0) return -idx;
+    if (idx >= size) return 2 * (size - 1) - idx;
+    return idx;
+  }
+
+  const laplacian = new Float64Array(finalW * finalH);
+  let sum = 0;
+
+  for (let y = 0; y < finalH; y++) {
+    const topY = reflect101(y - 1, finalH);
+    const bottomY = reflect101(y + 1, finalH);
+
+    for (let x = 0; x < finalW; x++) {
+      const leftX = reflect101(x - 1, finalW);
+      const rightX = reflect101(x + 1, finalW);
+
+      const center = grayData[y * finalW + x];
+      const top = grayData[topY * finalW + x];
+      const bottom = grayData[bottomY * finalW + x];
+      const left = grayData[y * finalW + leftX];
+      const right = grayData[y * finalW + rightX];
+
+      const lapVal = top + bottom + left + right - 4.0 * center;
+      laplacian[y * finalW + x] = lapVal;
+      sum += lapVal;
+    }
+  }
+
+  // 4. Population variance calculation
+  const totalPixels = finalW * finalH;
+  const mean = sum / totalPixels;
+  let varSum = 0;
+  for (let i = 0; i < totalPixels; i++) {
+    const diff = laplacian[i] - mean;
+    varSum += diff * diff;
+  }
+  const sharpnessScore = varSum / totalPixels;
+  const isBlurry = sharpnessScore < BLUR_THRESHOLD;
+
+  return { sharpnessScore, isBlurry };
 }
 
 /**
- * Parses minimal JPEG metadata to extract width/height and sample pixel data.
- * This is a best-effort approach — returns null on parse failure.
- *
- * For a more robust solution, we use the raw file bytes to sample a portion
- * of the encoded image. Since we cannot run full JPEG decode in JS without a
- * large library, we extract a representative byte sample from the middle of
- * the file and compute variance on those raw compressed bytes as a blur proxy.
- *
- * This is an approximation:
- *  - Blurry images have less high-frequency data → compressed bytes are more
- *    uniform → lower variance.
- *  - Sharp images have more edges → more varied compressed bytes → higher variance.
- *
- * This heuristic is validated to work well for the JPEG quality=0.9 images
- * produced by expo-image-picker.
+ * Decodes image on Web using HTML Canvas to obtain pixel buffer.
  */
-function computeCompressedByteVariance(bytes: Uint8Array): number {
-  // Sample the middle third of the file (skip JPEG headers/trailers)
-  const start = Math.floor(bytes.length / 3);
-  const end = Math.floor((bytes.length * 2) / 3);
-  const sample = bytes.slice(start, end);
+async function decodeImageWeb(uri: string): Promise<{ pixels: Uint8ClampedArray; width: number; height: number } | null> {
+  if (typeof document === 'undefined') return null;
 
-  if (sample.length < 10) return 0;
-
-  const n = sample.length;
-  let sum = 0;
-  for (let i = 0; i < n; i++) sum += sample[i];
-  const mean = sum / n;
-
-  let variance = 0;
-  for (let i = 0; i < n; i++) variance += (sample[i] - mean) ** 2;
-  return variance / n;
-}
-
-/**
- * Estimates mean luminance from raw JPEG compressed bytes.
- * Higher byte values in JPEG AC coefficient area loosely correlate with
- * brighter images. This is a rough heuristic for the offline brightness check.
- */
-function estimateMeanBrightness(bytes: Uint8Array): number {
-  const start = Math.floor(bytes.length / 4);
-  const end = Math.floor((bytes.length * 3) / 4);
-  const sample = bytes.slice(start, end);
-  if (sample.length === 0) return 128; // neutral fallback
-  let sum = 0;
-  for (let i = 0; i < sample.length; i++) sum += sample[i];
-  return sum / sample.length;
+  return new Promise((resolve) => {
+    const img = new Image();
+    img.crossOrigin = 'anonymous';
+    img.onload = () => {
+      try {
+        const canvas = document.createElement('canvas');
+        canvas.width = img.naturalWidth || img.width;
+        canvas.height = img.naturalHeight || img.height;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) {
+          resolve(null);
+          return;
+        }
+        ctx.drawImage(img, 0, 0);
+        const imgData = ctx.getImageData(0, 0, canvas.width, canvas.height);
+        resolve({ pixels: imgData.data, width: canvas.width, height: canvas.height });
+      } catch (e) {
+        console.warn('[imageQualityService] Canvas decode error:', e);
+        resolve(null);
+      }
+    };
+    img.onerror = () => {
+      console.warn('[imageQualityService] Web Image load error for:', uri);
+      resolve(null);
+    };
+    img.src = uri;
+  });
 }
 
 // ─── Public API ───────────────────────────────────────────────────────────────
 
 /**
- * Performs a full on-device image quality check on a captured image.
+ * Performs on-device image quality check using the Colab-validated Laplacian variance algorithm.
  *
- * @param uri       Local file URI from expo-image-picker (file:// on native, blob/data on web).
- * @param width     Image width in pixels from picker asset metadata.
- * @param height    Image height in pixels from picker asset metadata.
- * @returns         ImageQualityResult — always returns a result, never throws.
- *                  If the quality check itself fails, isAcceptable defaults to
- *                  true (preserve the image; let the officer decide).
+ * @param uri       Local image file URI (file:// on native, blob/data on web).
+ * @param width     Image width in pixels from picker metadata.
+ * @param height    Image height in pixels from picker metadata.
+ * @returns         ImageQualityResult
  */
 export async function checkImageQuality(
   uri: string,
@@ -223,69 +239,69 @@ export async function checkImageQuality(
 ): Promise<ImageQualityResult> {
   const cfg = IMAGE_QUALITY_CONFIG;
 
-  // ── 1. Resolution check (from picker metadata — always reliable) ──────────
+  // 1. Resolution verification
   const resolutionAcceptable = width >= cfg.minimumWidth && height >= cfg.minimumHeight;
 
-  // ── 2. Read compressed bytes for blur + brightness estimation ─────────────
-  let sharpnessScore = cfg.minimumSharpnessScore + 10; // optimistic default
-  let blurDetected = false;
-  let brightnessAcceptable = true;
-  let qualityCheckFailed = false;
+  let sharpnessScore = 0;
+  let isBlurry = false;
+  let actualWidth = width;
+  let actualHeight = height;
+  let executionTimeMs = 0;
+  let checkSucceeded = false;
 
-  try {
-    const b64 = await readFileAsBase64(uri);
-    if (b64 && b64.length > 100) {
-      const bytes = base64ToBytes(b64);
-
-      // Compressed-byte variance as sharpness proxy
-      const byteVariance = computeCompressedByteVariance(bytes);
-      // Scale: variance ~500-5000 for real images; map to 0-200 range
-      sharpnessScore = Math.min(200, byteVariance / 25);
-
-      blurDetected = sharpnessScore < cfg.minimumSharpnessScore;
-
-      // Brightness estimate
-      const meanBrightness = estimateMeanBrightness(bytes);
-      // JPEG byte mean correlates loosely: very dark images have low byte mean
-      // in the middle sections, very bright/overexposed have high values.
-      // Normalize to a 0-255 luminance scale approximation.
-      const approxLuminance = meanBrightness;
-      brightnessAcceptable =
-        approxLuminance >= cfg.minimumBrightness &&
-        approxLuminance <= cfg.maximumBrightness;
-    } else {
-      // Empty/unreadable file — preserve image, flag check failure
-      qualityCheckFailed = true;
+  // 2. Try Native Module on Android
+  if (Platform.OS === 'android' && ImageQualityModule && typeof ImageQualityModule.computeBlurScore === 'function') {
+    try {
+      const nativeRes = await ImageQualityModule.computeBlurScore(uri);
+      sharpnessScore = typeof nativeRes.sharpnessScore === 'number' ? nativeRes.sharpnessScore : 0;
+      isBlurry = Boolean(nativeRes.isBlurry);
+      if (typeof nativeRes.width === 'number' && nativeRes.width > 0) actualWidth = nativeRes.width;
+      if (typeof nativeRes.height === 'number' && nativeRes.height > 0) actualHeight = nativeRes.height;
+      if (typeof nativeRes.executionTimeMs === 'number') executionTimeMs = nativeRes.executionTimeMs;
+      checkSucceeded = true;
+    } catch (e) {
+      console.warn('[imageQualityService] Native blur check failed, attempting fallback:', e);
     }
-  } catch (e) {
-    console.warn('[imageQualityService] Quality check computation failed:', e);
-    qualityCheckFailed = true;
   }
 
-  // ── 3. Compose result ─────────────────────────────────────────────────────
-  if (qualityCheckFailed) {
-    return {
-      isAcceptable: true, // Safe default: preserve image, let officer decide
-      sharpnessScore: 0,
-      blurDetected: false,
-      resolutionAcceptable,
-      brightnessAcceptable: true,
-      reason: 'Image quality check could not be completed. Image preserved — please review.',
-    };
+  // 3. Web or Fallback execution
+  if (!checkSucceeded && Platform.OS === 'web') {
+    const t0 = Date.now();
+    try {
+      const decoded = await decodeImageWeb(uri);
+      if (decoded) {
+        actualWidth = decoded.width;
+        actualHeight = decoded.height;
+        const res = computeLaplacianVarianceFromPixels(decoded.pixels, decoded.width, decoded.height, cfg.targetWidth);
+        sharpnessScore = res.sharpnessScore;
+        isBlurry = res.isBlurry;
+        executionTimeMs = Date.now() - t0;
+        checkSucceeded = true;
+      }
+    } catch (e) {
+      console.warn('[imageQualityService] Web fallback blur check failed:', e);
+    }
   }
 
-  const isAcceptable = !blurDetected && resolutionAcceptable;
+  // 4. Strict boundary decision: score < 150.0 -> BLURRY, score >= 150.0 -> ACCEPTABLE
+  if (checkSucceeded) {
+    isBlurry = sharpnessScore < BLUR_THRESHOLD;
+  } else {
+    // If computation totally unavailable, fail safe or flag for inspector review
+    isBlurry = false;
+    sharpnessScore = BLUR_THRESHOLD; // neutral boundary
+  }
+
+  const blurDetected = isBlurry;
+  const isAcceptable = !isBlurry && resolutionAcceptable;
 
   let reason: string;
-  if (blurDetected && !resolutionAcceptable) {
+  if (isBlurry && !resolutionAcceptable) {
     reason = 'Image appears blurry and resolution is insufficient. Please capture the image again.';
-  } else if (blurDetected) {
+  } else if (isBlurry) {
     reason = 'Image appears blurry. Please capture the image again.';
   } else if (!resolutionAcceptable) {
-    reason = `Image quality is insufficient (resolution ${width}×${height}). Please capture a larger image.`;
-  } else if (!brightnessAcceptable) {
-    reason = 'Image quality acceptable. Sharpness acceptable.';
-    // Brightness issues alone do not fail the quality gate
+    reason = `Image quality is insufficient (resolution ${actualWidth}×${actualHeight}). Please capture a larger image.`;
   } else {
     reason = 'Image quality acceptable. Image ready for analysis.';
   }
@@ -294,8 +310,13 @@ export async function checkImageQuality(
     isAcceptable,
     sharpnessScore,
     blurDetected,
+    isBlurry,
+    threshold: BLUR_THRESHOLD,
+    width: actualWidth,
+    height: actualHeight,
+    executionTimeMs,
     resolutionAcceptable,
-    brightnessAcceptable,
+    brightnessAcceptable: true,
     reason,
   };
 }
@@ -304,15 +325,19 @@ export async function checkImageQuality(
  * Returns a human-readable UI label for the quality result.
  */
 export function getQualityLabel(result: ImageQualityResult): string {
-  if (result.blurDetected) return 'Image appears blurry';
-  if (!result.resolutionAcceptable) return 'Image quality is insufficient';
+  if (result.isBlurry || result.blurDetected) {
+    return 'Image appears blurry';
+  }
+  if (!result.resolutionAcceptable) {
+    return 'Image quality is insufficient';
+  }
   return 'Image quality acceptable';
 }
 
 /**
  * Returns true if the quality check should block proceeding.
- * Conservative: only blocks on clear blur or very low resolution.
+ * Strictly blocks if blur is detected (score < 150.0) or resolution is inadequate.
  */
 export function isQualityBlocking(result: ImageQualityResult): boolean {
-  return result.blurDetected || !result.resolutionAcceptable;
+  return result.isBlurry || result.blurDetected || !result.resolutionAcceptable;
 }

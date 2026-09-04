@@ -105,17 +105,58 @@ export const ReportPreviewScreen: React.FC = () => {
     }
   };
 
+  const handleViewReport = async () => {
+    const baseUrl = getApiBaseUrl();
+    const pdfUrl = `${baseUrl}/api/inspections/${inspectionId}/report/pdf`;
+    const token = await authStorage.getToken();
+
+    if (Platform.OS === 'web') {
+      try {
+        const response = await fetch(pdfUrl, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        window.open(url, '_blank');
+      } catch (err: any) {
+        window.open(pdfUrl, '_blank');
+      }
+      return;
+    }
+
+    handleDownloadPDF();
+  };
+
   const status = report?.overall_status || 'POTENTIAL_NON_COMPLIANCE';
   const isCompliant = status === 'NO_POTENTIAL_VIOLATIONS' || status === 'VERIFIED_COMPLIANT';
   const isNonCompliant = status === 'POTENTIAL_NON_COMPLIANCE' || status === 'FAIL';
 
   const dateStr = report?.generated_at
-    ? new Date(report.generated_at).toLocaleDateString('en-GB', {
+    ? new Date(report.generated_at).toLocaleString('en-GB', {
         day: 'numeric',
         month: 'short',
         year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
       })
-    : new Date().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' });
+    : new Date().toLocaleString('en-GB', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+        hour: '2-digit',
+        minute: '2-digit',
+      });
+
+  const reportIdStr =
+    report?.report_number ||
+    (report?.id
+      ? `REP-${report.id.substring(0, 8).toUpperCase()}`
+      : inspectionNumber
+      ? `REP-${inspectionNumber}`
+      : inspectionId
+      ? `REP-${inspectionId.substring(0, 8).toUpperCase()}`
+      : 'PENDING');
 
   return (
     <SafeAreaView style={styles.safeArea}>
@@ -151,6 +192,17 @@ export const ReportPreviewScreen: React.FC = () => {
             <MaterialIcons name="arrow-back" size={16} color={colors.onSurfaceVariant} />
             <Text style={styles.backLinkText}>BACK TO INSPECTION</Text>
           </TouchableOpacity>
+
+          {/* Inspection Completed Banner */}
+          <View style={styles.completionBanner}>
+            <View style={styles.completionIconBox}>
+              <MaterialIcons name="verified" size={26} color={colors.statusGreenText} />
+            </View>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.completionTitle}>Inspection Completed</Text>
+              <Text style={styles.completionSubtitle}>Official Report Generated</Text>
+            </View>
+          </View>
 
           {loading ? (
             <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 40 }} />
@@ -206,11 +258,26 @@ export const ReportPreviewScreen: React.FC = () => {
                 <View style={styles.detailItem}>
                   <Text style={styles.detailLabel}>INSPECTION ID</Text>
                   <Text style={styles.detailValueBold}>
-                    {report?.inspection_number || inspectionNumber || 'LM-2026-00001'}
+                    {report?.inspection_number || inspectionNumber || (inspectionId ? inspectionId.substring(0, 8).toUpperCase() : '—')}
                   </Text>
                 </View>
                 <View style={styles.detailItem}>
-                  <Text style={styles.detailLabel}>DATE</Text>
+                  <Text style={styles.detailLabel}>REPORT ID</Text>
+                  <Text style={styles.detailValueBold}>{reportIdStr}</Text>
+                </View>
+                <View style={styles.detailItem}>
+                  <Text style={styles.detailLabel}>FINAL STATUS</Text>
+                  <Text
+                    style={[
+                      styles.detailValueBold,
+                      { color: isCompliant ? colors.statusGreenText : colors.statusAmberText },
+                    ]}
+                  >
+                    {status}
+                  </Text>
+                </View>
+                <View style={styles.detailItem}>
+                  <Text style={styles.detailLabel}>GENERATED DATE / TIME</Text>
                   <Text style={styles.detailValue}>{dateStr}</Text>
                 </View>
                 <View style={styles.detailItem}>
@@ -237,21 +304,34 @@ export const ReportPreviewScreen: React.FC = () => {
 
               {/* Actions */}
               <View style={styles.actionsBox}>
-                <TouchableOpacity
-                  style={styles.downloadPdfBtn}
-                  onPress={handleDownloadPDF}
-                  disabled={downloading}
-                  activeOpacity={0.85}
-                >
-                  {downloading ? (
-                    <ActivityIndicator size="small" color={colors.onPrimary} />
-                  ) : (
+                <View style={styles.actionButtonsRow}>
+                  <TouchableOpacity
+                    style={styles.viewReportBtn}
+                    onPress={handleViewReport}
+                    activeOpacity={0.85}
+                  >
                     <View style={styles.btnRow}>
-                      <MaterialIcons name="download" size={18} color={colors.onPrimary} />
-                      <Text style={styles.downloadPdfText}>Download Signed PDF Report</Text>
+                      <MaterialIcons name="visibility" size={18} color={colors.primary} />
+                      <Text style={styles.viewReportText}>View Report</Text>
                     </View>
-                  )}
-                </TouchableOpacity>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={styles.downloadPdfBtn}
+                    onPress={handleDownloadPDF}
+                    disabled={downloading}
+                    activeOpacity={0.85}
+                  >
+                    {downloading ? (
+                      <ActivityIndicator size="small" color={colors.onPrimary} />
+                    ) : (
+                      <View style={styles.btnRow}>
+                        <MaterialIcons name="download" size={18} color={colors.onPrimary} />
+                        <Text style={styles.downloadPdfText}>Download PDF</Text>
+                      </View>
+                    )}
+                  </TouchableOpacity>
+                </View>
 
                 <TouchableOpacity
                   style={styles.doneBtn}
@@ -446,7 +526,58 @@ const styles = StyleSheet.create({
     borderTopWidth: 1,
     borderTopColor: colors.borderSubtle,
   },
+  completionBanner: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 12,
+    backgroundColor: colors.statusGreenBg,
+    borderWidth: 1,
+    borderColor: 'rgba(34, 197, 94, 0.3)',
+    borderRadius: borderRadius.DEFAULT,
+    padding: 14,
+    marginBottom: 4,
+  },
+  completionIconBox: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: 'rgba(34, 197, 94, 0.15)',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  completionTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.statusGreenText,
+  },
+  completionSubtitle: {
+    fontSize: 12,
+    fontWeight: '500',
+    color: colors.onSurface,
+    marginTop: 2,
+  },
+  actionButtonsRow: {
+    flexDirection: 'row',
+    gap: 10,
+  },
+  viewReportBtn: {
+    flex: 1,
+    backgroundColor: colors.surfaceContainerLowest,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    paddingVertical: 12,
+    borderRadius: borderRadius.DEFAULT,
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  viewReportText: {
+    ...typography.sectionHeader,
+    fontSize: 14,
+    color: colors.primary,
+    fontWeight: '700',
+  },
   downloadPdfBtn: {
+    flex: 1,
     backgroundColor: colors.primary,
     paddingVertical: 12,
     borderRadius: borderRadius.DEFAULT,

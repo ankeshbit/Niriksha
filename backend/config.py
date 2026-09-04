@@ -34,6 +34,8 @@ class Settings(BaseSettings):
 
     # OCR & AI Providers
     OCR_ENGINE: str = "auto"
+    TESSERACT_CMD: Optional[str] = None
+    TESSDATA_PREFIX: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
 
     # Supabase Configuration

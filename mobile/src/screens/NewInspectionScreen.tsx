@@ -52,6 +52,8 @@ export const NewInspectionScreen: React.FC = () => {
   // Ref-based in-flight guard: prevents a second POST even if the user manages
   // to press Continue again before the first setLoading(true) re-render fires.
   const submittingRef = useRef(false);
+  // Client draft ID for idempotent backend creation & offline consistency
+  const clientDraftIdRef = useRef(draftStorage.generateClientDraftId());
 
   useEffect(() => {
     authStorage.getProfile().then((prof) => {
@@ -90,6 +92,7 @@ export const NewInspectionScreen: React.FC = () => {
         setInspectionContext('Retail');
         setNotes('');
         setLoading(false);
+        clientDraftIdRef.current = draftStorage.generateClientDraftId();
       }
     }, [])
   );
@@ -387,7 +390,7 @@ export const NewInspectionScreen: React.FC = () => {
    * capture package images offline immediately.
    */
   const saveOfflineDraftAndCapture = async (errorMsg?: string) => {
-    const clientDraftId = draftStorage.generateClientDraftId();
+    const clientDraftId = clientDraftIdRef.current || draftStorage.generateClientDraftId();
     const combinedNotes = [
       manufacturer ? `Manufacturer: ${manufacturer}` : '',
       source ? `Source: ${source}` : '',
@@ -465,6 +468,7 @@ export const NewInspectionScreen: React.FC = () => {
         .join(' | ');
 
       const inspection = await api.createInspection({
+        client_draft_id: clientDraftIdRef.current,
         product_name: productName.trim(),
         brand_name: brandName.trim(),
         category,

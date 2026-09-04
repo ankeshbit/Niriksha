@@ -28,6 +28,7 @@ export const FindingsScreen: React.FC = () => {
   const { inspectionId, inspectionNumber } = route.params;
 
   const [findings, setFindings] = useState<any[]>([]);
+  const [inspection, setInspection] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
   // Adjudication Modal state
@@ -39,7 +40,12 @@ export const FindingsScreen: React.FC = () => {
 
   const loadFindings = async () => {
     try {
-      let data = await api.getFindings(inspectionId);
+      const [findingsData, inspData] = await Promise.all([
+        api.getFindings(inspectionId).catch(() => []),
+        api.getInspection(inspectionId).catch(() => null),
+      ]);
+      if (inspData) setInspection(inspData);
+      let data = findingsData;
       if (!data || data.length === 0) {
         const evalRes = await api.evaluateRules(inspectionId);
         data = evalRes.findings || [];
@@ -157,7 +163,7 @@ export const FindingsScreen: React.FC = () => {
           <View style={styles.sectionHeaderBox}>
             <Text style={styles.sectionHeaderTitle}>Inspection Findings</Text>
             <Text style={styles.sectionHeaderSubtitle}>
-              Report ID: {inspectionNumber || 'LM-2026-00891'}
+              Inspection: {inspectionNumber || (inspectionId ? `ID: ${inspectionId.substring(0, 8).toUpperCase()}` : 'In Progress')}
             </Text>
           </View>
 
@@ -259,15 +265,25 @@ export const FindingsScreen: React.FC = () => {
                                   {finding.adjudication
                                     ? `Decision: ${finding.adjudication}`
                                     : isFail
-                                    ? 'Potential Non-Compliance Identified'
+                                    ? 'Potential Non-Compliance — Pending Inspector Confirmation'
                                     : isWarn
-                                    ? 'Review Needed'
+                                    ? 'Needs Manual Verification'
                                     : 'Compliant'}
                                 </Text>
                               </View>
                             </View>
 
                             <Text style={styles.findingDescText}>{finding.description}</Text>
+
+                            {/* Physical Net Quantity Limitation Notice */}
+                            {(finding.rule_code === 'PCR_RULE_06_1_C' || (finding.title && finding.title.toLowerCase().includes('net quantity'))) && (
+                              <View style={styles.physicalNoticeBox}>
+                                <MaterialIcons name="info-outline" size={14} color={colors.onSurfaceVariant} />
+                                <Text style={styles.physicalNoticeText}>
+                                  Physical net quantity requires appropriate physical verification/testing and cannot be conclusively determined from package photographs alone.
+                                </Text>
+                              </View>
+                            )}
 
                             {/* AI Detection Basis */}
                             <View style={styles.aiBasisBox}>
@@ -374,12 +390,14 @@ export const FindingsScreen: React.FC = () => {
               <View style={styles.contextCard}>
                 <Text style={styles.contextTitle}>Inspection Context</Text>
                 <View style={styles.contextItemRow}>
-                  <Text style={styles.contextLabel}>Entity:</Text>
-                  <Text style={styles.contextValueBold}>Agro Foods Pvt. Ltd.</Text>
+                  <Text style={styles.contextLabel}>Entity / Brand:</Text>
+                  <Text style={styles.contextValueBold}>
+                    {inspection?.product?.brand_name || inspection?.product?.product_name || '—'}
+                  </Text>
                 </View>
                 <View style={styles.contextItemRow}>
                   <Text style={styles.contextLabel}>Location:</Text>
-                  <Text style={styles.contextValue}>Sector 4 Market</Text>
+                  <Text style={styles.contextValue}>{inspection?.location || '—'}</Text>
                 </View>
                 <View style={styles.contextItemRow}>
                   <Text style={styles.contextLabel}>Date:</Text>
@@ -931,6 +949,24 @@ const styles = StyleSheet.create({
     ...typography.bodySm,
     fontWeight: '700',
     color: colors.onPrimary,
+  },
+  physicalNoticeBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    backgroundColor: colors.surfaceContainer,
+    borderRadius: borderRadius.sm,
+    paddingHorizontal: 8,
+    paddingVertical: 6,
+    gap: 6,
+    marginVertical: 4,
+  },
+  physicalNoticeText: {
+    flex: 1,
+    ...typography.bodySm,
+    fontSize: 11,
+    lineHeight: 14,
+    color: colors.onSurfaceVariant,
+    fontStyle: 'italic',
   },
 });
 
