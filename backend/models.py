@@ -31,6 +31,8 @@ class User(Base):
     password_hash = Column(String(255), nullable=False)
     role = Column(String(20), default="INSPECTOR", nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow)
+    last_login_at = Column(DateTime, nullable=True)
+    previous_login_at = Column(DateTime, nullable=True)
 
     inspections = relationship("Inspection", back_populates="inspector")
     reviews = relationship("InspectorReview", back_populates="officer")
@@ -260,4 +262,5 @@ class Report(Base):
 
     @property
     def download_url(self) -> str:
+        return f"/api/inspections/{self.inspection_id}/report/pdf"
         return f"/api/inspections/{self.inspection_id}/report/pdf"

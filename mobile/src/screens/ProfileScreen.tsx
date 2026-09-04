@@ -19,6 +19,7 @@ import { BottomNav } from '../components/BottomNav';
 import { ProfileAvatar } from '../components/ProfileAvatar';
 import { authStorage } from '../services/authStorage';
 import { api } from '../services/api';
+import { formatLastLogin } from '../services/dateUtils';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
@@ -60,12 +61,30 @@ export const ProfileScreen: React.FC = () => {
     // Load profile: first from local storage, then revalidate from server
     const loadProfile = async () => {
       const localProf = await authStorage.getProfile();
+      console.log('[LastLogin] Local previous_login_at:', localProf?.previous_login_at);
       if (localProf) setProfile(localProf);
       try {
         const serverProf = await api.getProfile();
         if (serverProf) {
-          setProfile(serverProf);
-          await authStorage.saveProfile(serverProf);
+          console.log('[LastLogin] Server previous_login_at:', serverProf.previous_login_at);
+          console.log('[LastLogin] Server last_login_at:', serverProf.last_login_at);
+
+          // IMPORTANT: Do not allow /api/auth/me to replace a valid session's previous_login_at with null or current last_login_at
+          let resolvedPreviousLogin = localProf?.previous_login_at ?? null;
+          if (!resolvedPreviousLogin && serverProf.previous_login_at) {
+            resolvedPreviousLogin = serverProf.previous_login_at;
+          } else if (serverProf.previous_login_at && serverProf.previous_login_at !== serverProf.last_login_at) {
+            resolvedPreviousLogin = serverProf.previous_login_at;
+          }
+
+          const mergedProf = {
+            ...localProf,
+            ...serverProf,
+            previous_login_at: resolvedPreviousLogin,
+          };
+          console.log('[LastLogin] Final profile previous_login_at:', mergedProf.previous_login_at);
+          setProfile(mergedProf);
+          await authStorage.saveProfile(mergedProf);
         }
       } catch (err) {
         // Server validation failed — use local cache
@@ -237,6 +256,8 @@ export const ProfileScreen: React.FC = () => {
     setSignOutModalVisible(true);
   };
 
+  console.log('[LastLogin] Rendering previous_login_at:', profile?.previous_login_at);
+
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
       <View style={styles.container}>
@@ -381,7 +402,7 @@ export const ProfileScreen: React.FC = () => {
                   <MaterialIcons name="history" size={22} color={colors.onSurfaceVariant} />
                   <View style={styles.actionTextCol}>
                     <Text style={styles.fieldValueMd}>Last Login</Text>
-                    <Text style={styles.fieldValueSm}>Today, 08:45 AM from Current Device</Text>
+                    <Text style={styles.fieldValueSm}>{formatLastLogin(profile?.previous_login_at)}</Text>
                   </View>
                 </View>
               </View>

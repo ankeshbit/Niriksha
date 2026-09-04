@@ -342,9 +342,17 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
             detail="Invalid Officer ID or password"
         )
 
+    # Capture previous login timestamp before updating to current session time
+    previous_login_at = officer.last_login_at
+    current_login_at = datetime.utcnow()
+
+    officer.previous_login_at = previous_login_at
+    officer.last_login_at = current_login_at
+
     access_token = create_access_token(data={"sub": officer.officer_id, "role": officer.role})
     log_audit(db, officer.officer_id, "LOGIN_SUCCESS", "user", officer.id, details="Officer logged in successfully")
     db.commit()
+    db.refresh(officer)
 
     return TokenResponse(
         access_token=access_token,
@@ -354,7 +362,9 @@ def login(req: LoginRequest, db: Session = Depends(get_db)):
         designation=officer.designation,
         zone=officer.zone,
         email=officer.email,
-        phone=officer.phone
+        phone=officer.phone,
+        last_login_at=officer.last_login_at,
+        previous_login_at=previous_login_at
     )
 
 @app.get("/api/auth/me", response_model=UserProfileResponse, tags=["Authentication"])
@@ -1760,3 +1770,4 @@ def root_index():
 </body>
 </html>"""
     return HTMLResponse(content=html_content)
+

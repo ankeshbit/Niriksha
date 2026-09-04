@@ -174,3 +174,4 @@ CREATE INDEX IF NOT EXISTS idx_inspections_status ON inspections(status, overall
 CREATE INDEX IF NOT EXISTS idx_declarations_inspection ON declarations(inspection_id);
 CREATE INDEX IF NOT EXISTS idx_checks_inspection ON compliance_checks(inspection_id);
 CREATE INDEX IF NOT EXISTS idx_audit_inspection ON audit_logs(inspection_id);
+CREATE INDEX IF NOT EXISTS idx_audit_inspection ON audit_logs(inspection_id);

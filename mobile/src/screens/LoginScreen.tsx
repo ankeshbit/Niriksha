@@ -87,99 +87,99 @@ export const LoginScreen: React.FC = () => {
       >
         <StatusBar barStyle="dark-content" backgroundColor={colors.surface} />
         <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-        <View style={styles.card}>
-          {/* Header Section */}
-          <View style={styles.headerSection}>
-            <Image
-              source={require('../../assets/niriksha_logo.png')}
-              style={styles.logoImage}
-              resizeMode="contain"
-            />
-            <Text style={styles.subtitleText}>AI-Assisted Legal Metrology Inspection</Text>
-          </View>
-
-          {/* Form Section */}
-          <View style={styles.formSection}>
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Inspector ID / Username</Text>
-              <TextInput
-                style={styles.textInput}
-                value={officerId}
-                onChangeText={(text) => {
-                  setOfficerId(text);
-                  if (errorMessage) setErrorMessage(null);
-                }}
-                placeholder="DOCA-INSP-842"
-                placeholderTextColor={colors.outline}
-                autoCapitalize="characters"
+          <View style={styles.card}>
+            {/* Header Section */}
+            <View style={styles.headerSection}>
+              <Image
+                source={require('../../assets/niriksha_logo.png')}
+                style={styles.logoImage}
+                resizeMode="contain"
               />
+              <Text style={styles.subtitleText}>AI-Assisted Legal Metrology Inspection</Text>
             </View>
 
-            <View style={styles.inputGroup}>
-              <Text style={styles.inputLabel}>Password</Text>
-              <View style={styles.passwordContainer}>
+            {/* Form Section */}
+            <View style={styles.formSection}>
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Inspector ID / Username</Text>
                 <TextInput
-                  style={[styles.textInput, styles.passwordInput]}
-                  value={password}
+                  style={styles.textInput}
+                  value={officerId}
                   onChangeText={(text) => {
-                    setPassword(text);
+                    setOfficerId(text);
                     if (errorMessage) setErrorMessage(null);
                   }}
-                  placeholder="••••••••"
+                  placeholder="DOCA-INSP-842"
                   placeholderTextColor={colors.outline}
-                  secureTextEntry={!showPassword}
+                  autoCapitalize="characters"
                 />
-                <TouchableOpacity
-                  style={styles.eyeIcon}
-                  onPress={() => setShowPassword(!showPassword)}
-                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                >
-                  <MaterialIcons
-                    name={showPassword ? 'visibility-off' : 'visibility'}
-                    size={20}
-                    color={colors.onSurfaceVariant}
+              </View>
+
+              <View style={styles.inputGroup}>
+                <Text style={styles.inputLabel}>Password</Text>
+                <View style={styles.passwordContainer}>
+                  <TextInput
+                    style={[styles.textInput, styles.passwordInput]}
+                    value={password}
+                    onChangeText={(text) => {
+                      setPassword(text);
+                      if (errorMessage) setErrorMessage(null);
+                    }}
+                    placeholder="••••••••"
+                    placeholderTextColor={colors.outline}
+                    secureTextEntry={!showPassword}
                   />
-                </TouchableOpacity>
-              </View>
-            </View>
-
-            {/* Error Message Banner */}
-            {errorMessage ? (
-              <View style={styles.errorBanner}>
-                <MaterialIcons name="error" size={18} color={colors.statusRedText} />
-                <Text style={styles.errorText}>{errorMessage}</Text>
-              </View>
-            ) : null}
-
-            {/* Submit Button */}
-            <TouchableOpacity
-              style={styles.submitButton}
-              onPress={handleLogin}
-              disabled={loading}
-              activeOpacity={0.85}
-            >
-              {loading ? (
-                <ActivityIndicator size="small" color={colors.onPrimary} />
-              ) : (
-                <View style={styles.buttonContent}>
-                  <Text style={styles.submitButtonText}>Sign In</Text>
-                  <MaterialIcons name="login" size={18} color={colors.onPrimary} style={{ marginLeft: 6 }} />
+                  <TouchableOpacity
+                    style={styles.eyeIcon}
+                    onPress={() => setShowPassword(!showPassword)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <MaterialIcons
+                      name={showPassword ? 'visibility-off' : 'visibility'}
+                      size={20}
+                      color={colors.onSurfaceVariant}
+                    />
+                  </TouchableOpacity>
                 </View>
-              )}
-            </TouchableOpacity>
-          </View>
-        </View>
+              </View>
 
-        {/* Stitch Footer */}
-        <View style={styles.footerSection}>
-          <View style={styles.footerLockRow}>
-            <MaterialIcons name="lock" size={16} color={colors.onSurfaceVariant} />
-            <Text style={styles.footerLockText}>Authorized inspection personnel only</Text>
+              {/* Error Message Banner */}
+              {errorMessage ? (
+                <View style={styles.errorBanner}>
+                  <MaterialIcons name="error" size={18} color={colors.statusRedText} />
+                  <Text style={styles.errorText}>{errorMessage}</Text>
+                </View>
+              ) : null}
+
+              {/* Submit Button */}
+              <TouchableOpacity
+                style={styles.submitButton}
+                onPress={handleLogin}
+                disabled={loading}
+                activeOpacity={0.85}
+              >
+                {loading ? (
+                  <ActivityIndicator size="small" color={colors.onPrimary} />
+                ) : (
+                  <View style={styles.buttonContent}>
+                    <Text style={styles.submitButtonText}>Sign In</Text>
+                    <MaterialIcons name="login" size={18} color={colors.onPrimary} style={{ marginLeft: 6 }} />
+                  </View>
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
-          <Text style={styles.footerPrototypeText}>NiriKsha — SIH Prototype 2026</Text>
-        </View>
-      </ScrollView>
-    </KeyboardAvoidingView>
+
+          {/* Stitch Footer */}
+          <View style={styles.footerSection}>
+            <View style={styles.footerLockRow}>
+              <MaterialIcons name="lock" size={16} color={colors.onSurfaceVariant} />
+              <Text style={styles.footerLockText}>Authorized inspection personnel only</Text>
+            </View>
+            <Text style={styles.footerPrototypeText}>NiriKsha — SIH Prototype 2026</Text>
+          </View>
+        </ScrollView>
+      </KeyboardAvoidingView>
     </SafeAreaView>
   );
 };
@@ -317,3 +317,4 @@ const styles = StyleSheet.create({
     color: colors.onSurfaceVariant,
   },
 });
+

@@ -59,32 +59,41 @@ export const NewInspectionScreen: React.FC = () => {
     });
   }, []);
 
-  // Reset the form every time this screen comes into focus so no stale data
-  // can accidentally pass validation on a subsequent visit.
+  // Track whether the next focus event should reset the form.
+  // Resets ONLY when arriving afresh from another screen (e.g., navigating from Dashboard or after an inspection).
+  // Does NOT reset when re-focusing due to system permission dialog, alert dismissal,
+  // browser window focus, or while location detection is active.
+  const shouldResetOnNextFocusRef = useRef(true);
+
+  useEffect(() => {
+    const unsubscribeBlur = navigation.addListener('blur', () => {
+      shouldResetOnNextFocusRef.current = true;
+    });
+    return unsubscribeBlur;
+  }, [navigation]);
+
   useFocusEffect(
     useCallback(() => {
-      setProductName('');
-      setBrandName('');
-      setCategory('Packaged Food');
-      setLocation('');
-      setLocationLoading(false);
-      setLocationStatus('idle');
-      locationLoadingRef.current = false;
-      setAdditionalDetailsOpen(false);
-      setBatchNumber('');
-      setManufacturer('');
-      setSource('');
-      setInspectionContext('Retail');
-      setNotes('');
-      setLoading(false);
+      if (shouldResetOnNextFocusRef.current && !locationLoadingRef.current) {
+        shouldResetOnNextFocusRef.current = false;
+        setProductName('');
+        setBrandName('');
+        setCategory('Packaged Food');
+        setLocation('');
+        setLocationLoading(false);
+        setLocationStatus('idle');
+        locationLoadingRef.current = false;
+        setAdditionalDetailsOpen(false);
+        setBatchNumber('');
+        setManufacturer('');
+        setSource('');
+        setInspectionContext('Retail');
+        setNotes('');
+        setLoading(false);
+      }
     }, [])
   );
 
-  /**
-   * Detects current GPS location and reverse-geocodes it into the Location field.
-   * Only runs when the inspector explicitly taps "Use Current Location".
-   * Never blocks manual entry. Handles all failure modes gracefully.
-   */
   /**
    * Helper to run a promise with a timeout so GPS/network operations never hang indefinitely.
    */
@@ -98,80 +107,75 @@ export const NewInspectionScreen: React.FC = () => {
   /**
    * Formats a reverse-geocoded place into a clean, human-readable address.
    * Handles Indian postal structures as well as standard global formats.
+   * Always returns a readable address (e.g. "Azadpur, Delhi, India" or "Sector/Street, City, Region, Country")
+   * and never raw latitude/longitude coordinates.
    */
   const formatGeocodedAddress = (place: Location.LocationGeocodedAddress): string => {
-    // If a full formattedAddress is already provided by the OS geocoder (Android), prefer it
+    // If a full formattedAddress is already provided by the OS geocoder, verify it's not raw coords
     if (place.formattedAddress && typeof place.formattedAddress === 'string' && place.formattedAddress.trim()) {
-      return place.formattedAddress.trim();
+      let cleaned = place.formattedAddress.trim();
+      // Strip leading plus-codes if present (e.g., "7JWV+XX Azadpur, Delhi")
+      cleaned = cleaned.replace(/^[A-Z0-9]{4,8}\+[A-Z0-9]{2,}\s*,?\s*/i, '').trim();
+      const isRawCoord =
+        /^[-+]?([1-8]?\d(\.\d+)?|90(\.0+)?),\s*[-+]?(180(\.0+)?|((1[0-7]\d)|([1-9]?\d))(\.\d+)?)$/.test(cleaned) ||
+        /^[0-9+.,\s-]+(N|S|E|W)?$/i.test(cleaned);
+      if (cleaned && !isRawCoord && /[a-zA-Z]/.test(cleaned)) {
+        return cleaned;
+      }
     }
 
     const candidateParts: string[] = [];
 
-    // 1. Place / Building / Market Name (skip if it's purely numbers, coordinates or plus-codes)
-    if (place.name && typeof place.name === 'string' && place.name.trim()) {
-      const n = place.name.trim();
-      const isPureCodeOrCoord = /^[0-9+.,\s-]+$/.test(n) || /^[A-Z0-9]{4}\+[A-Z0-9]{2,}/.test(n);
-      if (!isPureCodeOrCoord) {
-        candidateParts.push(n);
+    const addPart = (part: string | null | undefined) => {
+      if (!part || typeof part !== 'string') return;
+      const trimmed = part.trim();
+      if (!trimmed) return;
+      // Skip unwanted placeholder values
+      const lower = trimmed.toLowerCase();
+      if (['null', 'undefined', 'unnamed road', 'unknown location', 'unnamed'].includes(lower)) return;
+      // Skip pure coordinates or plus-codes
+      const isCodeOrCoord =
+        /^[0-9+.,\s-]+(N|S|E|W)?$/i.test(trimmed) ||
+        /^[A-Z0-9]{4,8}\+[A-Z0-9]{2,}/.test(trimmed) ||
+        /^[-+]?([1-8]?\d(\.\d+)?|90(\.0+)?),\s*[-+]?(180(\.0+)?|((1[0-7]\d)|([1-9]?\d))(\.\d+)?)$/.test(trimmed);
+      if (isCodeOrCoord) return;
+      // Case-insensitive deduplication
+      if (!candidateParts.some((p) => p.toLowerCase() === lower)) {
+        candidateParts.push(trimmed);
       }
-    }
+    };
 
-    // 2. Street number + Street (e.g., "12 Main Road")
+    // 1. Place / Building / Market Name
+    addPart(place.name);
+
+    // 2. Street number + Street (e.g., "12 Main Road" or "Sector 4")
     const streetComponents = [place.streetNumber, place.street]
       .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
       .map((s) => s.trim());
-    const combinedStreet = streetComponents.join(' ');
-    if (combinedStreet && !candidateParts.includes(combinedStreet)) {
-      candidateParts.push(combinedStreet);
+    const combinedStreet = streetComponents.join(' ').trim();
+    if (combinedStreet) {
+      addPart(combinedStreet);
     }
 
-    // 3. District / Subregion (e.g., "Azadpur", "South West Delhi")
-    const area = place.district || place.subregion;
-    if (area && typeof area === 'string' && area.trim()) {
-      const a = area.trim();
-      if (!candidateParts.includes(a)) {
-        candidateParts.push(a);
-      }
-    }
+    // 3. District / Subregion (e.g., "Azadpur", "North West Delhi")
+    addPart(place.district);
+    addPart(place.subregion);
 
     // 4. City (e.g., "New Delhi")
-    if (place.city && typeof place.city === 'string' && place.city.trim()) {
-      const c = place.city.trim();
-      if (!candidateParts.includes(c)) {
-        candidateParts.push(c);
-      }
-    }
+    addPart(place.city);
 
     // 5. Region / State (e.g., "Delhi", "Jharkhand")
-    if (place.region && typeof place.region === 'string' && place.region.trim()) {
-      const r = place.region.trim();
-      if (!candidateParts.includes(r)) {
-        candidateParts.push(r);
-      }
-    }
+    addPart(place.region);
 
-    // 6. Postal Code (e.g., "110033", "834001")
-    if (place.postalCode && typeof place.postalCode === 'string' && place.postalCode.trim()) {
-      const p = place.postalCode.trim();
-      if (!candidateParts.includes(p)) {
-        candidateParts.push(p);
-      }
+    // 6. Postal Code (e.g., "110033", "834001") - only if we already have other place details
+    if (candidateParts.length > 0 && place.postalCode && typeof place.postalCode === 'string' && place.postalCode.trim()) {
+      addPart(place.postalCode);
     }
 
     // 7. Country (e.g., "India")
-    if (place.country && typeof place.country === 'string' && place.country.trim()) {
-      const cty = place.country.trim();
-      if (!candidateParts.includes(cty)) {
-        candidateParts.push(cty);
-      }
-    }
+    addPart(place.country);
 
-    // Filter out unwanted placeholder strings
-    const cleanParts = candidateParts.filter(
-      (p) => p && !['null', 'undefined', 'unnamed road', 'unknown location'].includes(p.toLowerCase())
-    );
-
-    return cleanParts.join(', ').trim();
+    return candidateParts.join(', ').trim();
   };
 
   /**
@@ -339,6 +343,8 @@ export const NewInspectionScreen: React.FC = () => {
           'Reverse geocode timeout'
         );
 
+        console.log('[Location] Geocoded address:', JSON.stringify(places?.[0] ?? null));
+
         if (places && places.length > 0) {
           resolvedAddress = formatGeocodedAddress(places[0]);
         }
@@ -346,19 +352,19 @@ export const NewInspectionScreen: React.FC = () => {
         console.warn('[Location] Reverse geocoding failed or timed out:', geoErr);
       }
 
-      console.log(`[Location] Final address: ${resolvedAddress || '(empty)'}`);
+      console.log(`[Location] Formatted address: ${resolvedAddress || '(empty)'}`);
 
       if (resolvedAddress) {
-        console.log(`[Location] Location field updated: ${resolvedAddress}`);
+        console.log(`[Location] Setting location field: ${resolvedAddress}`);
         setLocation(resolvedAddress);
         setLocationStatus('success');
       } else {
         // Reverse geocoding produced no address (e.g. offline or geocoding service unavailable)
-        console.log('[Location] Reverse geocoding produced no address (offline mode)');
+        console.log('[Location] Reverse geocoding produced no address (offline or unavailable)');
         setLocationStatus('error');
         Alert.alert(
           'Could Not Fetch Address',
-          'Location detected, but reverse geocoding is unavailable offline. Please enter the location manually.',
+          'Location detected, but reverse geocoding is unavailable. Please enter the location manually.',
           [{ text: 'OK' }]
         );
       }
@@ -655,6 +661,8 @@ export const NewInspectionScreen: React.FC = () => {
                   }}
                   placeholder="e.g. Sector 4 Market"
                   placeholderTextColor={colors.outline}
+                  testID="location-input"
+                  accessibilityLabel="Location"
                 />
                 {/* Use Current Location button */}
                 <TouchableOpacity

@@ -18,6 +18,8 @@ class TokenResponse(BaseModel):
     zone: str
     email: Optional[str] = None
     phone: Optional[str] = None
+    last_login_at: Optional[datetime] = None
+    previous_login_at: Optional[datetime] = None
 
 class LoginRequest(BaseModel):
     officer_id: str = Field(..., description="Officer ID / Username")
@@ -34,6 +36,8 @@ class UserProfileResponse(BaseModel):
     designation: str
     zone: str
     role: str
+    last_login_at: Optional[datetime] = None
+    previous_login_at: Optional[datetime] = None
 
 class UpdateProfileRequest(BaseModel):
     email: Optional[str] = Field(None, description="Inspector email address")
@@ -281,5 +285,7 @@ class DashboardStatsResponse(BaseModel):
     total_inspections: int
     needs_manual_verification: int
     verified_inspections: int
+    potential_non_compliance: int
+    recent_inspections: List[RecentInspectionItem]
     potential_non_compliance: int
     recent_inspections: List[RecentInspectionItem]

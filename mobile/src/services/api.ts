@@ -184,3 +184,4 @@ export const api = {
   getReportById: (reportId: string) => apiRequest(`/api/reports/${reportId}`),
   getAuditLogs: (inspectionId: string) => apiRequest(`/api/inspections/${inspectionId}/audit-logs`),
 };
+
