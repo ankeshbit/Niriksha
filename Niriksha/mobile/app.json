@@ -1,0 +1,37 @@
+{
+  "expo": {
+    "name": "NiriKsha",
+    "slug": "niriksha",
+    "version": "1.0.0",
+    "orientation": "portrait",
+    "icon": "./assets/icon.png",
+    "userInterfaceStyle": "light",
+    "splash": {
+      "backgroundColor": "#031635"
+    },
+    "ios": {
+      "supportsTablet": true,
+      "bundleIdentifier": "gov.doca.niriksha"
+    },
+    "android": {
+      "adaptiveIcon": {
+        "backgroundColor": "#031635"
+      },
+      "package": "gov.doca.niriksha"
+    },
+    "plugins": [
+      [
+        "expo-camera",
+        {
+          "cameraPermission": "Allow NiriKsha to access camera for capturing package label images."
+        }
+      ],
+      [
+        "expo-image-picker",
+        {
+          "photosPermission": "Allow NiriKsha to access gallery for selecting package images."
+        }
+      ]
+    ]
+  }
+}
