@@ -176,6 +176,8 @@ export const api = {
   // Report & Finalization
   finalizeInspection: (inspectionId: string, data: { officer_notes?: string; final_status?: string }) =>
     apiRequest(`/api/inspections/${inspectionId}/finalize`, { method: 'POST', body: data }),
+  getReportEligibility: (inspectionId: string) =>
+    apiRequest(`/api/inspections/${inspectionId}/report/eligibility`),
   getReportMetadata: (inspectionId: string) =>
     apiRequest(`/api/inspections/${inspectionId}/report`),
   generateReport: (inspectionId: string) =>

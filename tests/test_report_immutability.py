@@ -69,8 +69,10 @@ def _auth(token: str) -> dict:
 # Helper: create a full inspection with a generated report
 # ---------------------------------------------------------------------------
 
+FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
+
 def _create_inspection_with_report(client: TestClient, token: str, suffix: str = "") -> dict:
-    """Creates a draft inspection, generates a report, and returns info dict."""
+    """Creates a full inspection with uploaded image, OCR, evaluation, and generated report."""
     insp_resp = client.post(
         "/api/inspections",
         json={
@@ -84,6 +86,21 @@ def _create_inspection_with_report(client: TestClient, token: str, suffix: str =
     assert insp_resp.status_code in (200, 201), insp_resp.text
     insp = insp_resp.json()
     insp_id = insp["id"]
+
+    img_path = FIXTURES_DIR / "clear_package.jpg"
+    with open(img_path, "rb") as f:
+        up_resp = client.post(
+            f"/api/inspections/{insp_id}/images",
+            headers=_auth(token),
+            files={"file": ("clear_package.jpg", f, "image/jpeg")},
+            data={"view_type": "front"}
+        )
+    assert up_resp.status_code == 201, up_resp.text
+
+    ocr_resp = client.post(f"/api/inspections/{insp_id}/ocr", headers=_auth(token))
+    assert ocr_resp.status_code == 200, ocr_resp.text
+    eval_resp = client.post(f"/api/inspections/{insp_id}/evaluate", headers=_auth(token))
+    assert eval_resp.status_code == 200, eval_resp.text
 
     rpt_resp = client.post(
         f"/api/inspections/{insp_id}/report",
@@ -258,6 +275,21 @@ class TestImmutableReportPolicy:
         )
         assert insp_resp.status_code in (200, 201), insp_resp.text
         insp_id = insp_resp.json()["id"]
+
+        img_path = FIXTURES_DIR / "clear_package.jpg"
+        with open(img_path, "rb") as f:
+            up_resp = client.post(
+                f"/api/inspections/{insp_id}/images",
+                headers=_auth(inspector_token),
+                files={"file": ("clear_package.jpg", f, "image/jpeg")},
+                data={"view_type": "front"}
+            )
+        assert up_resp.status_code == 201, up_resp.text
+
+        ocr_resp = client.post(f"/api/inspections/{insp_id}/ocr", headers=_auth(inspector_token))
+        assert ocr_resp.status_code == 200, ocr_resp.text
+        eval_resp = client.post(f"/api/inspections/{insp_id}/evaluate", headers=_auth(inspector_token))
+        assert eval_resp.status_code == 200, eval_resp.text
 
         rpt_resp = client.post(f"/api/inspections/{insp_id}/report", headers=_auth(inspector_token))
         assert rpt_resp.status_code in (200, 201), (
