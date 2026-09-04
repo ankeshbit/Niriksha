@@ -1,4 +1,5 @@
 import os
+import sys
 import re
 import json
 import uuid
@@ -8,6 +9,11 @@ from pathlib import Path
 from typing import List, Optional
 from datetime import datetime
 from PIL import Image
+
+# Ensure project root is available on sys.path for direct execution
+PROJECT_ROOT = Path(__file__).resolve().parent.parent
+if str(PROJECT_ROOT) not in sys.path:
+    sys.path.insert(0, str(PROJECT_ROOT))
 
 from fastapi import (
     FastAPI,
@@ -69,7 +75,10 @@ from backend.schemas import (
     FinalizeInspectionRequest,
     FinalizeInspectionResponse,
     UpdateProfileRequest,
-    ChangePasswordRequest
+    ChangePasswordRequest,
+    BlockingImage,
+    BlockingReason,
+    ReportEligibilityResponse
 )
 from backend.auth_utils import verify_password, hash_password
 from backend.auth_service import create_access_token, get_current_user
@@ -1368,6 +1377,138 @@ def request_new_image_for_finding(
 
 
 
+def check_report_eligibility(inspection: Inspection, db: Session) -> ReportEligibilityResponse:
+    """
+    Authoritative server-side evidence-quality gate.
+    Verifies image presence, image quality, OCR status, rule evaluation, and evidence sufficiency
+    before any statutory inspection report PDF can be generated or downloaded.
+    """
+    blocking_reasons: List[BlockingReason] = []
+    blocking_images: List[BlockingImage] = []
+
+    # 1. Package images must exist
+    images = db.query(ProductImage).filter(ProductImage.inspection_id == inspection.id).order_by(ProductImage.sequence_order.asc()).all()
+    if not images:
+        reason_msg = "No package images uploaded for this inspection. Photographic evidence is required for report generation."
+        blocking_reasons.append(BlockingReason(
+            type="MISSING_IMAGE_EVIDENCE",
+            reason=reason_msg
+        ))
+        return ReportEligibilityResponse(
+            can_generate_report=False,
+            status="REPORT_BLOCKED",
+            reason="MISSING_IMAGE_EVIDENCE",
+            message=f"Report cannot be generated: {reason_msg}",
+            blocking_images=[],
+            blocking_reasons=blocking_reasons
+        )
+
+    # 2. Check each image for physical existence / readability on disk & quality status
+    for img in images:
+        clean_rel = img.file_path.lstrip("/")
+        abs_path = BASE_DIR / clean_rel
+        if not abs_path.exists():
+            blocking_reasons.append(BlockingReason(
+                type="CORRUPTED_IMAGE",
+                image_id=img.id,
+                reason=f"Package image file for '{img.view_type.upper()}' is missing or unreadable on disk."
+            ))
+            blocking_images.append(BlockingImage(
+                image_id=img.id,
+                view_type=img.view_type,
+                quality_status="CORRUPTED",
+                reason=f"Image file for '{img.view_type.upper()}' is missing or corrupted on disk."
+            ))
+        elif (img.quality_status or "GOOD").upper() in ["POOR", "BAD", "RECAPTURE_REQUIRED"]:
+            blur_str = f" with blur score {img.blur_score:.1f}" if img.blur_score is not None else ""
+            msg = f"The {img.view_type.upper()} package image failed quality assessment ({img.quality_status.upper()}){blur_str}. Image is too blurry or degraded to support statutory analysis."
+            blocking_reasons.append(BlockingReason(
+                type="IMAGE_QUALITY",
+                image_id=img.id,
+                reason=msg
+            ))
+            blocking_images.append(BlockingImage(
+                image_id=img.id,
+                view_type=img.view_type,
+                quality_status=img.quality_status,
+                reason=f"{img.view_type.upper()} image is too blurry to verify mandatory declarations."
+            ))
+
+    # 3. OCR and declaration extraction must have completed
+    ocr_results = db.query(OCRResult).join(ProductImage).filter(ProductImage.inspection_id == inspection.id).all()
+    declarations = db.query(Declaration).filter(Declaration.inspection_id == inspection.id).all()
+    if not ocr_results or not declarations:
+        blocking_reasons.append(BlockingReason(
+            type="OCR_INCOMPLETE",
+            reason="Optical Character Recognition (OCR) and statutory declaration extraction have not been executed on package images."
+        ))
+
+    # 4. Rule evaluation must have completed
+    compliance_checks = db.query(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection.id).all()
+    if not compliance_checks:
+        blocking_reasons.append(BlockingReason(
+            type="RULE_EVALUATION_INCOMPLETE",
+            reason="Statutory Legal Metrology rule evaluation has not been completed."
+        ))
+    else:
+        # 5. Check for unresolved INSUFFICIENT_EVIDENCE or findings marked NEEDS_MORE_EVIDENCE
+        resolved_actions = {"CONFIRMED", "DISMISSED", "NOT_APPLICABLE", "CORRECTED"}
+        for check in compliance_checks:
+            # Finding explicitly marked NEEDS_MORE_EVIDENCE
+            if check.adjudication_status == "NEEDS_MORE_EVIDENCE":
+                blocking_reasons.append(BlockingReason(
+                    type="NEEDS_MORE_EVIDENCE",
+                    rule_code=check.rule_code,
+                    reason=f"Rule finding '{check.rule_code}' ({check.title}) was marked NEEDS_MORE_EVIDENCE. Additional photographic evidence must be captured before generating a report."
+                ))
+            # Finding has INSUFFICIENT_EVIDENCE and has not been resolved by an officer
+            elif check.result_state == "INSUFFICIENT_EVIDENCE" and check.adjudication_status not in resolved_actions:
+                blocking_reasons.append(BlockingReason(
+                    type="INSUFFICIENT_EVIDENCE",
+                    rule_code=check.rule_code,
+                    reason=f"Rule finding '{check.rule_code}' ({check.title}) has insufficient photographic evidence to verify statutory compliance and requires inspector manual review or retake."
+                ))
+
+    if blocking_reasons:
+        primary_reason = blocking_reasons[0]
+        return ReportEligibilityResponse(
+            can_generate_report=False,
+            status="REPORT_BLOCKED",
+            reason=primary_reason.type,
+            message=f"Report cannot be generated: {primary_reason.reason}",
+            blocking_images=blocking_images,
+            blocking_reasons=blocking_reasons
+        )
+
+    return ReportEligibilityResponse(
+        can_generate_report=True,
+        status="READY",
+        reason=None,
+        message="Inspection meets all evidence-quality requirements for report generation.",
+        blocking_images=[],
+        blocking_reasons=[]
+    )
+
+
+@app.get("/api/inspections/{inspection_id}/report/eligibility", response_model=ReportEligibilityResponse, tags=["Reports"])
+def get_report_eligibility(
+    inspection_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Checks whether the inspection meets all evidence-quality criteria for statutory report generation.
+    Returns structured blocking reasons if evidence is insufficient or unverified.
+    """
+    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    if not inspection:
+        raise HTTPException(status_code=404, detail="Inspection not found")
+    if inspection.inspector_id != current_user.id and current_user.role != "ADMIN":
+        raise HTTPException(status_code=403, detail="Unauthorized access to this inspection")
+
+    return check_report_eligibility(inspection, db)
+
+
 @app.post("/api/inspections/{inspection_id}/report", response_model=ReportResponse, tags=["Reports"])
 def generate_inspection_report(
     inspection_id: str,
@@ -1381,8 +1522,17 @@ def generate_inspection_report(
     if inspection.inspector_id != current_user.id and current_user.role != "ADMIN":
         raise HTTPException(status_code=403, detail="Unauthorized access to this inspection")
 
+    # SERVER-SIDE REPORT ELIGIBILITY GATE: Validate evidence quality before generating PDF
+    eligibility = check_report_eligibility(inspection, db)
+    if not eligibility.can_generate_report:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=eligibility.model_dump()
+        )
+
     product = inspection.product
     inspector = inspection.inspector or current_user
+    images = db.query(ProductImage).filter(ProductImage.inspection_id == inspection_id).order_by(ProductImage.sequence_order.asc()).all()
     declarations = db.query(Declaration).filter(Declaration.inspection_id == inspection_id).all()
     compliance_checks = db.query(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection_id).all()
     evidence_items = db.query(Evidence).join(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection_id).all()
@@ -1397,7 +1547,8 @@ def generate_inspection_report(
         declarations=declarations,
         compliance_checks=compliance_checks,
         evidence_items=evidence_items,
-        report_version=new_version
+        report_version=new_version,
+        images=images
     )
 
     # Upload PDF report to Supabase Storage if configured
@@ -1459,7 +1610,13 @@ def get_inspection_report_metadata(
 
     report_record = db.query(Report).filter(Report.inspection_id == inspection_id).first()
     if not report_record:
-        # Auto-generate if not yet generated
+        # Check eligibility before auto-generating
+        eligibility = check_report_eligibility(inspection, db)
+        if not eligibility.can_generate_report:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=eligibility.model_dump()
+            )
         return generate_inspection_report(inspection_id, db, current_user)
 
     return serialize_report(report_record)
@@ -1479,6 +1636,12 @@ def stream_inspection_report_pdf(
 
     report_record = db.query(Report).filter(Report.inspection_id == inspection_id).first()
     if not report_record or not Path(report_record.pdf_path).exists():
+        eligibility = check_report_eligibility(inspection, db)
+        if not eligibility.can_generate_report:
+            raise HTTPException(
+                status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+                detail=eligibility.model_dump()
+            )
         generate_inspection_report(inspection_id, db, current_user)
         report_record = db.query(Report).filter(Report.inspection_id == inspection_id).first()
 
@@ -1509,6 +1672,14 @@ def finalize_inspection(
         raise HTTPException(status_code=404, detail="Inspection not found")
     if inspection.inspector_id != current_user.id and current_user.role != "ADMIN":
         raise HTTPException(status_code=403, detail="Unauthorized access to this inspection")
+
+    # SERVER-SIDE EVIDENCE GATE: Block finalization if evidence is insufficient
+    eligibility = check_report_eligibility(inspection, db)
+    if not eligibility.can_generate_report:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=eligibility.model_dump()
+        )
 
     all_checks = db.query(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection.id).all()
 
@@ -1770,4 +1941,9 @@ def root_index():
 </body>
 </html>"""
     return HTMLResponse(content=html_content)
+
+
+if __name__ == "__main__":
+    import uvicorn
+    uvicorn.run("backend.main:app", host="127.0.0.1", port=8000, reload=True)
 

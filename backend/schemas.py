@@ -287,5 +287,23 @@ class DashboardStatsResponse(BaseModel):
     verified_inspections: int
     potential_non_compliance: int
     recent_inspections: List[RecentInspectionItem]
-    potential_non_compliance: int
-    recent_inspections: List[RecentInspectionItem]
+
+class BlockingImage(BaseModel):
+    image_id: str
+    view_type: str
+    quality_status: str
+    reason: str
+
+class BlockingReason(BaseModel):
+    type: str  # MISSING_IMAGE_EVIDENCE, IMAGE_QUALITY, CORRUPTED_IMAGE, OCR_INCOMPLETE, RULE_EVALUATION_INCOMPLETE, INSUFFICIENT_EVIDENCE, NEEDS_MORE_EVIDENCE
+    image_id: Optional[str] = None
+    rule_code: Optional[str] = None
+    reason: str
+
+class ReportEligibilityResponse(BaseModel):
+    can_generate_report: bool
+    status: str  # 'READY' | 'REPORT_BLOCKED'
+    reason: Optional[str] = None
+    message: str
+    blocking_images: List[BlockingImage] = []
+    blocking_reasons: List[BlockingReason] = []

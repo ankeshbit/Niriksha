@@ -76,6 +76,26 @@ class DeterministicRegexExtractor(BaseExtractionProvider):
 
         return declarations
 
+    def _find_source_box(self, text_boxes: List[Any], pattern: str, matched_val: Optional[str] = None) -> Optional[Any]:
+        """Finds the OCRTextBox that contains the declaration pattern or matched value."""
+        if not text_boxes:
+            return None
+        # First priority: find a box whose text matches the regex pattern
+        for box in text_boxes:
+            b_text = getattr(box, 'text', '') if not isinstance(box, dict) else box.get('text', '')
+            if b_text and re.search(pattern, b_text, re.IGNORECASE):
+                return box
+        # Second priority: if matched_val provided, find a box containing substantial part of it
+        if matched_val:
+            val_clean = re.sub(r'[^a-zA-Z0-9]', '', matched_val).lower()
+            if len(val_clean) >= 3:
+                for box in text_boxes:
+                    b_text = getattr(box, 'text', '') if not isinstance(box, dict) else box.get('text', '')
+                    b_clean = re.sub(r'[^a-zA-Z0-9]', '', b_text).lower()
+                    if val_clean in b_clean or (len(b_clean) >= 3 and b_clean in val_clean):
+                        return box
+        return None
+
     def _extract_commodity_name(self, text: str, text_boxes: List[Any], fallback_name: str, image_id: Optional[str]) -> ExtractedDeclarationItem:
         # Check text lines for commodity titles
         for box in text_boxes:
@@ -83,26 +103,31 @@ class DeterministicRegexExtractor(BaseExtractionProvider):
             if b_text and len(b_text) > 4 and not re.search(r'(?:MRP|NET|MFG|PKD|BATCH|CARE)', b_text, re.I):
                 bbox = box.bbox if hasattr(box, 'bbox') else box.get('bbox')
                 conf = box.confidence if hasattr(box, 'confidence') else box.get('confidence', 0.90)
+                box_img_id = getattr(box, 'image_id', None) or (box.get('image_id') if isinstance(box, dict) else None) or image_id
                 return ExtractedDeclarationItem(
                     field_name="commodity_name",
                     field_label="Name of Commodity",
                     extracted_value=b_text,
                     normalized_value=b_text.title(),
                     confidence=conf,
-                    source_image_id=image_id,
+                    source_image_id=box_img_id,
                     bounding_box=bbox,
                     extraction_status="EXTRACTED"
                 )
         
         if fallback_name:
+            box = self._find_source_box(text_boxes, re.escape(fallback_name), fallback_name)
+            box_img_id = getattr(box, 'image_id', None) or (box.get('image_id') if isinstance(box, dict) else None) or image_id
+            bbox = getattr(box, 'bbox', None) or (box.get('bbox') if isinstance(box, dict) else None) or [80, 100, 700, 180]
+            conf = getattr(box, 'confidence', None) or (box.get('confidence') if isinstance(box, dict) else None) or 0.95
             return ExtractedDeclarationItem(
                 field_name="commodity_name",
                 field_label="Name of Commodity",
                 extracted_value=fallback_name,
                 normalized_value=fallback_name.title(),
-                confidence=0.95,
-                source_image_id=image_id,
-                bounding_box=[80, 100, 700, 180],
+                confidence=conf,
+                source_image_id=box_img_id,
+                bounding_box=bbox,
                 extraction_status="EXTRACTED"
             )
 
@@ -114,21 +139,22 @@ class DeterministicRegexExtractor(BaseExtractionProvider):
         )
 
     def _extract_manufacturer(self, text: str, text_boxes: List[Any], image_id: Optional[str]) -> ExtractedDeclarationItem:
-        match = re.search(
-            r'(?:MFG\s*BY|MANUFACTURED\s*BY|PACKED\s*BY|IMPORTED\s*BY|MFD\.?\s*BY)[:\s]*([A-Za-z0-9\s,\.\-\&]+?)(?=(?:CUSTOMER|CONSUMER|NET|MRP|MFD|PKD|BATCH|\n|$))',
-            text,
-            re.IGNORECASE
-        )
+        m_pattern = r'(?:MFG\s*BY|MANUFACTURED\s*BY|PACKED\s*BY|IMPORTED\s*BY|MFD\.?\s*BY)[:\s]*([A-Za-z0-9\s,\.\-\&]+?)(?=(?:CUSTOMER|CONSUMER|NET|MRP|MFD|PKD|BATCH|\n|$))'
+        match = re.search(m_pattern, text, re.IGNORECASE)
         if match:
             val = match.group(1).strip()
+            box = self._find_source_box(text_boxes, r'(?:MFG|MANUFACTURED|PACKED|IMPORTED|MFD)', val)
+            box_img_id = getattr(box, 'image_id', None) or (box.get('image_id') if isinstance(box, dict) else None) or image_id
+            bbox = getattr(box, 'bbox', None) or (box.get('bbox') if isinstance(box, dict) else None) or [80, 520, 720, 600]
+            conf = getattr(box, 'confidence', None) or (box.get('confidence') if isinstance(box, dict) else None) or 0.92
             return ExtractedDeclarationItem(
                 field_name="manufacturer_details",
                 field_label="Manufacturer / Packer / Importer",
                 extracted_value=val,
                 normalized_value=val,
-                confidence=0.92,
-                source_image_id=image_id,
-                bounding_box=[80, 520, 720, 600],
+                confidence=conf,
+                source_image_id=box_img_id,
+                bounding_box=bbox,
                 extraction_status="EXTRACTED"
             )
         return ExtractedDeclarationItem(
@@ -150,14 +176,18 @@ class DeterministicRegexExtractor(BaseExtractionProvider):
             std_unit = "kg" if unit in ["kg"] else "g" if unit in ["g", "gm", "gms"] else "L" if unit in ["l", "ltr", "litre", "litres"] else "ml" if unit in ["ml"] else unit
             extracted = f"{num} {unit}"
             normalized = f"{num} {std_unit}"
+            box = self._find_source_box(text_boxes, r'(?:NET|QUANTITY|QTY|WEIGHT|' + re.escape(unit) + r')', num)
+            box_img_id = getattr(box, 'image_id', None) or (box.get('image_id') if isinstance(box, dict) else None) or image_id
+            bbox = getattr(box, 'bbox', None) or (box.get('bbox') if isinstance(box, dict) else None) or [80, 220, 450, 290]
+            conf = getattr(box, 'confidence', None) or (box.get('confidence') if isinstance(box, dict) else None) or 0.94
             return ExtractedDeclarationItem(
                 field_name="net_quantity",
                 field_label="Net Quantity",
                 extracted_value=extracted,
                 normalized_value=normalized,
-                confidence=0.94,
-                source_image_id=image_id,
-                bounding_box=[80, 220, 450, 290],
+                confidence=conf,
+                source_image_id=box_img_id,
+                bounding_box=bbox,
                 extraction_status="EXTRACTED"
             )
         return ExtractedDeclarationItem(
@@ -179,14 +209,18 @@ class DeterministicRegexExtractor(BaseExtractionProvider):
             tax_str = " (Incl. of all taxes)" if has_taxes else ""
             extracted = f"₹{val}{tax_str}" if "₹" in text or "rs" in text.lower() else f"Rs. {val}{tax_str}"
             normalized = f"{float(val):.2f} INR"
+            box = self._find_source_box(text_boxes, r'(?:MRP|RETAIL|PRICE|₹|Rs)', val)
+            box_img_id = getattr(box, 'image_id', None) or (box.get('image_id') if isinstance(box, dict) else None) or image_id
+            bbox = getattr(box, 'bbox', None) or (box.get('bbox') if isinstance(box, dict) else None) or [80, 330, 600, 400]
+            conf = getattr(box, 'confidence', None) or (box.get('confidence') if isinstance(box, dict) else None) or 0.95
             return ExtractedDeclarationItem(
                 field_name="mrp",
                 field_label="Maximum Retail Price (MRP)",
                 extracted_value=extracted,
                 normalized_value=normalized,
-                confidence=0.95,
-                source_image_id=image_id,
-                bounding_box=[80, 330, 600, 400],
+                confidence=conf,
+                source_image_id=box_img_id,
+                bounding_box=bbox,
                 extraction_status="EXTRACTED"
             )
         return ExtractedDeclarationItem(
@@ -204,14 +238,18 @@ class DeterministicRegexExtractor(BaseExtractionProvider):
         )
         if match:
             val = match.group(1).strip()
+            box = self._find_source_box(text_boxes, r'(?:MFD|PKD|PACKED|DATE)', val)
+            box_img_id = getattr(box, 'image_id', None) or (box.get('image_id') if isinstance(box, dict) else None) or image_id
+            bbox = getattr(box, 'bbox', None) or (box.get('bbox') if isinstance(box, dict) else None) or [80, 430, 400, 500]
+            conf = getattr(box, 'confidence', None) or (box.get('confidence') if isinstance(box, dict) else None) or 0.91
             return ExtractedDeclarationItem(
                 field_name="date_of_manufacture_packing",
                 field_label="Month & Year of Manufacture / Packing",
                 extracted_value=val,
                 normalized_value=val,
-                confidence=0.91,
-                source_image_id=image_id,
-                bounding_box=[80, 430, 400, 500],
+                confidence=conf,
+                source_image_id=box_img_id,
+                bounding_box=bbox,
                 extraction_status="EXTRACTED"
             )
         return ExtractedDeclarationItem(
@@ -237,14 +275,18 @@ class DeterministicRegexExtractor(BaseExtractionProvider):
             if email_match and email_match.group(0) not in " ".join(details): details.append(f"Email: {email_match.group(0)}")
             
             combined = " / ".join(details)
+            box = self._find_source_box(text_boxes, r'(?:CUSTOMER|CONSUMER|FEEDBACK|HELPLINE|CARE|1800|@)', combined)
+            box_img_id = getattr(box, 'image_id', None) or (box.get('image_id') if isinstance(box, dict) else None) or image_id
+            bbox = getattr(box, 'bbox', None) or (box.get('bbox') if isinstance(box, dict) else None) or [80, 630, 720, 700]
+            conf = getattr(box, 'confidence', None) or (box.get('confidence') if isinstance(box, dict) else None) or 0.90
             return ExtractedDeclarationItem(
                 field_name="consumer_care_details",
                 field_label="Consumer Care Details",
                 extracted_value=combined,
                 normalized_value=combined,
-                confidence=0.90,
-                source_image_id=image_id,
-                bounding_box=[80, 630, 720, 700],
+                confidence=conf,
+                source_image_id=box_img_id,
+                bounding_box=bbox,
                 extraction_status="EXTRACTED"
             )
         return ExtractedDeclarationItem(
@@ -262,14 +304,18 @@ class DeterministicRegexExtractor(BaseExtractionProvider):
         )
         if match:
             country = match.group(1).strip().title()
+            box = self._find_source_box(text_boxes, r'(?:COUNTRY|ORIGIN|MADE|PRODUCT)', country)
+            box_img_id = getattr(box, 'image_id', None) or (box.get('image_id') if isinstance(box, dict) else None) or image_id
+            bbox = getattr(box, 'bbox', None) or (box.get('bbox') if isinstance(box, dict) else None) or [80, 710, 450, 760]
+            conf = getattr(box, 'confidence', None) or (box.get('confidence') if isinstance(box, dict) else None) or 0.88
             return ExtractedDeclarationItem(
                 field_name="country_of_origin",
                 field_label="Country of Origin",
                 extracted_value=country,
                 normalized_value=country,
-                confidence=0.88,
-                source_image_id=image_id,
-                bounding_box=[80, 710, 450, 760],
+                confidence=conf,
+                source_image_id=box_img_id,
+                bounding_box=bbox,
                 extraction_status="EXTRACTED"
             )
         return ExtractedDeclarationItem(

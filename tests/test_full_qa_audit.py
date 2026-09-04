@@ -256,6 +256,9 @@ def test_evaluation_and_adjudication_workflow(client, auth_headers):
 # ==========================================
 
 def test_report_generation_and_pdf_stream(client, auth_headers):
+    from pathlib import Path
+    fixtures_dir = Path(__file__).resolve().parent / "fixtures"
+
     # 1. Create inspection
     insp_resp = client.post(
         "/api/inspections",
@@ -264,10 +267,21 @@ def test_report_generation_and_pdf_stream(client, auth_headers):
     )
     insp_id = insp_resp.json()["id"]
 
-    # 2. Evaluate rules
+    # 2. Upload image & run OCR
+    img_path = fixtures_dir / "clear_package.jpg"
+    with open(img_path, "rb") as f:
+        client.post(
+            f"/api/inspections/{insp_id}/images",
+            headers=auth_headers,
+            files={"file": ("clear_package.jpg", f, "image/jpeg")},
+            data={"view_type": "front"}
+        )
+    client.post(f"/api/inspections/{insp_id}/ocr", headers=auth_headers)
+
+    # 3. Evaluate rules
     client.post(f"/api/inspections/{insp_id}/evaluate", headers=auth_headers)
 
-    # 3. Generate Report
+    # 4. Generate Report
     rep_resp = client.post(f"/api/inspections/{insp_id}/report", headers=auth_headers)
     assert rep_resp.status_code in [200, 201]
     rep_data = rep_resp.json()
