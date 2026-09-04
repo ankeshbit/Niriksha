@@ -11,13 +11,13 @@
     },
     "ios": {
       "supportsTablet": true,
-      "bundleIdentifier": "gov.doca.niriksha"
+      "bundleIdentifier": "gov.doca.legalmetrology"
     },
     "android": {
       "adaptiveIcon": {
         "backgroundColor": "#031635"
       },
-      "package": "gov.doca.niriksha"
+      "package": "gov.doca.legalmetrology"
     },
     "plugins": [
       [
