@@ -117,7 +117,7 @@ export const DashboardScreen: React.FC = () => {
   const [selectedChipId, setSelectedChipId] = useState<string | null>(null);
   const [currentDate, setCurrentDate] = useState(() => new Date());
 
-  const loadData = async () => {
+  const loadData = async (silent = false) => {
     try {
       const [prof, dash, list] = await Promise.all([
         authStorage.getProfile(),
@@ -128,7 +128,9 @@ export const DashboardScreen: React.FC = () => {
       setDashboardData(dash);
       setInspections(list || []);
     } catch (err) {
-      console.error('Failed to load dashboard:', err);
+      if (!silent) {
+        console.error('Failed to load dashboard:', err);
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -138,14 +140,23 @@ export const DashboardScreen: React.FC = () => {
   useFocusEffect(
     useCallback(() => {
       setCurrentDate(new Date());
-      loadData();
+      loadData(false);
+
+      // Real-time synchronization: poll every 3 seconds while active
+      const pollTimer = setInterval(() => {
+        loadData(true);
+      }, 3000);
+
+      return () => {
+        clearInterval(pollTimer);
+      };
     }, [])
   );
 
   const onRefresh = () => {
     setRefreshing(true);
     setCurrentDate(new Date());
-    loadData();
+    loadData(false);
   };
 
   const todayStr = currentDate.toLocaleDateString('en-GB', {

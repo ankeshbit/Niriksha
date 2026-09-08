@@ -66,28 +66,47 @@ export const ReportsListScreen: React.FC = () => {
   const [tempDateRange, setTempDateRange] = useState<DateFilterType>('ALL');
   const [tempSortBy, setTempSortBy] = useState<SortByType>('NEWEST');
 
-  const loadReports = async () => {
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+
+  const loadReports = async (silent = false) => {
     try {
       const data = await api.getReportsList();
       const list: ReportItem[] = Array.isArray(data) ? data : data?.reports || data?.items || [];
       setReports(list);
-    } catch (err) {
-      console.error('Failed to load reports archive:', err);
+      setErrorMessage(null);
+    } catch (err: any) {
+      if (!silent) {
+        console.error('Failed to load reports archive:', err);
+        setErrorMessage(err?.message || 'Failed to load reports archive');
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   };
 
+  useEffect(() => {
+    loadReports(false);
+  }, []);
+
   useFocusEffect(
     useCallback(() => {
-      loadReports();
+      loadReports(false);
+
+      // Real-time synchronization: poll every 4 seconds while active
+      const pollTimer = setInterval(() => {
+        loadReports(true);
+      }, 4000);
+
+      return () => {
+        clearInterval(pollTimer);
+      };
     }, [])
   );
 
   const onRefresh = () => {
     setRefreshing(true);
-    loadReports();
+    loadReports(false);
   };
 
   // Open modal & copy currently applied filter state to temporary modal selections
@@ -485,6 +504,22 @@ export const ReportsListScreen: React.FC = () => {
           <View style={styles.tableContainer}>
             {loading ? (
               <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 30 }} />
+            ) : errorMessage && reports.length === 0 ? (
+              <View style={styles.emptyBox}>
+                <MaterialIcons name="error-outline" size={40} color={colors.statusRedText} />
+                <Text style={[styles.emptyTitle, { color: colors.statusRedText }]}>Failed to load reports</Text>
+                <Text style={styles.emptySubtitle}>{errorMessage}</Text>
+                <TouchableOpacity
+                  style={[styles.resetFiltersBtn, { backgroundColor: colors.primary, marginTop: 12 }]}
+                  onPress={() => {
+                    setLoading(true);
+                    loadReports(false);
+                  }}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.resetFiltersBtnText, { color: '#ffffff' }]}>Retry</Text>
+                </TouchableOpacity>
+              </View>
             ) : filteredReports.length === 0 ? (
               <View style={styles.emptyBox}>
                 <MaterialIcons name="folder-open" size={40} color={colors.outline} />

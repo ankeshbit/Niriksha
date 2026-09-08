@@ -2,7 +2,7 @@ import { authStorage } from './authStorage';
 import { Platform } from 'react-native';
 
 // Network host configurations
-export const PC_LAN_API_HOST = 'http://192.168.1.5:8000'; // Physical Android device over Wi-Fi
+export const PC_LAN_API_HOST = 'http://10.185.115.213:8000'; // Physical Android device over Wi-Fi
 export const EMULATOR_API_HOST = 'http://10.0.2.2:8000';   // Android Emulator loopback
 export const LOCALHOST_API_HOST = 'http://127.0.0.1:8000';  // Web / iOS simulator
 
@@ -21,15 +21,16 @@ export const setApiBaseUrl = (url: string) => {
 
 export const getApiBaseUrl = () => {
   if (customBaseUrl) return customBaseUrl;
-  if (ENV_API_HOST) return ENV_API_HOST;
 
-  // On Web: dynamically match current window hostname to prevent CORS/origin mismatch between localhost and 127.0.0.1
+  // On Web: ALWAYS dynamically match current window hostname to prevent origin/port mismatch
   if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location?.hostname) {
     const host = window.location.hostname;
     if (host) {
       return `http://${host}:8000`;
     }
   }
+
+  if (ENV_API_HOST) return ENV_API_HOST;
 
   return Platform.OS === 'android' ? PC_LAN_API_HOST : LOCALHOST_API_HOST;
 };

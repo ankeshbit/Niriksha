@@ -101,6 +101,7 @@ _cors_origins = ["*"] if ("*" in _raw_origins or not _raw_origins) else _raw_ori
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_cors_origins,
+    allow_origin_regex=r"^https?://.*$",
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
