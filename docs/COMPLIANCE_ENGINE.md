@@ -44,34 +44,38 @@ The engine takes normalized OCR bounding boxes `[x1, y1, x2, y2]` along with ima
 | 200 g / ml to 1 kg / l | 4.0 mm | 2.0 mm |
 | More than 1 kg / l | 6.0 mm | 3.0 mm |
 
-### Anti-Fabrication Safeguard
+### Anti-Fabrication Safeguard & Trained ML Model Integration
 **Pixel height alone is NOT physical millimeter height.** Camera zoom, distance, sensor resolution, and perspective distortion prevent arbitrary conversion of raw pixels to legal statutory millimeters.
 
-Therefore, the engine enforces:
-1. If a verified physical scale calibration reference exists (e.g. ArUco marker, fiducial scale ruler, calibrated DPI metadata):
-   $$\text{Height (mm)} = \frac{\text{Pixel Height}}{\text{Pixels per mm}}$$
-   The estimated millimeter height is compared against Rule 9 Table 1.
-2. If no physical calibration reference exists:
-   The engine **NEVER fabricates millimeters** from raw pixels. It records the measured pixel height and returns:
-   - `FONT_SIZE_UNDETERMINABLE`
-   - `MANUAL_VERIFICATION_REQUIRED`
+The engine integrates the trained ML model from `NiriKsha_Font_Size_Readability_Analysis.ipynb`:
+1. **Model Architecture:** `GradientBoostingRegressor` trained on 15 geometric, textual, and optical features (`pixel_height`, `pixel_width`, `aspect_ratio`, `normalized_height`, `normalized_width`, `image_width`, `image_height`, `text_length`, `char_count`, `word_count`, `avg_char_width`, `ocr_confidence`, `crop_resolution`, `sharpness`, `contrast`).
+2. **Strict Calibration Precondition:** The ML model and optical metrology **require a validated physical calibration scale** (plausible range: $0.2 \le \text{pixels\_per\_mm} \le 200.0$).
+3. **If Calibration Exists:**
+   - Optical millimeter height is computed: $\text{Height (mm)} = \frac{\text{Pixel Height}}{\text{Pixels per mm}}$.
+   - ML model executes inference to estimate character height with provenance recorded (`ml_predicted_height_mm`, `ml_model_name`, `ml_features`).
+   - The result is compared against Rule 9 Table 1 statutory thresholds.
+4. **If Calibration is Missing or Out of Range:**
+   - The engine **NEVER fabricates millimeters** from raw pixels.
+   - Outputs `FONT_SIZE_UNDETERMINABLE` and routes to `MANUAL_VERIFICATION_REQUIRED`.
 
 ---
 
 ## 3. Declaration-Level Readability Engine (`backend/readability_service.py`)
 
-### Technical Implementation
-General whole-image quality is distinct from declaration-level readability. The readability engine crops the localized bounding box of each mandatory declaration and evaluates:
-1. **Laplacian Variance:** Measures high-frequency edge transition sharpness to quantify localized optical blur.
-2. **RMS & Michelson Contrast:** Measures luminance range between foreground characters and background packaging.
-3. **Character Visibility & OCR Confidence:** Evaluates optical character recognition confidence score.
+### Technical Implementation & Trained ML Model Integration
+General whole-image quality is distinct from declaration-level readability. The readability engine integrates the trained model from `NiriKsha_Font_Size_Readability_Analysis.ipynb` operating on localized OCR bounding box crops:
+1. **15 Extracted Features:** `sharpness_laplacian_var`, `contrast_std`, `edge_density`, `grayscale_mean`, `grayscale_std`, `noise_estimate`, `text_background_separation`, `perspective_distortion_indicator`, `ocr_confidence`, `crop_width`, `crop_height`, `crop_resolution`, `pixels_per_char`, `char_density`, `blur_score`.
+2. **Quality Gate:** If `crop_resolution < 200` pixels (`MIN_TRUSTED_CROP_PIXELS`), visual features are deemed uninformative. The system routes strictly to `READABILITY_UNCERTAIN` and `MANUAL_VERIFICATION_REQUIRED`.
+3. **Trained Classifier:** `LogisticRegression` with `StandardScaler` outputs predicted readability class (`READABLE`, `PARTIALLY_READABLE`, `NOT_READABLE`) and class probability.
+4. **Confidence Routing:** If maximum predicted probability is below $0.55$ (`MIN_MODEL_CONFIDENCE`), the engine flags `MANUAL_VERIFICATION_REQUIRED` for inspecting officer review.
+5. **Full Evidence Provenance:** Stores `ml_model_name`, `ml_confidence`, `ml_predicted_label`, and `ml_features` for tamper-evident audit trails.
 
-### Statutory Safety Rule
-An unreadable crop, low OCR confidence, or optical blur **MUST NEVER** be converted into an automatic legal violation. Technical observation defects route directly to:
+### Statutory Safety Rule (No Legal Decisions in ML Layer)
+An unreadable crop, low OCR confidence, optical blur, or ML classification **MUST NEVER** be converted into an automatic legal conviction or fine. The ML layer only provides visual clarity/metrology estimations. Legal compliance determinations are handled strictly by the statutory rule engine and the human inspecting officer:
 - `READABLE`
 - `POOR_READABILITY`
 - `UNREADABLE`
-- `UNCERTAIN`
+- `UNCERTAIN` / `READABILITY_UNCERTAIN`
 - `MANUAL_VERIFICATION_REQUIRED`
 
 ---

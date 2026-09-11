@@ -1,0 +1,119 @@
+{
+  "notebook_scope": "Font Size & Readability Analysis ONLY (NiriKsha, SIH 2026)",
+  "data_status": "DEMONSTRATION DATA -- NOT REAL-WORLD TRAINING DATA. Replace with real, human-annotated package images before trusting any metric below.",
+  "generated_at_utc": "2026-09-11T19:11:37.337708Z",
+  "dataset_version": "demo-v1-synthetic",
+  "n_packages_total": 18,
+  "n_packages_train": 12,
+  "n_packages_val": 2,
+  "n_packages_test": 4,
+  "font_size_model": {
+    "model_type": "GradientBoostingRegressor",
+    "features": [
+      "pixel_height",
+      "pixel_width",
+      "aspect_ratio",
+      "normalized_height",
+      "normalized_width",
+      "image_width",
+      "image_height",
+      "text_length",
+      "char_count",
+      "word_count",
+      "avg_char_width",
+      "ocr_confidence",
+      "crop_resolution",
+      "sharpness",
+      "contrast"
+    ],
+    "requires_scaling": false,
+    "test_metrics": {
+      "model": "GradientBoostingRegressor",
+      "test_MAE": 0.69653820749234,
+      "test_RMSE": 0.8154448452195526,
+      "test_R2": -0.17765123161553587,
+      "test_MedAE": 0.48370776037834196,
+      "n_test_rows": 11
+    },
+    "baseline_test_metrics": {
+      "model": "Baseline (pixel/calibration)",
+      "test_MAE": 0.08809090909090908,
+      "test_RMSE": 0.11820052299530501,
+      "test_R2": 0.9752562053093214,
+      "test_MedAE": 0.04999999999999982,
+      "n_test_rows": 11
+    },
+    "cross_validation": {
+      "MAE": {
+        "mean": 0.7580848269663437,
+        "std": 0.2726413063963215
+      },
+      "RMSE": {
+        "mean": 0.8648798088359589,
+        "std": 0.2568840864060094
+      },
+      "R2": {
+        "mean": -0.2096966727304701,
+        "std": 1.2077627519416185
+      }
+    },
+    "calibration_requirement": "REQUIRES a valid pixels_per_mm calibration per package/image. Without it, this model must NOT be invoked -- use estimate_font_height() which returns FONT_SIZE_UNDETERMINABLE."
+  },
+  "readability_model": {
+    "model_type": "LogisticRegression",
+    "features": [
+      "sharpness_laplacian_var",
+      "contrast_std",
+      "edge_density",
+      "grayscale_mean",
+      "grayscale_std",
+      "noise_estimate",
+      "text_background_separation",
+      "perspective_distortion_indicator",
+      "ocr_confidence",
+      "crop_width",
+      "crop_height",
+      "crop_resolution",
+      "pixels_per_char",
+      "char_density",
+      "blur_score"
+    ],
+    "label_order": [
+      "NOT_READABLE",
+      "PARTIALLY_READABLE",
+      "READABLE"
+    ],
+    "requires_scaling": true,
+    "val_metrics": {
+      "model": "LogisticRegression",
+      "val_accuracy": 0.6666666666666666,
+      "val_macro_f1": 0.5,
+      "val_recall_NOT_READABLE": 0.0,
+      "val_recall_PARTIALLY_READABLE": 0.3333333333333333
+    },
+    "test_accuracy": 0.8571428571428571,
+    "cv_baseline_test_accuracy": 0.5,
+    "cross_validation": {
+      "accuracy": {
+        "mean": 0.5083333333333333,
+        "std": 0.2242270674512285
+      },
+      "macro_f1": {
+        "mean": 0.41142857142857137,
+        "std": 0.20379990856790473
+      },
+      "recall_NOT_READABLE": {
+        "mean": 0.6133333333333333,
+        "std": 0.38040913647165614
+      }
+    },
+    "min_trusted_crop_pixels": 200,
+    "min_model_confidence_for_auto_decision": 0.55
+  },
+  "known_limitations": [
+    "Trained/evaluated on synthetic demo data only -- no real-world accuracy claim.",
+    "Readability labels in the demo are a rule-based synthetic proxy, NOT human annotations.",
+    "Font-size ground truth in the demo comes from generation-time known values, not physical measurement.",
+    "No legal thresholds are encoded anywhere in this notebook or its exported artifacts."
+  ]
+}

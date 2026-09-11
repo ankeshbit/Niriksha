@@ -1,0 +1,25 @@
+{
+  "features": [
+    "sharpness_laplacian_var",
+    "contrast_std",
+    "edge_density",
+    "grayscale_mean",
+    "grayscale_std",
+    "noise_estimate",
+    "text_background_separation",
+    "perspective_distortion_indicator",
+    "ocr_confidence",
+    "crop_width",
+    "crop_height",
+    "crop_resolution",
+    "pixels_per_char",
+    "char_density",
+    "blur_score"
+  ],
+  "target": "readability_label",
+  "label_order": [
+    "NOT_READABLE",
+    "PARTIALLY_READABLE",
+    "READABLE"
+  ]
+}

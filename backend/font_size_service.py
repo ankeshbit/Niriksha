@@ -20,8 +20,17 @@ CRITICAL LEGAL SAFETY GUARANTEES:
 """
 
 import re
-from typing import List, Dict, Any, Optional, Tuple
+import json
+from pathlib import Path
+from typing import List, Dict, Any, Optional, Tuple, Union
+import cv2
+import numpy as np
+import pandas as pd
 from pydantic import BaseModel
+
+ML_MODELS_DIR = Path(__file__).resolve().parent / "ml_models"
+if not ML_MODELS_DIR.exists():
+    ML_MODELS_DIR = Path(__file__).resolve().parent.parent / "nirikSha_font_readability" / "models"
 
 
 class FontSizeAnalysisResult(BaseModel):
@@ -33,6 +42,9 @@ class FontSizeAnalysisResult(BaseModel):
     calibration_method: str = "UNCALIBRATED_RAW_PIXELS"  # UNCALIBRATED_RAW_PIXELS, KNOWN_PACK_SCALE, BARCODE_REFERENCE_SCALE
     is_calibrated: bool = False
     estimated_physical_height_mm: Optional[float] = None
+    ml_predicted_height_mm: Optional[float] = None
+    ml_model_name: Optional[str] = None
+    ml_features: Optional[Dict[str, Any]] = None
     statutory_minimum_height_mm: float = 1.0
     font_size_status: str  # FONT_SIZE_COMPLIANT, FONT_SIZE_NON_COMPLIANT, FONT_SIZE_UNCERTAIN, FONT_SIZE_UNDETERMINABLE, NOT_APPLICABLE, MANUAL_VERIFICATION_REQUIRED
     statutory_rule_code: str = "PCR_RULE_09_FONT_SIZE"
@@ -40,14 +52,17 @@ class FontSizeAnalysisResult(BaseModel):
     explanation: str
     confidence: float
     verification_status: str = "STATUTORY_VERIFIED"
-    provenance: str = "OPTICAL_METROLOGY_PIPELINE"
+    provenance: str = "ML_AND_OPTICAL_METROLOGY_PIPELINE"
 
 
 class FontSizeAnalyzer:
     """
     Measures text and numeral heights from genuine OCR bounding boxes and
-    evaluates statutory compliance under PCR 2011 Rule 9.
+    evaluates statutory compliance under PCR 2011 Rule 9 using trained ML models and optical metrology.
     """
+
+    # Numerical plausibility range for pixels-per-mm calibration from notebook Section 9
+    PLAUSIBLE_PIXELS_PER_MM_RANGE = (0.2, 200.0)
 
     # Table 1: Minimum height of numerals and letters based on Net Quantity
     TABLE_1_THRESHOLDS = [
@@ -56,6 +71,96 @@ class FontSizeAnalyzer:
         {"max_qty_g_or_ml": 1000.0, "min_height_mm": 4.0, "molded_height_mm": 6.0},
         {"max_qty_g_or_ml": float("inf"), "min_height_mm": 6.0, "molded_height_mm": 6.0},
     ]
+
+    def __init__(self):
+        self._font_model = None
+        self._font_scaler = None
+        self._font_features = None
+        self._model_name = "GradientBoostingRegressor"
+        self._load_ml_model()
+
+    def _load_ml_model(self):
+        try:
+            import joblib
+            model_p = ML_MODELS_DIR / "font_size_model.joblib"
+            scaler_p = ML_MODELS_DIR / "font_size_scaler.joblib"
+            feat_p = ML_MODELS_DIR / "font_size_features.json"
+            meta_p = ML_MODELS_DIR / "model_metadata.json"
+
+            if model_p.exists():
+                self._font_model = joblib.load(model_p)
+            if scaler_p.exists():
+                self._font_scaler = joblib.load(scaler_p)
+            if feat_p.exists():
+                with open(feat_p, "r", encoding="utf-8") as f:
+                    self._font_features = json.load(f).get("features", [])
+            if meta_p.exists():
+                with open(meta_p, "r", encoding="utf-8") as f:
+                    meta = json.load(f)
+                    self._model_name = meta.get("font_size_model", {}).get("model_type", "GradientBoostingRegressor")
+        except Exception:
+            self._font_model = None
+
+    def validate_calibration(self, pixels_per_mm: Optional[float]) -> Tuple[bool, str]:
+        """Plausibility check from notebook Section 9 (0.2 - 200.0 px/mm). NOT a legal threshold."""
+        if pixels_per_mm is None:
+            return False, "no calibration provided"
+        if not np.isfinite(pixels_per_mm) or pixels_per_mm <= 0:
+            return False, "calibration value is non-finite or non-positive"
+        lo, hi = self.PLAUSIBLE_PIXELS_PER_MM_RANGE
+        if not (lo <= pixels_per_mm <= hi):
+            return False, f"calibration {pixels_per_mm:.3f} px/mm outside plausible range {self.PLAUSIBLE_PIXELS_PER_MM_RANGE}"
+        return True, "ok"
+
+    def extract_font_size_features(
+        self,
+        bounding_box: List[int],
+        text: str,
+        ocr_confidence: float = 0.90,
+        image_bgr: Optional[np.ndarray] = None,
+        img_w: int = 1000,
+        img_h: int = 1000
+    ) -> Dict[str, Any]:
+        """Extracts exact 15 font-size features defined in notebook Section 8."""
+        x1, y1, x2, y2 = bounding_box
+        pixel_width = max(float(x2 - x1), 1e-6)
+        pixel_height = max(float(y2 - y1), 1e-6)
+
+        if image_bgr is not None and image_bgr.size > 0:
+            img_h, img_w = image_bgr.shape[:2]
+            cx1, cy1 = max(0, int(x1)), max(0, int(y1))
+            cx2, cy2 = min(img_w, int(x2)), min(img_h, int(y2))
+            crop = image_bgr[cy1:cy2, cx1:cx2] if (cx2 > cx1 and cy2 > cy1) else np.zeros((1, 1), dtype=np.uint8)
+        else:
+            crop = np.zeros((1, 1), dtype=np.uint8)
+
+        t = str(text) if text else ""
+        char_count = len(t.replace(" ", ""))
+        word_count = max(len(t.split()), 1)
+        text_length = len(t)
+        avg_char_width = pixel_width / max(char_count, 1)
+
+        gray = cv2.cvtColor(crop, cv2.COLOR_BGR2GRAY) if (crop.ndim == 3 and crop.size > 0) else (crop if crop.ndim == 2 else np.zeros((1, 1), dtype=np.uint8))
+        sharpness = float(cv2.Laplacian(gray, cv2.CV_64F).var()) if gray.size > 0 else 0.0
+        contrast = float(gray.std()) if gray.size > 0 else 0.0
+
+        return {
+            "pixel_height": pixel_height,
+            "pixel_width": pixel_width,
+            "aspect_ratio": pixel_width / pixel_height,
+            "normalized_height": pixel_height / max(img_h, 1),
+            "normalized_width": pixel_width / max(img_w, 1),
+            "image_width": img_w,
+            "image_height": img_h,
+            "text_length": text_length,
+            "char_count": char_count,
+            "word_count": word_count,
+            "avg_char_width": avg_char_width,
+            "ocr_confidence": float(ocr_confidence),
+            "crop_resolution": crop.shape[0] * crop.shape[1] if crop.size else 0,
+            "sharpness": sharpness,
+            "contrast": contrast,
+        }
 
     def _parse_net_quantity_magnitude(self, net_quantity_str: Optional[str]) -> Optional[float]:
         """Parses net quantity string into normalized grams or millilitres."""
@@ -181,10 +286,31 @@ class FontSizeAnalyzer:
             is_blown_or_molded=is_blown_or_molded
         )
 
+        # Extract 15 features defined in notebook Section 8
+        feats = self.extract_font_size_features(
+            bounding_box=bounding_box,
+            text=str(extracted_value),
+            ocr_confidence=0.90
+        )
+
         # Case 3: Physical Calibration Scale is Available
-        if calibration_scale_mm_per_px is not None and calibration_scale_mm_per_px > 0:
+        pixels_per_mm = (1.0 / calibration_scale_mm_per_px) if (calibration_scale_mm_per_px and calibration_scale_mm_per_px > 0) else None
+        is_valid_cal, cal_reason = self.validate_calibration(pixels_per_mm)
+
+        if is_valid_cal and calibration_scale_mm_per_px is not None and calibration_scale_mm_per_px > 0:
             computed_mm = round(char_h_px * calibration_scale_mm_per_px, 2)
             cal_method = calibration_source or "KNOWN_PACK_SCALE"
+
+            # Execute trained ML model for inference
+            ml_pred = None
+            if self._font_model is not None:
+                try:
+                    df_in = pd.DataFrame([feats])[self._font_features or list(feats.keys())]
+                    if self._font_scaler is not None and self._model_name == "LinearRegression":
+                        df_in = self._font_scaler.transform(df_in)
+                    ml_pred = round(float(self._font_model.predict(df_in)[0]), 2)
+                except Exception:
+                    ml_pred = None
 
             if computed_mm >= threshold_mm:
                 return FontSizeAnalysisResult(
@@ -196,11 +322,15 @@ class FontSizeAnalyzer:
                     calibration_method=cal_method,
                     is_calibrated=True,
                     estimated_physical_height_mm=computed_mm,
+                    ml_predicted_height_mm=ml_pred,
+                    ml_model_name=self._model_name,
+                    ml_features=feats,
                     statutory_minimum_height_mm=threshold_mm,
                     font_size_status="FONT_SIZE_COMPLIANT",
                     explanation=(
                         f"Estimated physical character height of {computed_mm:.2f} mm meets or exceeds the "
-                        f"statutory minimum of {threshold_mm:.1f} mm ({tier_desc}). Calibrated via {cal_method}."
+                        f"statutory minimum of {threshold_mm:.1f} mm ({tier_desc}). Calibrated via {cal_method}"
+                        + (f" [ML Model {self._model_name} prediction: {ml_pred:.2f} mm]" if ml_pred is not None else "") + "."
                     ),
                     confidence=0.90
                 )
@@ -215,6 +345,9 @@ class FontSizeAnalyzer:
                     calibration_method=cal_method,
                     is_calibrated=True,
                     estimated_physical_height_mm=computed_mm,
+                    ml_predicted_height_mm=ml_pred,
+                    ml_model_name=self._model_name,
+                    ml_features=feats,
                     statutory_minimum_height_mm=threshold_mm,
                     font_size_status="MANUAL_VERIFICATION_REQUIRED",
                     explanation=(
@@ -233,6 +366,9 @@ class FontSizeAnalyzer:
                     calibration_method=cal_method,
                     is_calibrated=True,
                     estimated_physical_height_mm=computed_mm,
+                    ml_predicted_height_mm=ml_pred,
+                    ml_model_name=self._model_name,
+                    ml_features=feats,
                     statutory_minimum_height_mm=threshold_mm,
                     font_size_status="MANUAL_VERIFICATION_REQUIRED",
                     explanation=(
@@ -243,7 +379,7 @@ class FontSizeAnalyzer:
                 )
 
         # Case 4: Uncalibrated Camera Image (Standard Mobile Photograph without scale bar)
-        # In accordance with SIH Problem Statement and Legal Metrology standards:
+        # In accordance with SIH Problem Statement, notebook invariant, and Legal Metrology standards:
         # We report genuine pixel height and indicate that physical millimetres are undeterminable without calibration.
         return FontSizeAnalysisResult(
             field_name=field_name,
@@ -254,6 +390,9 @@ class FontSizeAnalyzer:
             calibration_method="UNCALIBRATED_RAW_PIXELS",
             is_calibrated=False,
             estimated_physical_height_mm=None,
+            ml_predicted_height_mm=None,
+            ml_model_name=self._model_name,
+            ml_features=feats,
             statutory_minimum_height_mm=threshold_mm,
             font_size_status="FONT_SIZE_UNDETERMINABLE",
             explanation=(

@@ -253,13 +253,15 @@ class DeclarationValidationEngine:
             # 2. Format & Misleading Check
             format_status, format_findings, format_exp = self.validate_format_and_misleading(field_name, effective_val)
 
-            # 3. Readability Analysis
+            # 3. Readability Analysis (calls trained ML model and local optical metrics)
+            source_file_path = getattr(source_img, "file_path", None) if source_img else (source_img.get("file_path") if isinstance(source_img, dict) else None)
             read_res: DeclarationReadabilityResult = readability_analyzer.analyze_readability(
                 field_name=field_name,
                 extracted_value=effective_val,
                 bounding_box=bbox,
                 ocr_confidence=conf,
-                source_image_id=source_img_id
+                source_image_id=source_img_id,
+                image_input=source_file_path
             )
 
             # 4. Placement Analysis

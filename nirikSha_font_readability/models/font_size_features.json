@@ -1,0 +1,20 @@
+{
+  "features": [
+    "pixel_height",
+    "pixel_width",
+    "aspect_ratio",
+    "normalized_height",
+    "normalized_width",
+    "image_width",
+    "image_height",
+    "text_length",
+    "char_count",
+    "word_count",
+    "avg_char_width",
+    "ocr_confidence",
+    "crop_resolution",
+    "sharpness",
+    "contrast"
+  ],
+  "target": "actual_font_height_mm"
+}
