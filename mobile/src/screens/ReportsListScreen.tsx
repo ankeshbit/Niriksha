@@ -35,16 +35,22 @@ export interface ReportItem {
   inspection_id: string;
   report_version?: number;
   pdf_path?: string;
+  docx_path?: string;
   download_url?: string;
+  docx_download_url?: string;
   legal_safety_statement?: string;
   generated_at?: string;
   created_at?: string;
   inspection_number?: string;
   product_name?: string;
+  brand_name?: string;
+  category?: string;
   location?: string;
   overall_status?: string;
   status?: string;
 }
+
+
 
 export const ReportsListScreen: React.FC = () => {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
@@ -53,7 +59,7 @@ export const ReportsListScreen: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [downloadingId, setDownloadingId] = useState<string | null>(null);
-
+  const [downloadingDocxId, setDownloadingDocxId] = useState<string | null>(null);
 
   // Active Applied Filters (Drives the derived list calculation)
   const [selectedCompliance, setSelectedCompliance] = useState<ComplianceFilterType>('ALL');
@@ -68,7 +74,7 @@ export const ReportsListScreen: React.FC = () => {
 
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
-  const loadReports = async (silent = false) => {
+  const loadReportsData = async (silent = false) => {
     try {
       const data = await api.getReportsList();
       const list: ReportItem[] = Array.isArray(data) ? data : data?.reports || data?.items || [];
@@ -86,27 +92,19 @@ export const ReportsListScreen: React.FC = () => {
   };
 
   useEffect(() => {
-    loadReports(false);
-  }, []);
+    setLoading(true);
+    loadReportsData(false);
+  }, [searchQuery]);
 
   useFocusEffect(
     useCallback(() => {
-      loadReports(false);
-
-      // Real-time synchronization: poll every 4 seconds while active
-      const pollTimer = setInterval(() => {
-        loadReports(true);
-      }, 4000);
-
-      return () => {
-        clearInterval(pollTimer);
-      };
+      loadReportsData(false);
     }, [])
   );
 
   const onRefresh = () => {
     setRefreshing(true);
-    loadReports(false);
+    loadReportsData(false);
   };
 
   // Open modal & copy currently applied filter state to temporary modal selections
@@ -309,6 +307,66 @@ export const ReportsListScreen: React.FC = () => {
     }
   };
 
+  const handleDownloadDOCX = async (reportItem: ReportItem) => {
+    setDownloadingDocxId(reportItem.id);
+    try {
+      const baseUrl = getApiBaseUrl();
+      const docxUrl = `${baseUrl}/api/inspections/${reportItem.inspection_id}/report/docx`;
+      const token = await authStorage.getToken();
+
+      const safeNum = (reportItem.inspection_number || 'LM-2026').replace(/-/g, '_').replace(/\//g, '_');
+      const localFilename = `LM_Report_${safeNum}_v${reportItem.report_version || 1}.docx`;
+
+      if (Platform.OS === 'web') {
+        const response = await fetch(docxUrl, {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        });
+        if (!response.ok) {
+          throw new Error(`Server returned error generating DOCX (${response.status})`);
+        }
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = localFilename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        return;
+      }
+
+      const fileUri = `${FileSystem.documentDirectory}${localFilename}`;
+      const downloadRes = await FileSystem.downloadAsync(docxUrl, fileUri, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (downloadRes.status === 200) {
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(downloadRes.uri, {
+            mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            dialogTitle: `Editable Inspection Report (DOCX): ${reportItem.inspection_number}`,
+            UTI: 'org.openxmlformats.wordprocessingml.document',
+          });
+        } else {
+          Alert.alert('DOCX Saved', `Report saved to:\n${downloadRes.uri}`);
+        }
+      } else {
+        Alert.alert('Export Failed', 'Server returned error generating DOCX.');
+      }
+    } catch (err: any) {
+      if (Platform.OS === 'web') {
+        alert(err.message || 'Could not download DOCX.');
+      } else {
+        Alert.alert('Export Error', err.message || 'Could not download DOCX.');
+      }
+    } finally {
+      setDownloadingDocxId(null);
+    }
+  };
+
   const handleShare = async (reportItem: ReportItem) => {
     try {
       const baseUrl = getApiBaseUrl();
@@ -398,7 +456,10 @@ export const ReportsListScreen: React.FC = () => {
         >
           {/* Header Title & Search Controls */}
           <View style={styles.pageHeader}>
-            <Text style={styles.pageTitle}>Reports</Text>
+            <Text style={styles.pageTitle}>
+              Statutory Reports Archive
+            </Text>
+
             <View style={styles.searchRow}>
               <View style={styles.searchContainer}>
                 <MaterialIcons name="search" size={20} color={colors.outline} />
@@ -407,45 +468,42 @@ export const ReportsListScreen: React.FC = () => {
                   value={searchQuery}
                   onChangeText={setSearchQuery}
                   placeholder="Search reports by ID or Product..."
-                  placeholderTextColor={colors.outline}
+                  placeholderTextColor={colors.onSurfaceVariant}
+                  returnKeyType="search"
                 />
-                {searchQuery.length > 0 && (
+                {searchQuery ? (
                   <TouchableOpacity
                     onPress={() => setSearchQuery('')}
                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   >
-                    <MaterialIcons name="clear" size={16} color={colors.outline} />
+                    <MaterialIcons name="cancel" size={18} color={colors.onSurfaceVariant} />
                   </TouchableOpacity>
-                )}
+                ) : null}
               </View>
 
-              {/* Filters Button */}
               <TouchableOpacity
-                style={[styles.filterBtn, activeFilterCount > 0 && styles.filterBtnActive]}
+                style={[
+                  styles.filterBtn,
+                  activeFilterCount > 0 && styles.filterBtnActive,
+                ]}
                 onPress={handleOpenFilterModal}
-                activeOpacity={0.8}
+                activeOpacity={0.7}
                 accessibilityRole="button"
-                accessibilityLabel="Filter and sort reports"
+                accessibilityLabel={`Open Filters, ${activeFilterCount} applied`}
               >
                 <MaterialIcons
-                  name="filter-list"
-                  size={18}
-                  color={activeFilterCount > 0 ? colors.onPrimary : colors.primary}
+                  name="tune"
+                  size={20}
+                  color={activeFilterCount > 0 ? '#ffffff' : colors.onSurfaceVariant}
                 />
-                <Text style={[styles.filterBtnText, activeFilterCount > 0 && styles.filterBtnTextActive]}>
-                  Filters
-                </Text>
-                {activeFilterCount > 0 ? (
+                {activeFilterCount > 0 && (
                   <View style={styles.activeFilterCountBadge}>
                     <Text style={styles.activeFilterCountBadgeText}>{activeFilterCount}</Text>
                   </View>
-                ) : (
-                  <MaterialIcons name="arrow-drop-down" size={16} color={colors.primary} />
                 )}
               </TouchableOpacity>
             </View>
 
-            {/* Active Filter Chips Bar */}
             {activeFilterCount > 0 && (
               <View style={styles.activeFiltersRow}>
                 {selectedCompliance !== 'ALL' && (
@@ -500,171 +558,195 @@ export const ReportsListScreen: React.FC = () => {
             )}
           </View>
 
-          {/* Reports Table Container */}
+          {/* Table Container */}
           <View style={styles.tableContainer}>
             {loading ? (
               <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 30 }} />
-            ) : errorMessage && reports.length === 0 ? (
-              <View style={styles.emptyBox}>
-                <MaterialIcons name="error-outline" size={40} color={colors.statusRedText} />
-                <Text style={[styles.emptyTitle, { color: colors.statusRedText }]}>Failed to load reports</Text>
-                <Text style={styles.emptySubtitle}>{errorMessage}</Text>
-                <TouchableOpacity
-                  style={[styles.resetFiltersBtn, { backgroundColor: colors.primary, marginTop: 12 }]}
-                  onPress={() => {
-                    setLoading(true);
-                    loadReports(false);
-                  }}
-                  activeOpacity={0.8}
-                >
-                  <Text style={[styles.resetFiltersBtnText, { color: '#ffffff' }]}>Retry</Text>
-                </TouchableOpacity>
-              </View>
-            ) : filteredReports.length === 0 ? (
-              <View style={styles.emptyBox}>
-                <MaterialIcons name="folder-open" size={40} color={colors.outline} />
-                <Text style={styles.emptyTitle}>
-                  {reports.length === 0 ? 'No Inspection Reports Found' : 'No Reports Match Your Filters'}
-                </Text>
-                <Text style={styles.emptySubtitle}>
-                  {reports.length === 0
-                    ? 'Reports generated from finalized inspections will appear here.'
-                    : 'Try changing your search query or reset active filters.'}
-                </Text>
-                {(activeFilterCount > 0 || searchQuery.length > 0) && (
+            ) : (
+              /* TAB 1: REPORTS ARCHIVE */
+              errorMessage && reports.length === 0 ? (
+                <View style={styles.emptyBox}>
+                  <MaterialIcons name="error-outline" size={40} color={colors.statusRedText} />
+                  <Text style={[styles.emptyTitle, { color: colors.statusRedText }]}>Failed to load reports</Text>
+                  <Text style={styles.emptySubtitle}>{errorMessage}</Text>
                   <TouchableOpacity
-                    style={styles.resetFiltersBtn}
+                    style={[styles.resetFiltersBtn, { backgroundColor: colors.primary, marginTop: 12 }]}
                     onPress={() => {
-                      setSearchQuery('');
-                      handleResetAll();
+                      setLoading(true);
+                      loadReportsData(false);
                     }}
                     activeOpacity={0.8}
                   >
-                    <MaterialIcons name="refresh" size={16} color={colors.primary} />
-                    <Text style={styles.resetFiltersBtnText}>Reset Filters & Search</Text>
+                    <Text style={[styles.resetFiltersBtnText, { color: '#ffffff' }]}>Retry</Text>
                   </TouchableOpacity>
-                )}
-              </View>
-            ) : (
-              filteredReports.map((item, idx) => {
-                const isLast = idx === filteredReports.length - 1;
-                const isDownloading = downloadingId === item.id;
-                const rawStatus = String(item.overall_status || item.status || '').trim().toUpperCase();
+                </View>
+              ) : filteredReports.length === 0 ? (
+                <View style={styles.emptyBox}>
+                  <MaterialIcons name="folder-open" size={40} color={colors.outline} />
+                  <Text style={styles.emptyTitle}>
+                    {reports.length === 0 ? 'No Inspection Reports Found' : 'No Reports Match Your Filters'}
+                  </Text>
+                  <Text style={styles.emptySubtitle}>
+                    {reports.length === 0
+                      ? 'Reports generated from finalized inspections will appear here.'
+                      : 'Try changing your search query or reset active filters.'}
+                  </Text>
+                </View>
+              ) : (
+                filteredReports.map((item, idx) => {
+                  const isLast = idx === filteredReports.length - 1;
+                  const isDownloading = downloadingId === item.id;
+                  const rawStatus = String(item.overall_status || item.status || '').trim().toUpperCase();
 
-                const isCompliant =
-                  rawStatus === 'NO_POTENTIAL_VIOLATIONS' ||
-                  rawStatus === 'VERIFIED_COMPLIANT' ||
-                  rawStatus === 'COMPLIANT';
+                  const isCompliant =
+                    rawStatus === 'NO_POTENTIAL_VIOLATIONS' ||
+                    rawStatus === 'VERIFIED_COMPLIANT' ||
+                    rawStatus === 'COMPLIANT';
 
-                const isNonCompliant =
-                  rawStatus === 'POTENTIAL_NON_COMPLIANCE' ||
-                  rawStatus === 'FAIL' ||
-                  rawStatus === 'NON_COMPLIANT';
+                  const isNonCompliant =
+                    rawStatus === 'POTENTIAL_NON_COMPLIANCE' ||
+                    rawStatus === 'FAIL' ||
+                    rawStatus === 'NON_COMPLIANT';
 
-                const dateValue = item.generated_at || item.created_at;
-                const dateStr = dateValue
-                  ? new Date(dateValue).toLocaleDateString('en-GB', {
-                      day: 'numeric',
-                      month: 'short',
-                      year: 'numeric',
-                    })
-                  : '27 Aug 2026';
+                  const dateValue = item.generated_at || item.created_at;
+                  const dateStr = dateValue
+                    ? new Date(dateValue).toLocaleDateString('en-GB', {
+                        day: 'numeric',
+                        month: 'short',
+                        year: 'numeric',
+                      })
+                    : '27 Aug 2026';
 
-                return (
-                  <View key={item.id || idx} style={[styles.reportRow, !isLast && styles.rowBorder]}>
-                    <View style={styles.rowTop}>
-                      <View>
-                        <Text style={styles.reportIdText}>{item.inspection_number || item.id}</Text>
-                        <Text style={styles.reportDateText}>{dateStr}</Text>
-                      </View>
-                      <View
-                        style={[
-                          styles.badge,
-                          isCompliant ? styles.badgeGreen : isNonCompliant ? styles.badgeRed : styles.badgeAmber,
-                        ]}
-                      >
-                        <MaterialIcons
-                          name={isCompliant ? 'check-circle' : isNonCompliant ? 'error' : 'warning'}
-                          size={14}
-                          color={
-                            isCompliant
-                              ? colors.statusGreenText
-                              : isNonCompliant
-                              ? colors.statusRedText
-                              : colors.statusAmberText
-                          }
-                        />
-                        <Text
+                  return (
+                    <View key={item.id || idx} style={[styles.reportRow, !isLast && styles.rowBorder]}>
+                      <View style={styles.rowTop}>
+                        <View>
+                          <Text style={styles.reportIdText}>{item.inspection_number || item.id}</Text>
+                          <Text style={styles.reportDateText}>{dateStr}</Text>
+                        </View>
+                        <View
                           style={[
-                            styles.badgeText,
-                            {
-                              color: isCompliant
+                            styles.badge,
+                            isCompliant ? styles.badgeGreen : isNonCompliant ? styles.badgeRed : styles.badgeAmber,
+                          ]}
+                        >
+                          <MaterialIcons
+                            name={isCompliant ? 'check-circle' : isNonCompliant ? 'error' : 'warning'}
+                            size={14}
+                            color={
+                              isCompliant
                                 ? colors.statusGreenText
                                 : isNonCompliant
                                 ? colors.statusRedText
-                                : colors.statusAmberText,
-                            },
-                          ]}
+                                : colors.statusAmberText
+                            }
+                          />
+                          <Text
+                            style={[
+                              styles.badgeText,
+                              {
+                                color: isCompliant
+                                  ? colors.statusGreenText
+                                  : isNonCompliant
+                                  ? colors.statusRedText
+                                  : colors.statusAmberText,
+                              },
+                            ]}
+                          >
+                            {isCompliant
+                              ? 'Compliant'
+                              : isNonCompliant
+                              ? 'Potential Non-Compliance'
+                              : 'Needs Manual Verification'}
+                          </Text>
+                        </View>
+                      </View>
+
+                      <View style={styles.productDescBox}>
+                        <Text style={styles.productNameText}>{item.product_name || 'Packaged Commodity'}</Text>
+                        <Text style={styles.productLocationText}>{item.location || 'Field Location'}</Text>
+                      </View>
+
+                      <View style={styles.rowActions}>
+                        {/* View Report */}
+                        <TouchableOpacity
+                          style={styles.actionIconButton}
+                          onPress={() =>
+                            navigation.navigate('ReportPreview', {
+                              inspectionId: item.inspection_id,
+                              inspectionNumber: item.inspection_number,
+                            })
+                          }
+                          activeOpacity={0.7}
+                          accessibilityRole="button"
+                          accessibilityLabel="View Report"
                         >
-                          {isCompliant
-                            ? 'No Potential Violations Detected'
-                            : isNonCompliant
-                            ? 'Potential Non-Compliance Identified'
-                            : 'Needs Manual Verification'}
-                        </Text>
+                          <MaterialIcons name="visibility" size={18} color={colors.primary} />
+                        </TouchableOpacity>
+
+                        {/* Open Inspection */}
+                        <TouchableOpacity
+                          style={styles.actionIconButton}
+                          onPress={() =>
+                            navigation.navigate('ReviewAndSubmit', {
+                              inspectionId: item.inspection_id,
+                              inspectionNumber: item.inspection_number,
+                            })
+                          }
+                          activeOpacity={0.7}
+                          accessibilityRole="button"
+                          accessibilityLabel="Open Inspection"
+                        >
+                          <MaterialIcons name="fact-check" size={18} color={colors.primary} />
+                        </TouchableOpacity>
+
+                        {/* Share Report */}
+                        <TouchableOpacity
+                          style={styles.actionIconButton}
+                          onPress={() => handleShare(item)}
+                          activeOpacity={0.7}
+                          accessibilityRole="button"
+                          accessibilityLabel="Share Report"
+                        >
+                          <MaterialIcons name="share" size={18} color={colors.primary} />
+                        </TouchableOpacity>
+
+                        {/* Download PDF */}
+                        <TouchableOpacity
+                          style={styles.actionIconButton}
+                          onPress={() => handleDownloadPDF(item)}
+                          disabled={isDownloading}
+                          activeOpacity={0.7}
+                          accessibilityRole="button"
+                          accessibilityLabel="Download PDF"
+                        >
+                          {isDownloading ? (
+                            <ActivityIndicator size="small" color={colors.primary} />
+                          ) : (
+                            <MaterialIcons name="picture-as-pdf" size={18} color={colors.primary} />
+                          )}
+                        </TouchableOpacity>
+
+                        {/* Export Editable DOCX (PS 26034) */}
+                        <TouchableOpacity
+                          style={styles.actionIconButton}
+                          onPress={() => handleDownloadDOCX(item)}
+                          disabled={downloadingDocxId === item.id}
+                          activeOpacity={0.7}
+                          accessibilityRole="button"
+                          accessibilityLabel="Export Editable DOCX"
+                        >
+                          {downloadingDocxId === item.id ? (
+                            <ActivityIndicator size="small" color={colors.primary} />
+                          ) : (
+                            <MaterialIcons name="description" size={18} color={colors.primary} />
+                          )}
+                        </TouchableOpacity>
                       </View>
                     </View>
-
-                    <View style={styles.productDescBox}>
-                      <Text style={styles.productNameText}>{item.product_name || 'Packaged Commodity'}</Text>
-                      <Text style={styles.productLocationText}>{item.location || 'Field Location'}</Text>
-                    </View>
-
-                    <View style={styles.rowActions}>
-                      <TouchableOpacity
-                        style={styles.actionIconButton}
-                        onPress={() =>
-                          navigation.navigate('ReportPreview', {
-                            inspectionId: item.inspection_id,
-                            inspectionNumber: item.inspection_number,
-                          })
-                        }
-                        activeOpacity={0.7}
-                        accessibilityRole="button"
-                        accessibilityLabel="View Report"
-                      >
-                        <MaterialIcons name="visibility" size={18} color={colors.primary} />
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={styles.actionIconButton}
-                        onPress={() => handleShare(item)}
-                        activeOpacity={0.7}
-                        accessibilityRole="button"
-                        accessibilityLabel="Share Report"
-                      >
-                        <MaterialIcons name="share" size={18} color={colors.primary} />
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={styles.actionIconButton}
-                        onPress={() => handleDownloadPDF(item)}
-                        disabled={isDownloading}
-                        activeOpacity={0.7}
-                        accessibilityRole="button"
-                        accessibilityLabel="Download PDF"
-                      >
-                        {isDownloading ? (
-                          <ActivityIndicator size="small" color={colors.primary} />
-                        ) : (
-                          <MaterialIcons name="download" size={18} color={colors.primary} />
-                        )}
-                      </TouchableOpacity>
-
-                    </View>
-                  </View>
-                );
-              })
+                  );
+                })
+              )
             )}
           </View>
         </ScrollView>
@@ -1347,6 +1429,67 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: colors.onPrimary,
+  },
+  repoTabRow: {
+    flexDirection: 'row',
+    backgroundColor: colors.surfaceContainerLowest,
+    borderRadius: borderRadius.DEFAULT,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    padding: 3,
+    gap: 4,
+    marginVertical: 4,
+  },
+  repoTab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 7,
+    borderRadius: borderRadius.DEFAULT - 2,
+    gap: 4,
+  },
+  repoTabActive: {
+    backgroundColor: colors.primary,
+  },
+  repoTabText: {
+    ...typography.bodySm,
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.onSurfaceVariant,
+  },
+  repoTabTextActive: {
+    color: '#ffffff',
+  },
+  cardMetaGrid: {
+    gap: 3,
+    marginTop: 4,
+  },
+  cardMetaText: {
+    ...typography.bodySm,
+    fontSize: 12,
+    color: colors.onSurfaceVariant,
+  },
+  historySection: {
+    marginTop: 8,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSubtle,
+    gap: 6,
+  },
+  historyTitle: {
+    ...typography.bodySm,
+    fontSize: 12,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  historyItem: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    paddingVertical: 5,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle,
   },
 });
 

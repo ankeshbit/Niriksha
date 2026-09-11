@@ -32,6 +32,12 @@ class StatutoryRuleDefinition(BaseModel):
     severity: SeverityLevel = SeverityLevel.MAJOR
     required_fields: List[str]
     is_active: bool = True
+    exact_pdf_page: Optional[int] = None
+    exact_section: Optional[str] = None
+    applicability_conditions: Optional[str] = None
+    statutory_exceptions: Optional[str] = None
+    evaluation_logic: Optional[str] = None
+    verification_status: str = "STATUTORY_VERIFIED"
 
 class RuleEvaluationResult(BaseModel):
     rule_code: str

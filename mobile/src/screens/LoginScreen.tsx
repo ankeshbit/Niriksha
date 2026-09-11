@@ -23,15 +23,19 @@ import { RootStackParamList } from '../navigation/types';
 
 export const LoginScreen: React.FC = () => {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
-  const [officerId, setOfficerId] = useState('DOCA-INSP-842');
-  const [password, setPassword] = useState('admin123');
+  const [officerId, setOfficerId] = useState('');
+  const [password, setPassword] = useState('');
   const [showPassword, setShowPassword] = useState(false);
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
-    authStorage.getToken().then((token) => {
+    Promise.all([authStorage.getToken(), authStorage.getProfile()]).then(([token, profile]) => {
       if (token) {
+        if (profile?.role && profile.role !== 'INSPECTOR') {
+          authStorage.clear();
+          return;
+        }
         navigation.replace('Dashboard');
       }
     });
@@ -52,12 +56,20 @@ export const LoginScreen: React.FC = () => {
         password: password.trim(),
       });
 
+      // Mobile app is strictly for Field Inspectors only. Reject Supervisor / Admin roles.
+      if (data.role && data.role !== 'INSPECTOR') {
+        await authStorage.clear();
+        setErrorMessage('This mobile application is for Field Inspectors only.');
+        return;
+      }
+
       await authStorage.saveToken(data.access_token);
       await authStorage.saveProfile({
         officer_id: data.officer_id,
         full_name: data.full_name,
         designation: data.designation,
         zone: data.zone,
+        role: data.role,
       });
 
       navigation.replace('Dashboard');

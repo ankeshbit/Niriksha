@@ -31,7 +31,11 @@ stitch_screens/
 
 # Database & Runtime Uploads / Generated artifacts
 *.db
+*.db*
+*.sqlite
 *.sqlite3
+*.backup
+*.bak
 uploads/*
 !uploads/.gitkeep
 generated_reports/*
@@ -52,4 +56,6 @@ test_legal_metrology.db*
 .agents/
 .DS_Store
 Thumbs.db
+* - Copy.*
+*- Copy.*
 

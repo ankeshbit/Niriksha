@@ -78,8 +78,13 @@ export const syncService = {
         client_draft_id: draft.clientDraftId,
       });
 
-      // ── Step 2: Upload ALL locally captured images ─────────────────────────
-      const images = draft.images || [];
+      // ── Step 2: Upload canonical locally captured images (one per slot) ──
+      const rawImages = draft.images || [];
+      const slotMap = new Map<'front' | 'back' | 'side', (typeof rawImages)[0]>();
+      for (const img of rawImages) {
+        slotMap.set(img.viewType, img);
+      }
+      const images = Array.from(slotMap.values());
       const total = images.length;
       let uploaded = 0;
       const failedUploads: string[] = [];
@@ -88,13 +93,34 @@ export const syncService = {
         emit({ phase: 'uploading', uploaded, total });
         try {
           const formData = new FormData();
-          const filename = img.uri.split('/').pop() || `${img.viewType}_panel.jpg`;
+          const isDataUrl = img.uri.startsWith('data:');
+          const filename = isDataUrl
+            ? `${img.viewType}_panel.jpg`
+            : img.uri.split('/').pop()?.split('?')[0] || `${img.viewType}_panel.jpg`;
           const match = /\.(\w+)$/.exec(filename);
           const type = match ? `image/${match[1]}` : 'image/jpeg';
 
           if (Platform.OS === 'web') {
-            const response = await fetch(img.uri);
-            const blob = await response.blob();
+            let blob: Blob;
+            if (isDataUrl) {
+              // Direct base64 Data URL decoding — 100% reliable, zero network/blob dependency
+              const [header, base64Data] = img.uri.split(',');
+              const mimeMatch = header.match(/:(.*?);/);
+              const mime = mimeMatch ? mimeMatch[1] : 'image/jpeg';
+              const binaryStr = atob(base64Data);
+              const len = binaryStr.length;
+              const bytes = new Uint8Array(len);
+              for (let i = 0; i < len; i++) {
+                bytes[i] = binaryStr.charCodeAt(i);
+              }
+              blob = new Blob([bytes], { type: mime });
+            } else {
+              const response = await fetch(img.uri);
+              if (!response.ok) {
+                throw new Error(`Failed to read draft image (HTTP ${response.status})`);
+              }
+              blob = await response.blob();
+            }
             formData.append('file', blob, filename);
           } else {
             formData.append('file', {
@@ -133,28 +159,29 @@ export const syncService = {
         syncError: undefined,
       });
 
-      // ── Step 5: Mark ANALYSIS_PENDING then trigger AI/OCR analysis ────────
+      // ── Step 5: Mark ANALYSIS_PENDING then hand off to AnalyzingScreen or run OCR ──
       await draftStorage.updateDraftStatus(draft.clientDraftId, 'ANALYSIS_PENDING');
-      emit({ phase: 'starting_analysis' });
-
-      try {
-        await api.runOCR(inspection.id);
-        await draftStorage.updateDraftStatus(draft.clientDraftId, 'ANALYZING');
-      } catch (ocrErr: any) {
-        // OCR failure is non-fatal for idempotency — inspection + images are safe.
-        // Leave status as ANALYSIS_PENDING so we retry on next reconnect.
-        console.warn('[syncService] OCR trigger warning:', ocrErr);
-      }
-
-      // ── Step 6: Navigate to AnalyzingScreen if callback provided ──────────
       emit({ phase: 'done', inspectionId: inspection.id, inspectionNumber: inspection.inspection_number });
-      try {
-        onNavigate?.({
-          inspectionId: inspection.id,
-          inspectionNumber: inspection.inspection_number,
-        });
-      } catch (navErr) {
-        console.warn('[syncService] Navigation callback error:', navErr);
+
+      if (onNavigate) {
+        // UI layer present — delegate OCR execution to AnalyzingScreen with full live feedback
+        try {
+          onNavigate({
+            inspectionId: inspection.id,
+            inspectionNumber: inspection.inspection_number,
+          });
+        } catch (navErr) {
+          console.warn('[syncService] Navigation callback error:', navErr);
+        }
+      } else {
+        // Background sync without UI — run OCR directly
+        emit({ phase: 'starting_analysis' });
+        try {
+          await api.runOCR(inspection.id);
+          await draftStorage.updateDraftStatus(draft.clientDraftId, 'ANALYZING');
+        } catch (ocrErr: any) {
+          console.warn('[syncService] Headless OCR trigger warning:', ocrErr);
+        }
       }
 
       return inspection;

@@ -29,12 +29,13 @@ export const ReportPreviewScreen: React.FC = () => {
   const [report, setReport] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [downloading, setDownloading] = useState(false);
+  const [downloadingDocx, setDownloadingDocx] = useState(false);
 
   useEffect(() => {
     const fetchReport = async () => {
       try {
         let data = await api.getReportMetadata(inspectionId);
-        if (!data || !data.report_number) {
+        if (!data || !data.id || !data.report_version) {
           data = await api.generateReport(inspectionId);
         }
         setReport(data);
@@ -55,7 +56,7 @@ export const ReportPreviewScreen: React.FC = () => {
       const pdfUrl = `${baseUrl}/api/inspections/${inspectionId}/report/pdf`;
       const token = await authStorage.getToken();
 
-      const filename = `Inspection_Report_${report?.report_number || inspectionNumber || 'LM-2026'}.pdf`;
+      const filename = `Inspection_Report_${report?.inspection_number || inspectionNumber || 'LM-2026'}.pdf`;
 
       if (Platform.OS === 'web') {
         const response = await fetch(pdfUrl, {
@@ -105,6 +106,64 @@ export const ReportPreviewScreen: React.FC = () => {
     }
   };
 
+  const handleDownloadDOCX = async () => {
+    setDownloadingDocx(true);
+    try {
+      const baseUrl = getApiBaseUrl();
+      const docxUrl = `${baseUrl}/api/inspections/${inspectionId}/report/docx`;
+      const token = await authStorage.getToken();
+
+      const safeNum = (report?.inspection_number || inspectionNumber || 'LM-2026').replace(/-/g, '_').replace(/\//g, '_');
+      const filename = `LM_Report_${safeNum}.docx`;
+
+      if (Platform.OS === 'web') {
+        const response = await fetch(docxUrl, {
+          headers: { Authorization: `Bearer ${token}` },
+        });
+        if (!response.ok) {
+          throw new Error(`Server returned error generating DOCX (${response.status})`);
+        }
+        const blob = await response.blob();
+        const url = window.URL.createObjectURL(blob);
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = filename;
+        document.body.appendChild(link);
+        link.click();
+        document.body.removeChild(link);
+        window.URL.revokeObjectURL(url);
+        return;
+      }
+
+      const fileUri = `${FileSystem.documentDirectory}${filename}`;
+      const downloadRes = await FileSystem.downloadAsync(docxUrl, fileUri, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+
+      if (downloadRes.status === 200) {
+        if (await Sharing.isAvailableAsync()) {
+          await Sharing.shareAsync(downloadRes.uri, {
+            mimeType: 'application/vnd.openxmlformats-officedocument.wordprocessingml.document',
+            dialogTitle: 'Editable Inspection Report (DOCX)',
+            UTI: 'org.openxmlformats.wordprocessingml.document',
+          });
+        } else {
+          Alert.alert('DOCX Saved', `Editable compliance report saved to:\n${downloadRes.uri}`);
+        }
+      } else {
+        Alert.alert('Export Failed', 'Server returned error generating editable DOCX report.');
+      }
+    } catch (err: any) {
+      if (Platform.OS === 'web') {
+        alert(err.message || 'Could not download DOCX report.');
+      } else {
+        Alert.alert('Export Error', err.message || 'Could not download DOCX report.');
+      }
+    } finally {
+      setDownloadingDocx(false);
+    }
+  };
+
   const handleViewReport = async () => {
     const baseUrl = getApiBaseUrl();
     const pdfUrl = `${baseUrl}/api/inspections/${inspectionId}/report/pdf`;
@@ -149,7 +208,7 @@ export const ReportPreviewScreen: React.FC = () => {
       });
 
   const reportIdStr =
-    report?.report_number ||
+    report?.inspection_number ||
     (report?.id
       ? `REP-${report.id.substring(0, 8).toUpperCase()}`
       : inspectionNumber
@@ -332,6 +391,25 @@ export const ReportPreviewScreen: React.FC = () => {
                     )}
                   </TouchableOpacity>
                 </View>
+
+                {/* PS 26034: Editable DOCX Export */}
+                <TouchableOpacity
+                  style={styles.exportDocxBtn}
+                  onPress={handleDownloadDOCX}
+                  disabled={downloadingDocx}
+                  activeOpacity={0.85}
+                  accessibilityRole="button"
+                  accessibilityLabel="Export Editable DOCX"
+                >
+                  {downloadingDocx ? (
+                    <ActivityIndicator size="small" color={colors.primary} />
+                  ) : (
+                    <View style={styles.btnRow}>
+                      <MaterialIcons name="description" size={18} color={colors.primary} />
+                      <Text style={styles.exportDocxText}>Export Editable DOCX</Text>
+                    </View>
+                  )}
+                </TouchableOpacity>
 
                 <TouchableOpacity
                   style={styles.doneBtn}
@@ -591,7 +669,24 @@ const styles = StyleSheet.create({
     color: colors.onPrimary,
     fontWeight: '600',
   },
+  exportDocxBtn: {
+    backgroundColor: colors.surfaceContainerLowest,
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    paddingVertical: 12,
+    borderRadius: borderRadius.DEFAULT,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  exportDocxText: {
+    ...typography.sectionHeader,
+    fontSize: 14,
+    color: colors.primary,
+    fontWeight: '700',
+  },
   doneBtn: {
+    marginTop: 8,
     paddingVertical: 10,
     alignItems: 'center',
     justifyContent: 'center',

@@ -28,7 +28,7 @@ def test_real_readable_image_produces_actual_ocr():
 
     result = ocr_service.process_image(str(img_path), image_id="img-clear-1")
     assert result is not None
-    assert result.engine_used == "Tesseract"
+    assert result.engine_used in ("PaddleOCR", "Tesseract")
     assert result.error is None
     assert len(result.text_boxes) >= 5
     assert result.mean_confidence > 0.50
@@ -121,11 +121,12 @@ def test_filename_cannot_control_ocr_output(tmp_path):
 # TEST 4: Tesseract failure/unavailability does NOT produce fake text
 # ---------------------------------------------------------------------------
 def test_tesseract_unavailability_returns_structured_failure():
-    with patch("backend.ocr_service.is_tesseract_available", return_value=False):
+    with patch("backend.ocr_service.is_tesseract_available", return_value=False), \
+         patch("backend.ocr_service.is_paddleocr_available", return_value=False):
         svc = ModularOCRService()
         result = svc.process_image(str(FIXTURES_DIR / "clear_package.jpg"))
 
-        assert result.engine_used == "tesseract_unavailable"
+        assert result.engine_used in ("tesseract_unavailable", "ocr_unavailable")
         assert result.raw_text == ""
         assert result.text_boxes == []
         assert result.mean_confidence == 0.0

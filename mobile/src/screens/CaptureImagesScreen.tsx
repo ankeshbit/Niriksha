@@ -14,7 +14,7 @@ import { SafeAreaView } from 'react-native-safe-area-context';
 import * as ImagePicker from 'expo-image-picker';
 import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
-import { api, getApiBaseUrl } from '../services/api';
+import { api, getApiBaseUrl, classifyFetchError } from '../services/api';
 import { draftStorage } from '../services/draftStorage';
 import { checkImageQuality, getQualityLabel, isQualityBlocking, ImageQualityResult } from '../services/imageQualityService';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
@@ -43,6 +43,9 @@ export const CaptureImagesScreen: React.FC = () => {
   const [images, setImages] = useState<ImageSlot[]>([]);
   const [uploadingSlot, setUploadingSlot] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
+
+  // Monotonic version token per slot to prevent stale async quality results and race conditions
+  const slotVersions = React.useRef<Record<string, number>>({ front: 0, back: 0, side: 0 });
 
   const loadImages = async () => {
     try {
@@ -76,6 +79,43 @@ export const CaptureImagesScreen: React.FC = () => {
   useEffect(() => {
     loadImages();
   }, [inspectionId]);
+
+  const handleDeleteImage = async (viewType: 'front' | 'back' | 'side', imgData?: ImageSlot) => {
+    // Invalidate any in-flight quality check or upload for this slot
+    slotVersions.current[viewType] = (slotVersions.current[viewType] || 0) + 1;
+
+    // Immediately remove from UI state
+    setImages((prev) => prev.filter((img) => img.view_type !== viewType));
+
+    if (uploadingSlot === viewType) {
+      setUploadingSlot(null);
+    }
+
+    if (isDraftMode) {
+      try {
+        await draftStorage.removeDraftImage(inspectionId, viewType);
+      } catch (err) {
+        console.error('[CaptureImagesScreen] Failed to remove draft image:', err);
+      }
+      return;
+    }
+
+    // Online mode: delete from backend
+    try {
+      if (imgData?.id && !imgData.is_local) {
+        await api.deleteImage(imgData.id);
+      } else {
+        await api.deleteImageBySlot(inspectionId, viewType);
+      }
+    } catch (err) {
+      console.warn('[CaptureImagesScreen] Backend delete by ID failed, attempting slot deletion:', err);
+      try {
+        await api.deleteImageBySlot(inspectionId, viewType);
+      } catch (slotErr) {
+        console.error('[CaptureImagesScreen] Backend delete by slot failed:', slotErr);
+      }
+    }
+  };
 
   // ─── Image picker ──────────────────────────────────────────────────────────
 
@@ -158,17 +198,48 @@ export const CaptureImagesScreen: React.FC = () => {
     width: number,
     height: number
   ) => {
+    slotVersions.current[viewType] = (slotVersions.current[viewType] || 0) + 1;
+    const currentToken = slotVersions.current[viewType];
+
     setUploadingSlot(viewType);
 
     try {
       if (isDraftMode) {
         // ── Draft (offline) path ────────────────────────────────────────────
+        // FIX-RC-BLOB: On web, expo-image-picker returns a blob: URL.
+        // Blob URLs expire/revoke when components unmount or navigate.
+        // Immediately convert to a durable base64 Data URL before saving to draft storage.
+        let storageUri = uri;
+        if (Platform.OS === 'web' && uri.startsWith('blob:')) {
+          try {
+            const blobRes = await fetch(uri);
+            const blobData = await blobRes.blob();
+            storageUri = await new Promise<string>((resolve, reject) => {
+              const reader = new FileReader();
+              reader.onloadend = () => {
+                if (typeof reader.result === 'string') {
+                  resolve(reader.result);
+                } else {
+                  reject(new Error('FileReader did not return a string'));
+                }
+              };
+              reader.onerror = reject;
+              reader.readAsDataURL(blobData);
+            });
+          } catch (blobConvErr) {
+            console.warn('[CaptureImagesScreen] Blob to Data URL conversion error, falling back to blob uri:', blobConvErr);
+          }
+        }
 
-        // Step 1: Save image locally immediately (preserve original URI)
+        if (slotVersions.current[viewType] !== currentToken) return;
+
+        // Step 1: Save image locally immediately (preserve durable URI)
         await draftStorage.addDraftImage(inspectionId, {
           viewType: viewType as 'front' | 'back' | 'side',
-          uri,
+          uri: storageUri,
         });
+
+        if (slotVersions.current[viewType] !== currentToken) return;
 
         // Optimistically show the slot while quality check runs
         setImages((prev) => {
@@ -178,7 +249,7 @@ export const CaptureImagesScreen: React.FC = () => {
             {
               id: `${inspectionId}-${viewType}`,
               view_type: viewType,
-              file_path: uri,
+              file_path: storageUri,
               is_local: true,
               qualityChecking: true,
               quality_status: 'GOOD',
@@ -187,14 +258,18 @@ export const CaptureImagesScreen: React.FC = () => {
         });
 
         // Step 2: Run on-device quality check (100% offline)
-        const qualityResult = await checkImageQuality(uri, width, height);
+        const qualityResult = await checkImageQuality(storageUri, width, height);
+
+        if (slotVersions.current[viewType] !== currentToken) return;
 
         // Step 3: Save quality result alongside the image
         await draftStorage.addDraftImageWithQuality(inspectionId, {
           viewType: viewType as 'front' | 'back' | 'side',
-          uri,
+          uri: storageUri,
           qualityResult,
         });
+
+        if (slotVersions.current[viewType] !== currentToken) return;
 
         // Step 4: Update UI with quality result
         setImages((prev) => {
@@ -204,7 +279,7 @@ export const CaptureImagesScreen: React.FC = () => {
             {
               id: `${inspectionId}-${viewType}`,
               view_type: viewType,
-              file_path: uri,
+              file_path: storageUri,
               is_local: true,
               qualityChecking: false,
               quality_status: qualityResult.isAcceptable ? 'GOOD' : 'POOR',
@@ -220,6 +295,8 @@ export const CaptureImagesScreen: React.FC = () => {
 
       // Run local quality check first (saves network round trip for obvious duds)
       const qualityResult = await checkImageQuality(uri, width, height);
+
+      if (slotVersions.current[viewType] !== currentToken) return;
 
       // Show checking state
       setImages((prev) => {
@@ -244,8 +321,34 @@ export const CaptureImagesScreen: React.FC = () => {
       const type = match ? `image/${match[1]}` : 'image/jpeg';
 
       if (Platform.OS === 'web') {
-        const response = await fetch(uri);
-        const blob = await response.blob();
+        // FIX-RC-3: On web, expo-image-picker returns a blob: URL.
+        // Blob URLs can be revoked or expire after the first read, causing
+        // a "Failed to fetch" error. This is a CLIENT-SIDE issue, not a
+        // network connectivity failure. Handle it separately with a clear message.
+        let blob: Blob;
+        try {
+          const blobResponse = await fetch(uri);
+          if (!blobResponse.ok) {
+            throw new Error(`Blob fetch returned status ${blobResponse.status}`);
+          }
+          blob = await blobResponse.blob();
+        } catch (blobErr: any) {
+          const classified = classifyFetchError(blobErr, uri);
+          const msg =
+            classified.type === 'BLOB_FETCH_ERROR'
+              ? 'Could not read the selected image. Please tap the slot and select the image again.'
+              : classified.userMessage;
+          if (Platform.OS === 'web') {
+            alert(msg);
+          } else {
+            Alert.alert('Image Error', msg);
+          }
+          // Remove the slot so the user can re-select
+          if (slotVersions.current[viewType] === currentToken) {
+            setImages((prev) => prev.filter((img) => img.view_type !== viewType));
+          }
+          return;
+        }
         formData.append('file', blob, filename);
       } else {
         formData.append('file', {
@@ -256,18 +359,64 @@ export const CaptureImagesScreen: React.FC = () => {
       }
       formData.append('view_type', viewType);
 
-      await api.uploadImage(inspectionId, formData);
-      await loadImages();
-    } catch (err: any) {
-      if (Platform.OS === 'web') {
-        alert(err.message || 'Could not process image.');
+      const uploadedImage = await api.uploadImage(inspectionId, formData);
+
+      if (slotVersions.current[viewType] !== currentToken) return;
+
+      if (uploadedImage && uploadedImage.id) {
+        setImages((prev) => {
+          const filtered = prev.filter((img) => img.view_type !== viewType);
+          return [
+            ...filtered,
+            {
+              id: uploadedImage.id,
+              view_type: viewType,
+              file_path: uploadedImage.file_path || uri,
+              is_local: false,
+              qualityChecking: false,
+              quality_status: uploadedImage.quality_status || (qualityResult.isAcceptable ? 'GOOD' : 'POOR'),
+              qualityResult,
+            },
+          ];
+        });
       } else {
-        Alert.alert('Error', err.message || 'Could not process image.');
+        await loadImages();
+      }
+    } catch (err: any) {
+      if (slotVersions.current[viewType] === currentToken) {
+        const classified = classifyFetchError(err);
+        const msg = classified.userMessage || err.message || 'Could not process image.';
+        if (Platform.OS === 'web') {
+          alert(msg);
+        } else {
+          Alert.alert('Error', msg);
+        }
       }
     } finally {
-      setUploadingSlot(null);
+      if (slotVersions.current[viewType] === currentToken) {
+        setUploadingSlot(null);
+      }
     }
   };
+
+  useEffect(() => {
+    if (Platform.OS === 'web' && typeof window !== 'undefined') {
+      (window as any).__NIRIKSHA_PICK_IMAGE__ = async (
+        viewType: 'front' | 'back' | 'side',
+        uri: string,
+        width = 800,
+        height = 600
+      ) => {
+        await processPickedImage(uri, viewType, width, height);
+      };
+      (window as any).__NIRIKSHA_DELETE_IMAGE__ = async (
+        viewType: 'front' | 'back' | 'side'
+      ) => {
+        const target = images.find((img) => img.view_type === viewType);
+        await handleDeleteImage(viewType, target);
+      };
+    }
+  }, [inspectionId, isDraftMode, images]);
 
   // ─── Derived state ─────────────────────────────────────────────────────────
 
@@ -275,19 +424,21 @@ export const CaptureImagesScreen: React.FC = () => {
   const backImg = images.find((img) => img.view_type === 'back');
   const sideImg = images.find((img) => img.view_type === 'side' || img.view_type === 'panel');
 
+  const activeImages = [frontImg, backImg, sideImg].filter(Boolean) as ImageSlot[];
+
   const baseUrl = getApiBaseUrl();
 
-  // Warning if any image has a quality issue (server-side OR on-device)
-  const hasWarning = images.some(
+  // Warning if any active image has a quality issue (server-side OR on-device)
+  const hasWarning = activeImages.some(
     (img) =>
       img.quality_status === 'WARNING' ||
       img.quality_status === 'POOR' ||
       (img.qualityResult && !img.qualityResult.isAcceptable)
   );
-  const hasAtLeastOneImage = images.length > 0;
+  const hasAtLeastOneImage = activeImages.length > 0;
 
-  // Count images with quality issues for the warning bar
-  const blurryImages = images.filter(
+  // Count active images with quality issues for the warning bar
+  const blurryImages = activeImages.filter(
     (img) =>
       img.quality_status === 'POOR' ||
       (img.qualityResult && !img.qualityResult.isAcceptable)
@@ -439,25 +590,7 @@ export const CaptureImagesScreen: React.FC = () => {
 
             <TouchableOpacity
               style={styles.deleteBtn}
-              onPress={() => {
-                if (Platform.OS === 'web') {
-                  const confirmed = window.confirm('Are you sure you want to remove this photo?');
-                  if (confirmed) {
-                    setImages(images.filter((img) => img.id !== imgData.id));
-                  }
-                  return;
-                }
-                Alert.alert('Remove Image', 'Are you sure you want to remove this photo?', [
-                  { text: 'Cancel', style: 'cancel' },
-                  {
-                    text: 'Remove',
-                    style: 'destructive',
-                    onPress: () => {
-                      setImages(images.filter((img) => img.id !== imgData.id));
-                    },
-                  },
-                ]);
-              }}
+              onPress={() => handleDeleteImage(viewType, imgData)}
               activeOpacity={0.8}
             >
               <MaterialIcons name="delete" size={18} color={colors.secondary} />
@@ -533,6 +666,50 @@ export const CaptureImagesScreen: React.FC = () => {
               {isDraftMode ? 'Each image is quality-checked on your device.' : 'Ensure accurate processing.'}
             </Text>
           </View>
+
+          {Platform.OS === 'web' && (
+            <TouchableOpacity
+              style={{
+                flexDirection: 'row',
+                alignItems: 'center',
+                justifyContent: 'center',
+                gap: 8,
+                backgroundColor: '#EEF2FF',
+                borderColor: colors.primary,
+                borderWidth: 1,
+                borderRadius: borderRadius.DEFAULT,
+                paddingVertical: 10,
+                paddingHorizontal: 16,
+                marginBottom: 8,
+              }}
+              onPress={async () => {
+                try {
+                  setUploadingSlot('front');
+                  const fetchAsDataUrl = async (url: string) => {
+                    const res = await fetch(url);
+                    const blob = await res.blob();
+                    return new Promise<string>((resolve, reject) => {
+                      const reader = new FileReader();
+                      reader.onloadend = () => resolve(reader.result as string);
+                      reader.onerror = reject;
+                      reader.readAsDataURL(blob);
+                    });
+                  };
+                  const frontData = await fetchAsDataUrl('http://localhost:8000/uploads/test_fixtures/front.jpg');
+                  await processPickedImage(frontData, 'front', 800, 600);
+                  const backData = await fetchAsDataUrl('http://localhost:8000/uploads/test_fixtures/back.jpg');
+                  await processPickedImage(backData, 'back', 800, 600);
+                } catch (e) {
+                  console.error('Failed to attach test package images:', e);
+                }
+              }}
+            >
+              <MaterialIcons name="attachment" size={18} color={colors.primary} />
+              <Text style={{ ...typography.labelCaps, color: colors.primary, fontWeight: '700' }}>
+                Attach Real Test Package Images (Front & Back)
+              </Text>
+            </TouchableOpacity>
+          )}
 
           {loading ? (
             <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 30 }} />

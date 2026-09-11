@@ -33,6 +33,7 @@ class User(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     last_login_at = Column(DateTime, nullable=True)
     previous_login_at = Column(DateTime, nullable=True)
+    password_updated_at = Column(DateTime, default=datetime.utcnow, nullable=True)
 
     inspections = relationship("Inspection", back_populates="inspector")
     reviews = relationship("InspectorReview", back_populates="officer")
@@ -44,16 +45,20 @@ class Inspection(Base):
     id = Column(String(36), primary_key=True, default=generate_uuid)
     inspection_number = Column(String(50), unique=True, nullable=False, index=True)
     inspector_id = Column(String(36), ForeignKey("users.id"), nullable=False)
-    location = Column(String(255), nullable=False)
+    location = Column(String(255), nullable=False, index=True)
     
     # State Lifecycle: DRAFT -> IMAGES_UPLOADED -> ANALYZING -> ANALYSIS_COMPLETE -> NEEDS_REVIEW -> FINALIZED
-    status = Column(String(30), default="DRAFT", nullable=False)
+    status = Column(String(30), default="DRAFT", nullable=False, index=True)
     
     # Final statutory status: NO_POTENTIAL_VIOLATIONS, POTENTIAL_NON_COMPLIANCE, NEEDS_MANUAL_VERIFICATION, INSUFFICIENT_EVIDENCE
-    overall_status = Column(String(50), nullable=True)
+    overall_status = Column(String(50), nullable=True, index=True)
+    
+    # Mode: PHYSICAL, ONLINE_LISTING, HYBRID (PS 26034)
+    inspection_type = Column(String(50), default="PHYSICAL", nullable=False)
     
     notes = Column(Text, nullable=True)
-    created_at = Column(DateTime, default=datetime.utcnow)
+    client_draft_id = Column(String(100), nullable=True, index=True)
+    created_at = Column(DateTime, default=datetime.utcnow, index=True)
     finalized_at = Column(DateTime, nullable=True)
 
     inspector = relationship("User", back_populates="inspections")
@@ -62,6 +67,8 @@ class Inspection(Base):
     declarations = relationship("Declaration", back_populates="inspection", cascade="all, delete-orphan")
     compliance_checks = relationship("ComplianceCheck", back_populates="inspection", cascade="all, delete-orphan")
     report = relationship("Report", back_populates="inspection", uselist=False, cascade="all, delete-orphan")
+    listing = relationship("ProductListing", back_populates="inspection", uselist=False, cascade="all, delete-orphan")
+    listing_comparisons = relationship("ListingComparison", back_populates="inspection", cascade="all, delete-orphan")
 
 
 class Product(Base):
@@ -69,8 +76,8 @@ class Product(Base):
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     inspection_id = Column(String(36), ForeignKey("inspections.id"), unique=True, nullable=False)
-    product_name = Column(String(255), nullable=False)
-    brand_name = Column(String(255), nullable=True)
+    product_name = Column(String(255), nullable=False, index=True)
+    brand_name = Column(String(255), nullable=True, index=True)
     category = Column(String(100), nullable=False)  # 'Packaged Food', 'Personal Care / Household'
     batch_number = Column(String(100), nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
@@ -255,6 +262,7 @@ class Report(Base):
     inspection_id = Column(String(36), ForeignKey("inspections.id"), unique=True, nullable=False)
     report_version = Column(Integer, default=1, nullable=False)
     pdf_path = Column(String(500), nullable=False)
+    docx_path = Column(String(500), nullable=True)
     legal_safety_statement = Column(Text, nullable=False)
     generated_at = Column(DateTime, default=datetime.utcnow)
 
@@ -263,4 +271,72 @@ class Report(Base):
     @property
     def download_url(self) -> str:
         return f"/api/inspections/{self.inspection_id}/report/pdf"
-        return f"/api/inspections/{self.inspection_id}/report/pdf"
+
+    @property
+    def docx_download_url(self) -> str:
+        return f"/api/inspections/{self.inspection_id}/report/docx"
+
+
+class InspectionNumberCounter(Base):
+    """AUDIT-CONCUR-01: Atomic sequence counter for year-based inspection numbers."""
+    __tablename__ = "inspection_number_counters"
+
+    year = Column(Integer, primary_key=True)
+    next_number = Column(Integer, nullable=False, default=1)
+
+
+class ProductListing(Base):
+    """Product Information / E-Commerce Online Listing Details (PS 26034)"""
+    __tablename__ = "product_listings"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    inspection_id = Column(String(36), ForeignKey("inspections.id"), unique=True, nullable=False, index=True)
+    product_name = Column(String(255), nullable=True)
+    brand_name = Column(String(255), nullable=True)
+    mrp = Column(String(100), nullable=True)
+    net_quantity = Column(String(100), nullable=True)
+    manufacturer_details = Column(Text, nullable=True)
+    importer_details = Column(Text, nullable=True)
+    country_of_origin = Column(String(100), nullable=True)
+    consumer_care_details = Column(Text, nullable=True)
+    date_information = Column(String(150), nullable=True)
+    seller_information = Column(Text, nullable=True)
+    product_description = Column(Text, nullable=True)
+    listing_url = Column(String(1000), nullable=True)
+    source = Column(String(50), default="MANUAL_LISTING_INPUT", nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    inspection = relationship("Inspection", back_populates="listing")
+    comparisons = relationship("ListingComparison", back_populates="listing", cascade="all, delete-orphan")
+
+
+class ListingComparison(Base):
+    """Field-by-Field Evidence Discrepancy Comparison between Online Listing and Package (PS 26034)"""
+    __tablename__ = "listing_comparisons"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    inspection_id = Column(String(36), ForeignKey("inspections.id"), nullable=False, index=True)
+    listing_id = Column(String(36), ForeignKey("product_listings.id"), nullable=False, index=True)
+    field_name = Column(String(100), nullable=False)  # 'mrp', 'net_quantity', 'product_name', 'brand_name', 'manufacturer_details', 'country_of_origin', 'consumer_care_details', etc.
+    listing_value = Column(Text, nullable=True)
+    package_value = Column(Text, nullable=True)
+    comparison_status = Column(String(50), nullable=False)  # 'MATCH', 'MISMATCH', 'MISSING_ON_LISTING', 'MISSING_ON_PACKAGE', 'UNCERTAIN'
+    difference_explanation = Column(Text, nullable=True)
+    package_ocr_evidence = Column(Text, nullable=True)
+    ocr_confidence = Column(Float, default=0.0)
+    source_image_id = Column(String(36), ForeignKey("product_images.id"), nullable=True)
+    bounding_box_json = Column(Text, nullable=True)
+    applicable_rule_code = Column(String(100), nullable=True)  # e.g. PCR_RULE_18_2A_ONLINE_PRICE_OVERCHARGING, PCR_RULE_06_10_ECOMMERCE_DECLARATION
+    inspector_status = Column(String(50), default="PENDING_REVIEW", nullable=False)  # 'PENDING_REVIEW', 'VERIFIED_MATCH', 'CONFIRMED_DISCREPANCY', 'DISMISSED_DISCREPANCY'
+    inspector_remarks = Column(Text, nullable=True)
+    adjudicated_by = Column(String(100), nullable=True)
+    adjudicated_at = Column(DateTime, nullable=True)
+    listing_provenance = Column(String(50), default="MANUAL_LISTING_INPUT", nullable=False)
+    package_provenance = Column(String(50), default="PACKAGE_OCR", nullable=False)  # 'PACKAGE_OCR', 'INSPECTOR_CORRECTED', 'NOT_APPLICABLE'
+    created_at = Column(DateTime, default=datetime.utcnow)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
+
+    inspection = relationship("Inspection", back_populates="listing_comparisons")
+    listing = relationship("ProductListing", back_populates="comparisons")
+    source_image = relationship("ProductImage")

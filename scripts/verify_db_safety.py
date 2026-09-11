@@ -1,3 +1,8 @@
+# DEPRECATED: This script was written for the SQLite era of NiriKsha.
+# NiriKsha now uses Neon PostgreSQL exclusively.
+# This script reads local SQLite .db files and must NOT be used with production data.
+# Use the Neon PostgreSQL dashboard or psql to verify production data integrity.
+
 import sqlite3
 from pathlib import Path
 

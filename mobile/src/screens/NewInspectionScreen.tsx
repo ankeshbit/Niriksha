@@ -17,7 +17,7 @@ import * as Location from 'expo-location';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
 import { BottomNav } from '../components/BottomNav';
 import { ProfileAvatar } from '../components/ProfileAvatar';
-import { api } from '../services/api';
+import { api, classifyFetchError, isConnectivityError, getApiBaseUrl } from '../services/api';
 import { authStorage } from '../services/authStorage';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
@@ -49,6 +49,20 @@ export const NewInspectionScreen: React.FC = () => {
   const [inspectionContext, setInspectionContext] = useState<'Retail' | 'Warehouse' | 'E-commerce'>('Retail');
   const [notes, setNotes] = useState('');
   const [loading, setLoading] = useState(false);
+
+  // Analysis Mode Switcher (PS 26034)
+  const [analysisMode, setAnalysisMode] = useState<'PHYSICAL' | 'ONLINE_LISTING'>('PHYSICAL');
+  const [listingMrp, setListingMrp] = useState('');
+  const [listingNetQuantity, setListingNetQuantity] = useState('');
+  const [listingManufacturer, setListingManufacturer] = useState('');
+  const [listingImporter, setListingImporter] = useState('');
+  const [listingCountryOfOrigin, setListingCountryOfOrigin] = useState('');
+  const [listingConsumerCare, setListingConsumerCare] = useState('');
+  const [listingDateInfo, setListingDateInfo] = useState('');
+  const [listingSeller, setListingSeller] = useState('');
+  const [listingDescription, setListingDescription] = useState('');
+  const [listingUrl, setListingUrl] = useState('');
+
   // Ref-based in-flight guard: prevents a second POST even if the user manages
   // to press Continue again before the first setLoading(true) re-render fires.
   const submittingRef = useRef(false);
@@ -91,6 +105,17 @@ export const NewInspectionScreen: React.FC = () => {
         setSource('');
         setInspectionContext('Retail');
         setNotes('');
+        setAnalysisMode('PHYSICAL');
+        setListingMrp('');
+        setListingNetQuantity('');
+        setListingManufacturer('');
+        setListingImporter('');
+        setListingCountryOfOrigin('');
+        setListingConsumerCare('');
+        setListingDateInfo('');
+        setListingSeller('');
+        setListingDescription('');
+        setListingUrl('');
         setLoading(false);
         clientDraftIdRef.current = draftStorage.generateClientDraftId();
       }
@@ -215,20 +240,15 @@ export const NewInspectionScreen: React.FC = () => {
         });
 
         console.log(`[Location] Coordinates: lat=${coords.latitude}, lon=${coords.longitude}`);
-        console.log('[Location] Reverse geocoding: skipped on Web (Geocoding API removed in SDK 49)');
-        console.log('[Location] Final address: (manual entry requested)');
-        setLocationStatus('idle');
-        Alert.alert(
-          'Location Detected',
-          'Current location detected. Please enter the location manually.',
-          [{ text: 'OK' }]
-        );
+        const readableCoords = `GPS (${coords.latitude.toFixed(4)}, ${coords.longitude.toFixed(4)})`;
+        setLocation(readableCoords);
+        setLocationStatus('success');
       } catch (webErr: any) {
         console.warn('[Location] Web geolocation failed:', webErr);
         setLocationStatus('error');
         Alert.alert(
-          'Location Detection Failed',
-          'Unable to detect browser location. Please enter the location manually.',
+          'Location Detection Unavailable',
+          'Unable to detect browser location. Please type the market/facility address manually.',
           [{ text: 'OK' }]
         );
       } finally {
@@ -362,12 +382,16 @@ export const NewInspectionScreen: React.FC = () => {
         setLocation(resolvedAddress);
         setLocationStatus('success');
       } else {
-        // Reverse geocoding produced no address (e.g. offline or geocoding service unavailable)
-        console.log('[Location] Reverse geocoding produced no address (offline or unavailable)');
-        setLocationStatus('error');
+        // Reverse geocoding produced no address (e.g. offline, Web, or service unavailable)
+        console.log('[Location] Reverse geocoding produced no address, displaying explicit coordinates');
+        const latStr = coords.latitude.toFixed(4);
+        const lonStr = coords.longitude.toFixed(4);
+        const coordsText = `Location detected: Lat: ${latStr}, Lon: ${lonStr}`;
+        setLocation(coordsText);
+        setLocationStatus('success');
         Alert.alert(
-          'Could Not Fetch Address',
-          'Location detected, but reverse geocoding is unavailable. Please enter the location manually.',
+          'Location Detected',
+          `Location detected:\nLat: ${latStr}, Lon: ${lonStr}\n\nYou may edit this location manually.`,
           [{ text: 'OK' }]
         );
       }
@@ -475,28 +499,57 @@ export const NewInspectionScreen: React.FC = () => {
         location: location.trim(),
         batch_number: batchNumber.trim() || undefined,
         notes: combinedNotes || undefined,
+        inspection_type: analysisMode,
       });
+
+      if (analysisMode === 'ONLINE_LISTING') {
+        await api.saveProductListing(inspection.id, {
+          product_name: productName.trim(),
+          brand_name: brandName.trim(),
+          mrp: listingMrp.trim() || undefined,
+          net_quantity: listingNetQuantity.trim() || undefined,
+          manufacturer_details: listingManufacturer.trim() || manufacturer.trim() || undefined,
+          importer_details: listingImporter.trim() || undefined,
+          country_of_origin: listingCountryOfOrigin.trim() || undefined,
+          consumer_care_details: listingConsumerCare.trim() || undefined,
+          date_information: listingDateInfo.trim() || undefined,
+          seller_information: listingSeller.trim() || undefined,
+          product_description: listingDescription.trim() || undefined,
+          listing_url: listingUrl.trim() || undefined,
+        });
+      }
 
       navigation.navigate('CaptureImages', {
         inspectionId: inspection.id,
         inspectionNumber: inspection.inspection_number,
       });
     } catch (err: any) {
-      const errorMsg = String(err?.message || '');
-      const isNetworkError =
-        !networkService.isOnline() ||
-        errorMsg.includes('Network') ||
-        errorMsg.includes('Failed to fetch') ||
-        errorMsg.includes('Network request failed') ||
-        errorMsg.includes('502') ||
-        errorMsg.includes('503') ||
-        errorMsg.includes('504');
+      // FIX-RC-4: Use structured error classification instead of brittle string matching.
+      // Only NETWORK_UNREACHABLE errors should trigger the offline draft flow.
+      // REQUEST_TIMEOUT, BLOB_FETCH_ERROR, HTTP_ERROR, and SERVER_ERROR are NOT
+      // connectivity failures and must NOT send the user into the offline draft flow.
+      const classified = classifyFetchError(err);
 
-      if (isNetworkError) {
-        // Reactive fallback: API call failed due to connectivity loss mid-request
-        await saveOfflineDraftAndCapture(errorMsg);
+      // Dev diagnostic log — safe (no credentials)
+      if (__DEV__) {
+        console.warn(
+          `[NewInspectionScreen] createInspection error:\n` +
+          `  type: ${classified.type}\n` +
+          `  message: ${classified.message}\n` +
+          `  apiBaseUrl: ${getApiBaseUrl()}\n` +
+          `  networkState: ${networkService.getState()}\n` +
+          `  physicalOnline: ${networkService.isPhysicalOnline()}`
+        );
+      }
+
+      if (isConnectivityError(classified) || !networkService.isOnline()) {
+        // Reactive fallback: genuine network connectivity failure mid-request
+        await saveOfflineDraftAndCapture(classified.message);
       } else {
-        Alert.alert('Error', err.message || 'Failed to create inspection record.');
+        Alert.alert(
+          'Error',
+          classified.userMessage || err.message || 'Failed to create inspection record.'
+        );
       }
     } finally {
       submittingRef.current = false;
@@ -541,6 +594,55 @@ export const NewInspectionScreen: React.FC = () => {
           keyboardShouldPersistTaps="handled"
           showsVerticalScrollIndicator={false}
         >
+          {/* Analysis Mode Switcher (PS 26034) */}
+          <View style={styles.modeSwitcherContainer}>
+            <TouchableOpacity
+              style={[
+                styles.modeSwitcherBtn,
+                analysisMode === 'PHYSICAL' && styles.modeSwitcherBtnActive,
+              ]}
+              onPress={() => setAnalysisMode('PHYSICAL')}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons
+                name="inventory-2"
+                size={16}
+                color={analysisMode === 'PHYSICAL' ? '#ffffff' : colors.onSurfaceVariant}
+              />
+              <Text
+                style={[
+                  styles.modeSwitcherText,
+                  analysisMode === 'PHYSICAL' && styles.modeSwitcherTextActive,
+                ]}
+              >
+                Physical Package
+              </Text>
+            </TouchableOpacity>
+
+            <TouchableOpacity
+              style={[
+                styles.modeSwitcherBtn,
+                analysisMode === 'ONLINE_LISTING' && styles.modeSwitcherBtnActive,
+              ]}
+              onPress={() => setAnalysisMode('ONLINE_LISTING')}
+              activeOpacity={0.8}
+            >
+              <MaterialIcons
+                name="language"
+                size={16}
+                color={analysisMode === 'ONLINE_LISTING' ? '#ffffff' : colors.onSurfaceVariant}
+              />
+              <Text
+                style={[
+                  styles.modeSwitcherText,
+                  analysisMode === 'ONLINE_LISTING' && styles.modeSwitcherTextActive,
+                ]}
+              >
+                Product Information
+              </Text>
+            </TouchableOpacity>
+          </View>
+
           {/* Section 1: Inspection Details Card */}
           <View style={styles.cardSection}>
             <View style={styles.cardHeader}>
@@ -700,6 +802,136 @@ export const NewInspectionScreen: React.FC = () => {
               </View>
             </View>
           </View>
+
+          {/* Section: Product Information / Online Listing (PS 26034) */}
+          {analysisMode === 'ONLINE_LISTING' && (
+            <View style={styles.cardSection}>
+              <View style={[styles.cardHeader, { backgroundColor: '#eff6ff' }]}>
+                <View style={{ flexDirection: 'row', alignItems: 'center', gap: 6 }}>
+                  <MaterialIcons name="language" size={18} color={colors.primary} />
+                  <Text style={[styles.cardHeaderText, { color: colors.primary }]}>
+                    Online Listing Declarations
+                  </Text>
+                </View>
+              </View>
+
+              <View style={styles.cardBody}>
+                <Text style={{ fontSize: 12, color: colors.onSurfaceVariant, marginBottom: 12 }}>
+                  Enter product information as declared on the e-commerce listing / marketplace.
+                  Package images can be compared next to detect evidence discrepancies.
+                </Text>
+
+                {/* Listing MRP */}
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.fieldLabel}>Listing MRP / Retail Price</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={listingMrp}
+                    onChangeText={setListingMrp}
+                    placeholder="e.g. ₹55.00"
+                    placeholderTextColor={colors.outline}
+                  />
+                </View>
+
+                {/* Listing Net Quantity */}
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.fieldLabel}>Listing Net Quantity</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={listingNetQuantity}
+                    onChangeText={setListingNetQuantity}
+                    placeholder="e.g. 500 g"
+                    placeholderTextColor={colors.outline}
+                  />
+                </View>
+
+                {/* Country of Origin */}
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.fieldLabel}>Declared Country of Origin</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={listingCountryOfOrigin}
+                    onChangeText={setListingCountryOfOrigin}
+                    placeholder="e.g. India"
+                    placeholderTextColor={colors.outline}
+                  />
+                </View>
+
+                {/* Manufacturer / Packer / Importer */}
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.fieldLabel}>Manufacturer / Packer Details</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={listingManufacturer}
+                    onChangeText={setListingManufacturer}
+                    placeholder="e.g. ABC Foods Pvt Ltd, Mumbai, Maharashtra"
+                    placeholderTextColor={colors.outline}
+                  />
+                </View>
+
+                {/* Importer Details (if applicable) */}
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.fieldLabel}>Importer Details (if imported)</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={listingImporter}
+                    onChangeText={setListingImporter}
+                    placeholder="Name and postal address of importer"
+                    placeholderTextColor={colors.outline}
+                  />
+                </View>
+
+                {/* Consumer Care */}
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.fieldLabel}>Consumer Care Contact Details</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={listingConsumerCare}
+                    onChangeText={setListingConsumerCare}
+                    placeholder="e.g. customercare@example.com / 1800-111-222"
+                    placeholderTextColor={colors.outline}
+                  />
+                </View>
+
+                {/* Seller Information */}
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.fieldLabel}>Seller / Merchant Information</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={listingSeller}
+                    onChangeText={setListingSeller}
+                    placeholder="e.g. Retailer XYZ Enterprises"
+                    placeholderTextColor={colors.outline}
+                  />
+                </View>
+
+                {/* Date Information */}
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.fieldLabel}>Date Information (Mfg/Best Before/Expiry)</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={listingDateInfo}
+                    onChangeText={setListingDateInfo}
+                    placeholder="e.g. Best before 12 months from manufacture"
+                    placeholderTextColor={colors.outline}
+                  />
+                </View>
+
+                {/* Listing URL / Reference */}
+                <View style={styles.fieldGroup}>
+                  <Text style={styles.fieldLabel}>Listing URL / Reference ID</Text>
+                  <TextInput
+                    style={styles.textInput}
+                    value={listingUrl}
+                    onChangeText={setListingUrl}
+                    placeholder="e.g. https://marketplace.in/item/12345"
+                    placeholderTextColor={colors.outline}
+                    autoCapitalize="none"
+                  />
+                </View>
+              </View>
+            </View>
+          )}
 
           {/* Section 2: Additional Details Accordion Card */}
           <View style={styles.cardSection}>
@@ -1028,5 +1260,35 @@ const styles = StyleSheet.create({
   },
   locationBtnTextSuccess: {
     color: '#15803d',
+  },
+  // ── Mode Switcher (PS 26034) ─────────────────────────────────────────────
+  modeSwitcherContainer: {
+    flexDirection: 'row',
+    backgroundColor: '#e2e8f0',
+    borderRadius: borderRadius.lg,
+    padding: 3,
+    marginBottom: spacing.stackMd,
+    gap: 4,
+  },
+  modeSwitcherBtn: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 9,
+    borderRadius: borderRadius.DEFAULT,
+  },
+  modeSwitcherBtnActive: {
+    backgroundColor: colors.primary,
+  },
+  modeSwitcherText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.onSurfaceVariant,
+  },
+  modeSwitcherTextActive: {
+    color: '#ffffff',
+    fontWeight: '700',
   },
 });

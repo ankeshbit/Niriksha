@@ -47,3 +47,30 @@ def get_current_user(token: Optional[str] = Depends(oauth2_scheme), db: Session 
             detail="Officer not found"
         )
     return user
+
+
+class RoleChecker:
+    """FastAPI dependency to enforce role-based access control."""
+    def __init__(self, allowed_roles: list[str]):
+        self.allowed_roles = {r.upper() for r in allowed_roles}
+
+    def __call__(self, current_user: User = Depends(get_current_user)) -> User:
+        user_role = (current_user.role or "INSPECTOR").upper()
+        if user_role not in self.allowed_roles:
+            raise HTTPException(
+                status_code=status.HTTP_403_FORBIDDEN,
+                detail=f"Access forbidden: required role in {sorted(list(self.allowed_roles))}, your role is '{user_role}'"
+            )
+        return current_user
+
+
+def require_roles(*roles: str):
+    """Factory helper for role checking dependency."""
+    return RoleChecker(list(roles))
+
+
+# Standard Role Dependencies for PS 26034
+require_inspector = RoleChecker(["INSPECTOR", "ADMIN"])
+require_supervisor_or_admin = RoleChecker(["SUPERVISOR", "ADMIN"])
+require_admin = RoleChecker(["ADMIN"])
+

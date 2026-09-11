@@ -2,16 +2,18 @@ import { authStorage } from './authStorage';
 import { Platform } from 'react-native';
 
 // Network host configurations
-export const PC_LAN_API_HOST = 'http://10.185.115.213:8000'; // Physical Android device over Wi-Fi
 export const EMULATOR_API_HOST = 'http://10.0.2.2:8000';   // Android Emulator loopback
 export const LOCALHOST_API_HOST = 'http://127.0.0.1:8000';  // Web / iOS simulator
 
-// Environment-configured API host (for production builds / EAS)
+// Environment-configured API host (configured via EXPO_PUBLIC_API_URL in .env or EAS build)
 const expoEnvUrl = (process.env as Record<string, string | undefined>)?.EXPO_PUBLIC_API_URL;
 const ENV_API_HOST = expoEnvUrl ? expoEnvUrl.replace(/\/$/, '') : null;
 
-// Default active API host for standalone build or local development
-export const DEFAULT_API_HOST = ENV_API_HOST || (Platform.OS === 'android' ? PC_LAN_API_HOST : LOCALHOST_API_HOST);
+// Default active API host:
+// - If EXPO_PUBLIC_API_URL is configured in .env, use that.
+// - On Android emulator/device without env, default to emulator loopback (10.0.2.2:8000).
+// - On Web / iOS, default to localhost loopback (127.0.0.1:8000).
+export const DEFAULT_API_HOST = ENV_API_HOST || (Platform.OS === 'android' ? EMULATOR_API_HOST : LOCALHOST_API_HOST);
 
 let customBaseUrl: string | null = null;
 
@@ -32,10 +34,128 @@ export const getApiBaseUrl = () => {
 
   if (ENV_API_HOST) return ENV_API_HOST;
 
-  return Platform.OS === 'android' ? PC_LAN_API_HOST : LOCALHOST_API_HOST;
+  return Platform.OS === 'android' ? EMULATOR_API_HOST : LOCALHOST_API_HOST;
 };
 
+// ─── Error classification ─────────────────────────────────────────────────────
 
+export type FetchErrorType =
+  | 'NETWORK_UNREACHABLE'
+  | 'REQUEST_TIMEOUT'
+  | 'HTTP_ERROR'
+  | 'AUTH_ERROR'
+  | 'SERVER_ERROR'
+  | 'BLOB_FETCH_ERROR'
+  | 'UNKNOWN_ERROR';
+
+export interface ClassifiedError {
+  type: FetchErrorType;
+  status?: number;
+  message: string;
+  userMessage: string;
+}
+
+/**
+ * Classifies a fetch/network error into a structured type so callers can make
+ * informed decisions (e.g. offline draft vs user error vs retry).
+ *
+ * FIX-RC-4: Separates client-side blob: URI errors from genuine network failures.
+ * A blob: fetch error is NOT a connectivity problem and must not trigger offline mode.
+ */
+export function classifyFetchError(err: any, url?: string): ClassifiedError {
+  const msg = String(err?.message || err || '');
+  const isAbort = err?.name === 'AbortError' || msg.includes('aborted');
+  const isNetworkMsg =
+    msg.includes('Failed to fetch') ||
+    msg.includes('Network request failed') ||
+    msg.includes('NetworkError') ||
+    msg.includes('ECONNREFUSED') ||
+    msg.includes('ENOTFOUND');
+
+  // Client-side blob URL fetch failure (RC-3/RC-4) — NOT a network/connectivity error
+  if (url && (url.startsWith('blob:') || url.startsWith('data:'))) {
+    return {
+      type: 'BLOB_FETCH_ERROR',
+      message: msg,
+      userMessage:
+        'Could not read the selected image file. Please select the image again.',
+    };
+  }
+
+  if (isAbort) {
+    return {
+      type: 'REQUEST_TIMEOUT',
+      message: msg,
+      userMessage:
+        'The request took too long. The server may be processing a complex task. Please try again.',
+    };
+  }
+
+  if (isNetworkMsg) {
+    return {
+      type: 'NETWORK_UNREACHABLE',
+      message: msg,
+      userMessage:
+        'Backend connection unavailable. Your draft is safely stored locally.',
+    };
+  }
+
+  const status = err?.status ?? err?.statusCode;
+  if (status === 401 || status === 403) {
+    return {
+      type: 'AUTH_ERROR',
+      status,
+      message: msg,
+      userMessage: status === 401 ? 'Session expired. Please sign in again.' : 'Access denied.',
+    };
+  }
+
+  if (status && status >= 500) {
+    return {
+      type: 'SERVER_ERROR',
+      status,
+      message: msg,
+      userMessage: 'Server error. Please try again in a moment.',
+    };
+  }
+
+  if (status) {
+    return {
+      type: 'HTTP_ERROR',
+      status,
+      message: msg,
+      userMessage: msg || `Request failed (${status})`,
+    };
+  }
+
+  return {
+    type: 'UNKNOWN_ERROR',
+    message: msg,
+    userMessage: msg || 'An unexpected error occurred.',
+  };
+}
+
+/**
+ * Returns true if the classified error represents a genuine network connectivity
+ * failure that justifies switching to offline draft mode.
+ *
+ * Critically, BLOB_FETCH_ERROR and REQUEST_TIMEOUT are NOT connectivity failures.
+ */
+export function isConnectivityError(classified: ClassifiedError): boolean {
+  return classified.type === 'NETWORK_UNREACHABLE';
+}
+
+// ─── Core API request function ────────────────────────────────────────────────
+
+/**
+ * FIX-RC-5: Added `timeoutMs` option to `apiRequest`.
+ *
+ * Default timeout: 30000ms (30s) — covers normal API calls.
+ * OCR endpoint should use 180000ms (3 minutes) for CPU-heavy PaddleOCR.
+ *
+ * The AbortController fires after `timeoutMs`. The error thrown is classified as
+ * REQUEST_TIMEOUT (not NETWORK_UNREACHABLE), so callers can decide appropriately.
+ */
 export async function apiRequest<T = any>(
   endpoint: string,
   options: {
@@ -43,12 +163,15 @@ export async function apiRequest<T = any>(
     body?: any;
     headers?: Record<string, string>;
     isFormData?: boolean;
+    /** Request timeout in milliseconds. Default: 30000ms. Use 180000ms for OCR. */
+    timeoutMs?: number;
   } = {}
 ): Promise<T> {
   const effectiveMethod = options.method || 'GET';
   const token = await authStorage.getToken();
   const baseUrl = getApiBaseUrl();
   const url = `${baseUrl}${endpoint}`;
+  const timeoutMs = options.timeoutMs ?? 30000;
 
   const headers: Record<string, string> = {
     ...(options.isFormData ? {} : { 'Content-Type': 'application/json' }),
@@ -61,48 +184,62 @@ export async function apiRequest<T = any>(
     body = JSON.stringify(body);
   }
 
-  const response = await fetch(url, {
-    method: effectiveMethod,
-    headers,
-    body,
-  });
+  // Set up request timeout via AbortController
+  const controller = typeof AbortController !== 'undefined' ? new AbortController() : null;
+  const timeoutId = controller
+    ? setTimeout(() => controller.abort(), timeoutMs)
+    : null;
 
+  try {
+    const response = await fetch(url, {
+      method: effectiveMethod,
+      headers,
+      body,
+      signal: controller ? controller.signal : undefined,
+    });
 
-  if (response.status === 401) {
-    await authStorage.clear();
-    throw new Error('Session expired. Please sign in again.');
-  }
+    if (timeoutId) clearTimeout(timeoutId);
 
-  if (!response.ok) {
-    let errorDetail = `Request failed (${response.status})`;
-    try {
-      const errJson = await response.json();
-      if (errJson.detail) {
-        errorDetail = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail);
-      }
-    } catch {
-      // Use fallback error
+    if (response.status === 401) {
+      await authStorage.clear();
+      throw new Error('Session expired. Please sign in again.');
     }
-    throw new Error(errorDetail);
-  }
 
-  // Handle empty responses or 204 No Content
-  if (response.status === 204) {
-    return {} as T;
-  }
+    if (!response.ok) {
+      let errorDetail = `Request failed (${response.status})`;
+      try {
+        const errJson = await response.json();
+        if (errJson.detail) {
+          errorDetail = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail);
+        }
+      } catch {
+        // Use fallback error
+      }
+      throw new Error(errorDetail);
+    }
 
-  const contentType = response.headers.get('content-type');
-  if (contentType && contentType.includes('application/json')) {
-    return await response.json();
-  }
+    // Handle empty responses or 204 No Content
+    if (response.status === 204) {
+      return {} as T;
+    }
 
-  return (await response.text()) as unknown as T;
+    const contentType = response.headers.get('content-type');
+    if (contentType && contentType.includes('application/json')) {
+      return await response.json();
+    }
+
+    return (await response.text()) as unknown as T;
+  } catch (err: any) {
+    if (timeoutId) clearTimeout(timeoutId);
+    throw err;
+  }
 }
 
 export const api = {
   // Auth
   login: (credentials: { officer_id: string; password: string }) =>
     apiRequest('/api/auth/login', { method: 'POST', body: credentials }),
+  logout: () => apiRequest('/api/auth/logout', { method: 'POST' }),
   getProfile: () => apiRequest('/api/auth/me'),
   updateProfile: (data: { email?: string; phone?: string }) =>
     apiRequest('/api/auth/me', { method: 'PATCH', body: data }),
@@ -111,6 +248,37 @@ export const api = {
 
   // Dashboard
   getDashboard: () => apiRequest('/api/dashboard'),
+  getDashboardSummary: () => apiRequest('/api/dashboard/summary'),
+  getDashboardInspections: (params?: {
+    status?: string;
+    overall_status?: string;
+    start_date?: string;
+    end_date?: string;
+    category?: string;
+    location?: string;
+    inspector_id?: string;
+    has_report?: boolean;
+    search?: string;
+    limit?: number;
+    offset?: number;
+  }) => {
+    let query = '';
+    if (params) {
+      const cleanParams: Record<string, string> = {};
+      Object.entries(params).forEach(([k, v]) => {
+        if (v !== undefined && v !== null && v !== '') {
+          cleanParams[k] = String(v);
+        }
+      });
+      const q = new URLSearchParams(cleanParams).toString();
+      if (q) query = '?' + q;
+    }
+    return apiRequest(`/api/dashboard/inspections${query}`);
+  },
+  getDashboardPendingActions: (limit?: number) => {
+    const q = limit ? `?limit=${limit}` : '';
+    return apiRequest(`/api/dashboard/pending-actions${q}`);
+  },
 
   // Health & Connectivity
   checkHealth: () => apiRequest('/api/health'),
@@ -124,6 +292,7 @@ export const api = {
     batch_number?: string;
     notes?: string;
     client_draft_id?: string;
+    inspection_type?: string;
   }) => apiRequest('/api/inspections', { method: 'POST', body: data }),
   getInspection: (id: string) => apiRequest(`/api/inspections/${id}`),
   listInspections: (params?: { status?: string; limit?: number; offset?: number }) => {
@@ -142,14 +311,36 @@ export const api = {
       method: 'POST',
       body: formData,
       isFormData: true,
+      timeoutMs: 60000,  // 60s for image upload
+    }),
+  checkImageQuality: (formData: FormData) =>
+    apiRequest('/api/quality-check', {
+      method: 'POST',
+      body: formData,
+      isFormData: true,
+      timeoutMs: 30000,
     }),
   getInspectionImages: (inspectionId: string) => apiRequest(`/api/inspections/${inspectionId}/images`),
+  deleteImage: (imageId: string) =>
+    apiRequest(`/api/images/${imageId}`, { method: 'DELETE' }),
+  deleteImageBySlot: (inspectionId: string, viewType: string) =>
+    apiRequest(`/api/inspections/${inspectionId}/images/slot/${viewType}`, { method: 'DELETE' }),
 
   // OCR & Declarations
+  /**
+   * FIX-RC-5: OCR uses 180s timeout (3 minutes).
+   * PaddleOCR is CPU-heavy. A slow response is NOT a connectivity failure.
+   * This prevents the "Failed to fetch" / false OFFLINE classification during OCR.
+   */
   runOCR: (inspectionId: string) =>
-    apiRequest(`/api/inspections/${inspectionId}/ocr`, { method: 'POST' }),
+    apiRequest(`/api/inspections/${inspectionId}/ocr`, {
+      method: 'POST',
+      timeoutMs: 180000,
+    }),
   getDeclarations: (inspectionId: string) =>
     apiRequest(`/api/inspections/${inspectionId}/declarations`),
+  getBarcodes: (inspectionId: string) =>
+    apiRequest(`/api/inspections/${inspectionId}/barcodes`),
   updateDeclaration: (
     declarationId: string,
     data: { corrected_value?: string; verification_status?: string; correction_reason?: string }
@@ -185,6 +376,28 @@ export const api = {
     apiRequest(`/api/inspections/${inspectionId}/report`, { method: 'POST' }),
   getReportsList: () => apiRequest('/api/reports'),
   getReportById: (reportId: string) => apiRequest(`/api/reports/${reportId}`),
+  getInspectionReportDocxUrl: (inspectionId: string) =>
+    `${getApiBaseUrl()}/api/inspections/${inspectionId}/report/docx`,
+  getReportDocxUrl: (reportId: string) =>
+    `${getApiBaseUrl()}/api/reports/${reportId}/docx`,
   getAuditLogs: (inspectionId: string) => apiRequest(`/api/inspections/${inspectionId}/audit-logs`),
-};
 
+  // Product Listing & Online Compliance (PS 26034)
+  saveProductListing: (inspectionId: string, data: any) =>
+    apiRequest(`/api/inspections/${inspectionId}/listing`, { method: 'POST', body: data }),
+  getProductListing: (inspectionId: string) =>
+    apiRequest(`/api/inspections/${inspectionId}/listing`),
+  compareProductListing: (inspectionId: string) =>
+    apiRequest(`/api/inspections/${inspectionId}/listing/compare`, { method: 'POST' }),
+  getListingComparison: (inspectionId: string) =>
+    apiRequest(`/api/inspections/${inspectionId}/listing/comparison`),
+  adjudicateListingComparison: (
+    inspectionId: string,
+    comparisonId: string,
+    data: { status: 'VERIFIED_MATCH' | 'CONFIRMED_DISCREPANCY' | 'DISMISSED_DISCREPANCY'; remarks?: string }
+  ) =>
+    apiRequest(`/api/inspections/${inspectionId}/listing/comparisons/${comparisonId}/adjudicate`, {
+      method: 'POST',
+      body: data,
+    }),
+};

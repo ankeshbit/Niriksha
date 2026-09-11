@@ -12,4 +12,5 @@ export type RootStackParamList = {
   ReportsList: undefined;
   Profile: undefined;
   DraftOffline: { clientDraftId?: string } | undefined;
+  ListingComparison: { inspectionId: string; inspectionNumber?: string };
 };

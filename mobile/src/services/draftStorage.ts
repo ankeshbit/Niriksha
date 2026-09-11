@@ -1,6 +1,18 @@
 import { Platform } from 'react-native';
-import * as SecureStore from 'expo-secure-store';
 import type { ImageQualityResult } from './imageQualityService';
+
+// AUDIT-MOB-01: Use AsyncStorage for non-sensitive draft data on native platforms.
+// SecureStore has ~2KB limit on Android which causes silent draft loss.
+// AsyncStorage has no such limitation and is appropriate for non-secret draft metadata.
+// Image data is already stored as file URIs (paths), not binary data.
+let AsyncStorageModule: any = null;
+if (Platform.OS !== 'web') {
+  try {
+    AsyncStorageModule = require('@react-native-async-storage/async-storage').default;
+  } catch (e) {
+    console.warn('[draftStorage] AsyncStorage not available, falling back to in-memory only');
+  }
+}
 
 export interface DraftImage {
   viewType: 'front' | 'back' | 'side';
@@ -103,15 +115,17 @@ export const draftStorage = {
             return memoryDrafts;
           }
         }
-      } else {
-        const raw = await SecureStore.getItemAsync(DRAFTS_STORAGE_KEY);
+      } else if (AsyncStorageModule) {
+        // AUDIT-MOB-01: Use AsyncStorage instead of SecureStore for draft data
+        const raw = await AsyncStorageModule.getItem(DRAFTS_STORAGE_KEY);
         if (raw) {
           memoryDrafts = JSON.parse(raw);
           return memoryDrafts;
         }
       }
     } catch (e) {
-      console.warn('[draftStorage] getDrafts fallback error:', e);
+      // Surface errors instead of silently losing drafts
+      console.error('[draftStorage] getDrafts storage error:', e);
     }
     return memoryDrafts;
   },
@@ -214,6 +228,29 @@ export const draftStorage = {
     }
   },
 
+  /**
+   * Removes a draft image for the specified viewType slot.
+   * Ensures deleted images are completely purged from offline draft storage.
+   */
+  async removeDraftImage(
+    clientDraftId: string,
+    viewType: 'front' | 'back' | 'side'
+  ): Promise<void> {
+    const drafts = await this.getDrafts();
+    const idx = drafts.findIndex((d) => d.clientDraftId === clientDraftId);
+    if (idx >= 0) {
+      const existingImages = drafts[idx].images || [];
+      const updatedImages = existingImages.filter((img) => img.viewType !== viewType);
+      drafts[idx] = {
+        ...drafts[idx],
+        images: updatedImages,
+        updatedAt: new Date().toISOString(),
+      };
+      memoryDrafts = drafts;
+      await this.persistDrafts(drafts);
+    }
+  },
+
   async deleteDraft(clientDraftId: string): Promise<void> {
     const drafts = await this.getDrafts();
     const filtered = drafts.filter((d) => d.clientDraftId !== clientDraftId);
@@ -233,11 +270,14 @@ export const draftStorage = {
         if (typeof localStorage !== 'undefined') {
           localStorage.setItem(DRAFTS_STORAGE_KEY, jsonStr);
         }
-      } else {
-        await SecureStore.setItemAsync(DRAFTS_STORAGE_KEY, jsonStr);
+      } else if (AsyncStorageModule) {
+        // AUDIT-MOB-01: Use AsyncStorage — no size limit issues
+        await AsyncStorageModule.setItem(DRAFTS_STORAGE_KEY, jsonStr);
       }
     } catch (e) {
-      console.warn('[draftStorage] persistDrafts error:', e);
+      // Surface errors instead of silently losing drafts
+      console.error('[draftStorage] persistDrafts storage error — drafts may not be persisted:', e);
+      throw new Error(`Draft persistence failed: ${e instanceof Error ? e.message : String(e)}`);
     }
 
     draftListeners.forEach((listener) => {

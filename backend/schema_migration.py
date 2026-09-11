@@ -12,15 +12,20 @@ Usage:
 import sys
 from sqlalchemy import text, inspect
 from backend.database import engine
+from backend.models import Base
 
 
 def column_exists(conn, table: str, column: str) -> bool:
     """Check if a column exists in a given table."""
     try:
-        result = conn.execute(text(f"SELECT {column} FROM {table} LIMIT 0"))
-        result.close()
-        return True
+        insp = inspect(conn)
+        cols = [c["name"] for c in insp.get_columns(table)]
+        return column in cols
     except Exception:
+        try:
+            conn.rollback()
+        except Exception:
+            pass
         return False
 
 
@@ -37,6 +42,36 @@ def migrate():
             "column": "phone",
             "ddl": "ALTER TABLE users ADD COLUMN phone TEXT",
         },
+        # Users: add password_updated_at (AUDIT-UI-01)
+        {
+            "table": "users",
+            "column": "password_updated_at",
+            "ddl": "ALTER TABLE users ADD COLUMN password_updated_at TIMESTAMP",
+        },
+        # Users: add role for RBAC (PS 26034)
+        {
+            "table": "users",
+            "column": "role",
+            "ddl": "ALTER TABLE users ADD COLUMN role VARCHAR(20) DEFAULT 'INSPECTOR'",
+        },
+        # Inspections: add client_draft_id for idempotent offline sync (DEF-08)
+        {
+            "table": "inspections",
+            "column": "client_draft_id",
+            "ddl": "ALTER TABLE inspections ADD COLUMN client_draft_id VARCHAR(100)",
+        },
+        # Reports: add docx_path for editable DOCX compliance report export (PS 26034)
+        {
+            "table": "reports",
+            "column": "docx_path",
+            "ddl": "ALTER TABLE reports ADD COLUMN docx_path VARCHAR(500)",
+        },
+        # Inspections: add inspection_type for Online Listing / Physical analysis modes (PS 26034)
+        {
+            "table": "inspections",
+            "column": "inspection_type",
+            "ddl": "ALTER TABLE inspections ADD COLUMN inspection_type VARCHAR(50) DEFAULT 'PHYSICAL'",
+        },
     ]
 
     with engine.connect() as conn:
@@ -49,7 +84,67 @@ def migrate():
             else:
                 print(f"  [SKIP]  {m['table']}.{m['column']} already exists.")
 
+        # Ensure index on client_draft_id exists
+        try:
+            conn.execute(text("CREATE INDEX IF NOT EXISTS ix_inspections_client_draft_id ON inspections (client_draft_id)"))
+            conn.commit()
+            print("  [OK]    Index ix_inspections_client_draft_id verified.")
+        except Exception as e:
+            print(f"  [WARN]  Index creation skipped: {e}")
+
+        # AUDIT-CONCUR-01: Ensure inspection_number_counters table exists and is initialized
+        migrate_inspection_number_counters(conn)
+
+        # Create any new tables (product_listings, listing_comparisons)
+        try:
+            Base.metadata.create_all(bind=conn)
+            conn.commit()
+            print("  [OK]    All ORM tables (including product_listings, listing_comparisons) verified.")
+        except Exception as e:
+            print(f"  [WARN]  Table creation note: {e}")
+
     print("\nMigration complete.")
+
+
+def migrate_inspection_number_counters(conn):
+    """AUDIT-CONCUR-01: Create inspection_number_counters table and initialize from existing inspections."""
+    conn.execute(text("""
+        CREATE TABLE IF NOT EXISTS inspection_number_counters (
+            year INTEGER PRIMARY KEY,
+            next_number INTEGER NOT NULL DEFAULT 1
+        )
+    """))
+    conn.commit()
+
+    try:
+        rows = conn.execute(text("""
+            SELECT inspection_number FROM inspections WHERE inspection_number LIKE 'LM-%'
+        """)).fetchall()
+
+        year_max = {}
+        for (num,) in rows:
+            if not num:
+                continue
+            parts = num.split("-")
+            if len(parts) == 3 and parts[0] == "LM":
+                try:
+                    yr = int(parts[1])
+                    seq = int(parts[2])
+                    year_max[yr] = max(year_max.get(yr, 0), seq)
+                except ValueError:
+                    pass
+
+        for yr, max_val in year_max.items():
+            next_val = max_val + 1
+            conn.execute(text("""
+                INSERT INTO inspection_number_counters (year, next_number)
+                VALUES (:year, :next_val)
+                ON CONFLICT (year) DO NOTHING
+            """), {"year": yr, "next_val": next_val})
+        conn.commit()
+        print(f"  [OK]    inspection_number_counters verified. Initialized years: {list(year_max.keys())}")
+    except Exception as e:
+        print(f"  [WARN]  Could not initialize counters from inspections: {e}")
 
 
 if __name__ == "__main__":

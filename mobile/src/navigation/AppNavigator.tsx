@@ -17,6 +17,7 @@ import { ReportPreviewScreen } from '../screens/ReportPreviewScreen';
 import { ReportsListScreen } from '../screens/ReportsListScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
 import { DraftOfflineScreen } from '../screens/DraftOfflineScreen';
+import { ListingComparisonScreen } from '../screens/ListingComparisonScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -43,6 +44,7 @@ export const AppNavigator: React.FC = () => {
         <Stack.Screen name="ReportsList" component={ReportsListScreen} />
         <Stack.Screen name="Profile" component={ProfileScreen} />
         <Stack.Screen name="DraftOffline" component={DraftOfflineScreen} />
+        <Stack.Screen name="ListingComparison" component={ListingComparisonScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

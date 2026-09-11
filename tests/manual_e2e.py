@@ -1,25 +1,20 @@
 import os
 from pathlib import Path
 
-# Explicitly isolate test database
-BASE_DIR = Path(__file__).resolve().parent.parent
-TEST_DB_PATH = BASE_DIR / "test_legal_metrology.db"
-os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DB_PATH.as_posix()}"
+# Database is configured by tests/conftest.py (PostgreSQL test database).
+# Do NOT override DATABASE_URL here — conftest.py sets it before this module loads.
 
 from fastapi.testclient import TestClient
 from backend.config import settings
-settings.DATABASE_URL = f"sqlite:///{TEST_DB_PATH.as_posix()}"
 
 from backend.main import app
 import backend.database as db_module
-from backend.seed import seed_database
 from backend.models import Base
 
-# Ensure test DB initialized
-Base.metadata.create_all(bind=db_module.engine)
-seed_database()
+# Tables are managed by conftest.py's session-scoped setup_test_environment fixture.
 
 client = TestClient(app)
+
 
 # 1. Login
 login_res = client.post('/api/auth/login', json={'officer_id': 'DOCA-INSP-842', 'password': 'admin123'})

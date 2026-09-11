@@ -29,6 +29,7 @@ export const ReviewAndSubmitScreen: React.FC = () => {
   const [declarations, setDeclarations] = useState<any[]>([]);
   const [findings, setFindings] = useState<any[]>([]);
   const [officerNotes, setOfficerNotes] = useState('Finalized by Inspecting Officer after human verification.');
+  const [finalDecision, setFinalDecision] = useState<'NO_POTENTIAL_VIOLATIONS' | 'POTENTIAL_NON_COMPLIANCE' | 'NEEDS_MANUAL_VERIFICATION'>('NO_POTENTIAL_VIOLATIONS');
   const [loading, setLoading] = useState(true);
   const [finalizing, setFinalizing] = useState(false);
 
@@ -45,6 +46,16 @@ export const ReviewAndSubmitScreen: React.FC = () => {
         setImages(imgs || []);
         setDeclarations(decls || []);
         setFindings(fnds || []);
+
+        const hasViolations = (fnds || []).some((f: any) => f.adjudication_status === 'CONFIRMED' || f.result_state === 'POTENTIAL_NON_COMPLIANCE');
+        const hasUnverified = (fnds || []).some((f: any) => f.result_state === 'INSUFFICIENT_EVIDENCE' || f.result_state === 'NEEDS_MANUAL_VERIFICATION');
+        if (hasViolations) {
+          setFinalDecision('POTENTIAL_NON_COMPLIANCE');
+        } else if (hasUnverified) {
+          setFinalDecision('NEEDS_MANUAL_VERIFICATION');
+        } else {
+          setFinalDecision('NO_POTENTIAL_VIOLATIONS');
+        }
       } catch (err) {
         console.error('Failed to load review summary:', err);
       } finally {
@@ -56,15 +67,13 @@ export const ReviewAndSubmitScreen: React.FC = () => {
   }, [inspectionId]);
 
   const unadjudicatedFindings = findings.filter((f) => {
-    const s = (f.status || f.check_status || '').toUpperCase();
-    const isNonPass =
-      s === 'POTENTIAL_NON_COMPLIANCE' ||
-      s === 'WARNING' ||
-      s === 'NEEDS_MANUAL_VERIFICATION' ||
-      s === 'FAIL';
-    const action = (f.inspector_action || '').toUpperCase();
-    const isPending = !action || action === 'PENDING';
-    return isNonPass && isPending;
+    // AUDIT-MOB-02: Use actual FindingResponse schema fields (result_state, adjudication_status)
+    const resultState = (f.result_state || '').toUpperCase();
+    const isNonPass = resultState !== '' && resultState !== 'PASS' && resultState !== 'NOT_APPLICABLE';
+    const adjStatus = (f.adjudication_status || '').toUpperCase();
+    const resolvedActions = ['CONFIRMED', 'DISMISSED', 'NOT_APPLICABLE', 'CORRECTED'];
+    const isResolved = resolvedActions.includes(adjStatus);
+    return isNonPass && !isResolved;
   });
 
   const handleFinalize = async () => {
@@ -91,6 +100,7 @@ export const ReviewAndSubmitScreen: React.FC = () => {
     try {
       const res = await api.finalizeInspection(inspectionId, {
         officer_notes: officerNotes.trim(),
+        final_status: finalDecision,
       });
 
       navigation.replace('ReportPreview', {
@@ -318,7 +328,76 @@ export const ReviewAndSubmitScreen: React.FC = () => {
                 </View>
               </View>
 
-              {/* Section 4: Officer Final Notes */}
+              {/* Section 5: Officer Final Legal Adjudication */}
+              <View style={styles.cardSection}>
+                <View style={styles.cardHeader}>
+                  <Text style={styles.cardHeaderText}>OFFICER FINAL LEGAL DECISION</Text>
+                </View>
+                <View style={styles.cardBody}>
+                  <Text style={[styles.summaryItemLabel, { marginBottom: 8 }]}>
+                    Core Statutory Principle: Automated rules produce preliminary findings; only the Inspecting Officer makes the binding statutory compliance determination.
+                  </Text>
+                  
+                  <TouchableOpacity
+                    style={[
+                      styles.verdictOption,
+                      finalDecision === 'NO_POTENTIAL_VIOLATIONS' && styles.verdictOptionSelectedGreen
+                    ]}
+                    onPress={() => setFinalDecision('NO_POTENTIAL_VIOLATIONS')}
+                    activeOpacity={0.8}
+                  >
+                    <MaterialIcons
+                      name={finalDecision === 'NO_POTENTIAL_VIOLATIONS' ? "radio-button-checked" : "radio-button-unchecked"}
+                      size={20}
+                      color={finalDecision === 'NO_POTENTIAL_VIOLATIONS' ? colors.statusGreenText : colors.outline}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.verdictTitle}>Verified Compliant (No Potential Violations)</Text>
+                      <Text style={styles.verdictSubtitle}>All mandatory declarations verified in accordance with Legal Metrology (PC) Rules, 2011.</Text>
+                    </View>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.verdictOption,
+                      finalDecision === 'POTENTIAL_NON_COMPLIANCE' && styles.verdictOptionSelectedRed
+                    ]}
+                    onPress={() => setFinalDecision('POTENTIAL_NON_COMPLIANCE')}
+                    activeOpacity={0.8}
+                  >
+                    <MaterialIcons
+                      name={finalDecision === 'POTENTIAL_NON_COMPLIANCE' ? "radio-button-checked" : "radio-button-unchecked"}
+                      size={20}
+                      color={finalDecision === 'POTENTIAL_NON_COMPLIANCE' ? colors.statusRedText : colors.outline}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.verdictTitle}>Potential Non-Compliance (Violations Noted)</Text>
+                      <Text style={styles.verdictSubtitle}>Confirmed statutory non-compliance warrants enforcement / compounding notice.</Text>
+                    </View>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[
+                      styles.verdictOption,
+                      finalDecision === 'NEEDS_MANUAL_VERIFICATION' && styles.verdictOptionSelectedAmber
+                    ]}
+                    onPress={() => setFinalDecision('NEEDS_MANUAL_VERIFICATION')}
+                    activeOpacity={0.8}
+                  >
+                    <MaterialIcons
+                      name={finalDecision === 'NEEDS_MANUAL_VERIFICATION' ? "radio-button-checked" : "radio-button-unchecked"}
+                      size={20}
+                      color={finalDecision === 'NEEDS_MANUAL_VERIFICATION' ? colors.statusAmberText : colors.outline}
+                    />
+                    <View style={{ flex: 1 }}>
+                      <Text style={styles.verdictTitle}>Requires Further Verification / Physical Testing</Text>
+                      <Text style={styles.verdictSubtitle}>Inconclusive evidence or laboratory testing required under Rule 19.</Text>
+                    </View>
+                  </TouchableOpacity>
+                </View>
+              </View>
+
+              {/* Section 6: Officer Remarks */}
               <View style={styles.cardSection}>
                 <View style={styles.cardHeader}>
                   <Text style={styles.cardHeaderText}>OFFICER REMARKS</Text>
@@ -679,6 +758,42 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontWeight: '700',
     textDecorationLine: 'underline',
+  },
+  verdictOption: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: 12,
+    padding: 12,
+    borderWidth: 1.5,
+    borderColor: colors.borderSubtle,
+    borderRadius: borderRadius.DEFAULT,
+    backgroundColor: colors.surfaceContainerLow,
+    marginBottom: 8,
+  },
+  verdictOptionSelectedGreen: {
+    borderColor: colors.statusGreenText,
+    backgroundColor: colors.statusGreenBg,
+  },
+  verdictOptionSelectedRed: {
+    borderColor: colors.statusRedText,
+    backgroundColor: colors.statusRedBg,
+  },
+  verdictOptionSelectedAmber: {
+    borderColor: colors.statusAmberText,
+    backgroundColor: colors.statusAmberBg,
+  },
+  verdictTitle: {
+    ...typography.bodyMd,
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.onSurface,
+    marginBottom: 2,
+  },
+  verdictSubtitle: {
+    ...typography.caption,
+    fontSize: 12,
+    color: colors.onSurfaceVariant,
+    lineHeight: 16,
   },
 });
 

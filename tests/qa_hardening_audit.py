@@ -2,24 +2,18 @@ import os
 import json
 from pathlib import Path
 
-# Explicitly isolate test database
-BASE_DIR = Path(__file__).resolve().parent.parent
-TEST_DB_PATH = BASE_DIR / "test_legal_metrology.db"
-os.environ["DATABASE_URL"] = f"sqlite:///{TEST_DB_PATH.as_posix()}"
+# Database is configured by tests/conftest.py (PostgreSQL test database).
+# Do NOT override DATABASE_URL here — conftest.py sets it before this module loads.
 
 from backend.config import settings
-settings.DATABASE_URL = f"sqlite:///{TEST_DB_PATH.as_posix()}"
 
 from fastapi.testclient import TestClient
 from backend.main import app
 import backend.database as db_module
 from backend.models import Inspection, Declaration, ComplianceCheck, Report, AuditLog, Base
 from backend.database import get_db
-from backend.seed import seed_database
 
-# Ensure test DB initialized
-Base.metadata.create_all(bind=db_module.engine)
-seed_database()
+# Tables are managed by conftest.py's session-scoped setup_test_environment fixture.
 
 client = TestClient(app)
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"

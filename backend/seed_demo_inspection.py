@@ -160,7 +160,21 @@ def seed_single_demo_inspection():
         compliance_checks = []
         for code, res, val, exp in checks_data:
             rule_ver = rule_map.get(code)
-            rule_ver_id = rule_ver.id if rule_ver else "rule-ver-placeholder"
+            if not rule_ver:
+                rule_ver = RuleVersion(
+                    rule_code=code,
+                    version_number=1,
+                    title=code,
+                    category="CATEGORY_A_LEGAL",
+                    statutory_reference="Legal Metrology (Packaged Commodities) Rules, 2011",
+                    rule_logic_description=exp,
+                    severity="MAJOR",
+                    is_active=True
+                )
+                db.add(rule_ver)
+                db.flush()
+                rule_map[code] = rule_ver
+            rule_ver_id = rule_ver.id
             check = ComplianceCheck(
                 id=str(uuid.uuid4()),
                 inspection_id=inspection_id,

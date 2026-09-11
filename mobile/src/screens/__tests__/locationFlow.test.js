@@ -129,8 +129,10 @@ function simulateLocationFlow() {
   onScreenFocus();
   assert.strictEqual(location, '', 'Location cleanly reset for subsequent new inspection');
   assert.strictEqual(shouldResetOnNextFocusRef.current, false, 'Reset flag disarmed');
-
-  console.log('Simulation: All 9 lifecycle steps verified successfully!');
 }
 
-simulateLocationFlow();
+describe('locationFlow', () => {
+  it('simulates all 9 lifecycle steps successfully', () => {
+    simulateLocationFlow();
+  });
+});

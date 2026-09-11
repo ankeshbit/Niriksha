@@ -1,7 +1,11 @@
 import cv2
 import numpy as np
+from datetime import datetime, timezone
 from pathlib import Path
-from typing import Dict, Any, List, Tuple
+from typing import Dict, Any, List, Optional, Union
+
+from backend.blur_detection import estimate_blur, fix_image_size, pretty_blur_map
+
 
 class ImageQualityResult:
     def __init__(
@@ -18,7 +22,12 @@ class ImageQualityResult:
         width: int,
         height: int,
         warnings: List[str],
-        recommendation: str
+        recommendation: str,
+        engine: str = "BlurDetection2",
+        status: Optional[str] = None,
+        quality_decision: Optional[str] = None,
+        image_id: Optional[str] = None,
+        timestamp: Optional[str] = None,
     ):
         self.quality_status = quality_status
         self.quality_score = quality_score
@@ -33,9 +42,18 @@ class ImageQualityResult:
         self.height = height
         self.warnings = warnings
         self.recommendation = recommendation
+        self.engine = engine
+        self.status = status or ("ACCEPTABLE" if blur_ok else "BLURRY")
+        self.quality_decision = quality_decision or (
+            "QUALITY_ACCEPTED" if quality_status in ["GOOD", "WARNING", "EXCELLENT"] else "QUALITY_REJECTED"
+        )
+        self.image_id = image_id
+        self.timestamp = timestamp or datetime.now(timezone.utc).isoformat()
 
     def to_dict(self) -> Dict[str, Any]:
         return {
+            "status": self.status,
+            "quality_decision": self.quality_decision,
             "quality_status": self.quality_status,
             "quality_score": round(self.quality_score, 2),
             "blur_score": round(self.blur_score, 2),
@@ -48,27 +66,83 @@ class ImageQualityResult:
             "width": self.width,
             "height": self.height,
             "warnings": self.warnings,
-            "recommendation": self.recommendation
+            "recommendation": self.recommendation,
+            "engine": self.engine,
+            "image_id": self.image_id,
+            "timestamp": self.timestamp,
+        }
+
+    def to_blur_result(self) -> Dict[str, Any]:
+        """
+        Returns structured blur validation payload specified by Section 3:
+        {
+          "status": "ACCEPTABLE | BLURRY",
+          "blur_score": number,
+          "engine": "BlurDetection2",
+          "image_id": "...",
+          "timestamp": "...",
+          "reason": "...",
+          "quality_decision": "QUALITY_ACCEPTED | QUALITY_REJECTED"
+        }
+        """
+        return {
+            "status": self.status,
+            "blur_score": round(self.blur_score, 2),
+            "engine": self.engine,
+            "image_id": self.image_id,
+            "timestamp": self.timestamp,
+            "reason": self.recommendation,
+            "quality_decision": self.quality_decision,
         }
 
 
-def assess_image_quality(image_path: str) -> ImageQualityResult:
+def _load_image(image_input: Union[str, Path, bytes, np.ndarray]) -> np.ndarray:
     """
-    Deterministic pre-OCR quality assessment.
-    Evaluates resolution, Laplacian variance (blur), mean intensity (brightness/glare),
-    and standard deviation (contrast).
+    Decodes image from path, raw bytes, or returns ndarray directly.
+    Raises FileNotFoundError or ValueError on invalid/corrupt input.
     """
-    path = Path(image_path)
-    if not path.exists():
-        raise FileNotFoundError(f"Image not found at path: {image_path}")
+    if isinstance(image_input, np.ndarray):
+        if image_input.size == 0:
+            raise ValueError("Input image array is empty.")
+        return image_input
 
-    # Read image using OpenCV
+    if isinstance(image_input, bytes):
+        if len(image_input) == 0:
+            raise ValueError("Provided image bytes are empty.")
+        nparr = np.frombuffer(image_input, np.uint8)
+        img = cv2.imdecode(nparr, cv2.IMREAD_COLOR)
+        if img is None:
+            raise ValueError("Could not decode image from provided bytes (corrupted image data).")
+        return img
+
+    path = Path(image_input)
+    if not path.exists():
+        raise FileNotFoundError(f"Image not found at path: {image_input}")
+
     img = cv2.imread(str(path))
     if img is None:
-        raise ValueError(f"Could not decode image at path: {image_path}")
+        raise ValueError(f"Could not decode image at path: {image_input}")
+    return img
+
+
+def assess_image_quality(
+    image_input: Union[str, Path, bytes, np.ndarray],
+    image_id: Optional[str] = None
+) -> ImageQualityResult:
+    """
+    Pre-OCR quality assessment powered by BlurDetection2 + OpenCV pipeline.
+    Evaluates resolution, BlurDetection2 Laplacian variance (blur), mean intensity
+    (brightness/glare), and standard deviation (contrast).
+    """
+    img = _load_image(image_input)
 
     height, width = img.shape[:2]
-    gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    if img.ndim == 3:
+        gray = cv2.cvtColor(img, cv2.COLOR_BGR2GRAY)
+    elif img.ndim == 2:
+        gray = img
+    else:
+        raise ValueError(f"Unsupported image dimensions: {img.shape}")
 
     warnings: List[str] = []
 
@@ -81,16 +155,18 @@ def assess_image_quality(image_path: str) -> ImageQualityResult:
     else:
         res_norm = 1.0
 
-    # 2. Blur / Sharpness Check (Laplacian Variance)
-    laplacian_var = float(cv2.Laplacian(gray, cv2.CV_64F).var())
-    blur_threshold = 70.0
-    if laplacian_var >= 120.0:
+    # 2. Blur / Sharpness Check using BlurDetection2
+    # BlurDetection2 computes total variance of the Laplacian:
+    blur_map, blur_score, is_blurry = estimate_blur(gray, threshold=70.0)
+
+    # Multi-tier boundary classification
+    if blur_score >= 120.0:
         blur_ok = True
         blur_norm = 1.0
-    elif laplacian_var >= blur_threshold:
+    elif blur_score >= 70.0:
         blur_ok = True
         blur_norm = 0.75
-    elif laplacian_var >= 40.0:
+    elif blur_score >= 40.0:
         blur_ok = True
         blur_norm = 0.50
         warnings.append("Image is slightly blurry; text detection might be degraded.")
@@ -100,8 +176,8 @@ def assess_image_quality(image_path: str) -> ImageQualityResult:
         warnings.append("Image is noticeably blurry / out of focus.")
 
     # 3. Brightness / Exposure Check (Mean Intensity & Glare Ratio)
-    mean_brightness = float(np.mean(gray))
-    glare_pixels = np.sum(gray >= 252)
+    mean_brightness = float(np.mean(gray)) if gray.size > 0 else 0.0
+    glare_pixels = np.sum(gray >= 252) if gray.size > 0 else 0
     total_pixels = width * height
     glare_ratio = float(glare_pixels) / float(total_pixels) if total_pixels > 0 else 0.0
 
@@ -122,7 +198,7 @@ def assess_image_quality(image_path: str) -> ImageQualityResult:
         bright_norm = 1.0
 
     # 4. Contrast Check (Standard Deviation of Intensity)
-    contrast_std = float(np.std(gray))
+    contrast_std = float(np.std(gray)) if gray.size > 0 else 0.0
     if contrast_std < 20.0:
         contrast_ok = False
         contrast_norm = 0.30
@@ -154,10 +230,14 @@ def assess_image_quality(image_path: str) -> ImageQualityResult:
         quality_status = "GOOD"
         recommendation = "Image quality is sufficient for analysis."
 
+    img_id_str = image_id
+    if img_id_str is None and isinstance(image_input, (str, Path)):
+        img_id_str = Path(image_input).name
+
     return ImageQualityResult(
         quality_status=quality_status,
         quality_score=quality_score,
-        blur_score=laplacian_var,
+        blur_score=blur_score,
         blur_ok=blur_ok,
         brightness_score=mean_brightness,
         brightness_ok=brightness_ok,
@@ -167,5 +247,27 @@ def assess_image_quality(image_path: str) -> ImageQualityResult:
         width=width,
         height=height,
         warnings=warnings,
-        recommendation=recommendation
+        recommendation=recommendation,
+        engine="BlurDetection2",
+        image_id=img_id_str,
     )
+
+
+def assess_blur_blur_detection2(
+    image_input: Union[str, Path, bytes, np.ndarray],
+    image_id: Optional[str] = None
+) -> Dict[str, Any]:
+    """
+    Direct BlurDetection2 API helper returning structured dictionary:
+    {
+      "status": "ACCEPTABLE | BLURRY",
+      "blur_score": number,
+      "engine": "BlurDetection2",
+      "image_id": "...",
+      "timestamp": "...",
+      "reason": "...",
+      "quality_decision": "QUALITY_ACCEPTED | QUALITY_REJECTED"
+    }
+    """
+    res = assess_image_quality(image_input, image_id=image_id)
+    return res.to_blur_result()

@@ -1,3 +1,8 @@
+# DEPRECATED: This script was written for the SQLite era of NiriKsha.
+# NiriKsha now uses Neon PostgreSQL exclusively.
+# This script reads local SQLite .db files and must NOT be used with production data.
+# Use the PostgreSQL admin console (Neon Dashboard) to inspect production data.
+
 import sqlite3
 import sys
 

@@ -24,12 +24,41 @@ def seed_database():
             db.add(officer)
             print(f"[Seed] Created development officer account: {settings.SEED_OFFICER_ID}")
         else:
-            if not existing_officer.email:
-                existing_officer.email = "rajesh.kumar@lm.gov.in"
-            if not existing_officer.phone:
-                existing_officer.phone = "+91 98765 43210"
-            db.commit()
-            print(f"[Seed] Development officer account verified with contact info: {settings.SEED_OFFICER_ID}")
+            # AUDIT-STARTUP-01: Do NOT overwrite existing officer contact fields
+            # with hardcoded defaults. Existing data is preserved as-is.
+            print(f"[Seed] Development officer account already exists: {settings.SEED_OFFICER_ID}")
+
+        # 1b. Seed Development Supervisor Account
+        existing_sup = db.query(User).filter(User.officer_id == "DOCA-SUP-101").first()
+        if not existing_sup:
+            sup = User(
+                officer_id="DOCA-SUP-101",
+                full_name="Supervisor Anjali Sharma",
+                email="anjali.sharma@lm.gov.in",
+                phone="+91 98765 11101",
+                designation="Supervisory Officer (Legal Metrology)",
+                zone="Northern Zone - Delhi HQ",
+                password_hash=hash_password("admin123"),
+                role="SUPERVISOR"
+            )
+            db.add(sup)
+            print("[Seed] Created development supervisor account: DOCA-SUP-101")
+
+        # 1c. Seed Development Admin Account
+        existing_admin = db.query(User).filter(User.officer_id == "DOCA-ADMIN-001").first()
+        if not existing_admin:
+            admin_user = User(
+                officer_id="DOCA-ADMIN-001",
+                full_name="Director Vikram Malhotra",
+                email="vikram.malhotra@lm.gov.in",
+                phone="+91 98765 00001",
+                designation="Director of Legal Metrology (Admin)",
+                zone="HQ - New Delhi",
+                password_hash=hash_password("admin123"),
+                role="ADMIN"
+            )
+            db.add(admin_user)
+            print("[Seed] Created development admin account: DOCA-ADMIN-001")
 
         # 2. Seed Verified Legal Metrology PCR 2011 Rules (Version 1)
         seed_rules = [

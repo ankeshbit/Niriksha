@@ -37,6 +37,7 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
   const { inspectionId, inspectionNumber } = route.params;
 
   const [declarations, setDeclarations] = useState<any[]>([]);
+  const [barcodesSummary, setBarcodesSummary] = useState<any | null>(null);
   const [loading, setLoading] = useState(true);
   const [evaluating, setEvaluating] = useState(false);
 
@@ -48,8 +49,12 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
 
   const loadDeclarations = async () => {
     try {
-      const data = await api.getDeclarations(inspectionId);
-      setDeclarations(data || []);
+      const [declData, barcodeData] = await Promise.all([
+        api.getDeclarations(inspectionId),
+        api.getBarcodes(inspectionId).catch(() => null),
+      ]);
+      setDeclarations(declData || []);
+      setBarcodesSummary(barcodeData || null);
     } catch (err) {
       console.error('Failed to load declarations:', err);
     } finally {
@@ -279,6 +284,98 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
               })}
             </View>
           )}
+
+          {/* Auxiliary Barcode & QR Code Evidence Card */}
+          {barcodesSummary && (
+            <View style={styles.barcodeCard}>
+              <View style={styles.barcodeCardHeader}>
+                <View style={styles.barcodeHeaderLeft}>
+                  <MaterialIcons name="qr-code-2" size={22} color={colors.primary} />
+                  <Text style={styles.barcodeCardTitle}>Auxiliary Evidence: Barcode / QR</Text>
+                </View>
+                {barcodesSummary.detected ? (
+                  <View style={[
+                    styles.barcodeStatusBadge,
+                    barcodesSummary.has_conflict
+                      ? styles.badgeRed
+                      : barcodesSummary.items.some((i: any) => i.ocr_corroboration === 'CORROBORATING')
+                      ? styles.badgeGreen
+                      : barcodesSummary.items.some((i: any) => i.ocr_corroboration === 'EVIDENCE_CONFLICT')
+                      ? styles.badgeAmber
+                      : styles.badgeNeutral
+                  ]}>
+                    <Text style={[
+                      styles.barcodeStatusText,
+                      barcodesSummary.has_conflict
+                        ? styles.textRed
+                        : barcodesSummary.items.some((i: any) => i.ocr_corroboration === 'CORROBORATING')
+                        ? styles.textGreen
+                        : barcodesSummary.items.some((i: any) => i.ocr_corroboration === 'EVIDENCE_CONFLICT')
+                        ? styles.textAmber
+                        : styles.textNeutral
+                    ]}>
+                      {barcodesSummary.has_conflict
+                        ? 'Multi-Panel Conflict'
+                        : barcodesSummary.items.some((i: any) => i.ocr_corroboration === 'CORROBORATING')
+                        ? 'Corroborated by OCR'
+                        : barcodesSummary.items.some((i: any) => i.ocr_corroboration === 'EVIDENCE_CONFLICT')
+                        ? 'OCR Discrepancy'
+                        : 'Barcode Only'}
+                    </Text>
+                  </View>
+                ) : (
+                  <View style={[styles.barcodeStatusBadge, styles.badgeNeutral]}>
+                    <Text style={[styles.barcodeStatusText, styles.textNeutral]}>Not Detected</Text>
+                  </View>
+                )}
+              </View>
+
+              {barcodesSummary.detected ? (
+                <View style={styles.barcodeBody}>
+                  <View style={styles.barcodeDataRow}>
+                    <Text style={styles.barcodeDataLabel}>Symbology:</Text>
+                    <Text style={styles.barcodeDataValue}>{barcodesSummary.barcode_type || 'EAN-13'}</Text>
+                  </View>
+                  <View style={styles.barcodeDataRow}>
+                    <Text style={styles.barcodeDataLabel}>Decoded Value:</Text>
+                    <Text style={styles.barcodeDataValueCode}>{barcodesSummary.consolidated_value || '—'}</Text>
+                  </View>
+                  {barcodesSummary.items.length > 0 && barcodesSummary.items[0].bbox && (
+                    <View style={styles.barcodeDataRow}>
+                      <Text style={styles.barcodeDataLabel}>Coordinates:</Text>
+                      <Text style={styles.barcodeDataSubtext}>[{barcodesSummary.items[0].bbox.join(', ')}]</Text>
+                    </View>
+                  )}
+                  {barcodesSummary.has_conflict && barcodesSummary.conflict_description && (
+                    <Text style={styles.barcodeConflictText}>{barcodesSummary.conflict_description}</Text>
+                  )}
+                </View>
+              ) : (
+                <Text style={styles.barcodeEmptyText}>
+                  No barcode or QR code was detected on the inspected package images.
+                </Text>
+              )}
+
+              <View style={styles.barcodeDisclaimer}>
+                <MaterialIcons name="info-outline" size={14} color={colors.onSurfaceVariant} />
+                <Text style={styles.barcodeDisclaimerText}>
+                  PCR 2011 Notice: Barcode presence serves as auxiliary identity evidence and does not substitute mandatory human-readable declarations.
+                </Text>
+              </View>
+            </View>
+          )}
+
+          {/* Action Button: Compare with Online Listing (PS 26034) */}
+          <TouchableOpacity
+            style={styles.compareListingButton}
+            onPress={() => navigation.navigate('ListingComparison', { inspectionId, inspectionNumber })}
+            activeOpacity={0.85}
+          >
+            <View style={styles.btnInner}>
+              <MaterialIcons name="language" size={18} color={colors.primary} />
+              <Text style={styles.compareListingButtonText}>Compare with Online Listing</Text>
+            </View>
+          </TouchableOpacity>
 
           {/* Action Button: Check for Potential Violations */}
           <TouchableOpacity
@@ -625,6 +722,21 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.statusAmberText,
   },
+  compareListingButton: {
+    backgroundColor: '#ffffff',
+    borderWidth: 1.5,
+    borderColor: colors.primary,
+    paddingVertical: 12,
+    borderRadius: borderRadius.xl,
+    alignItems: 'center',
+    justifyContent: 'center',
+    marginTop: 8,
+  },
+  compareListingButtonText: {
+    fontSize: 14,
+    color: colors.primary,
+    fontWeight: '600',
+  },
   evaluateButton: {
     backgroundColor: colors.primary,
     paddingVertical: 14,
@@ -721,6 +833,125 @@ const styles = StyleSheet.create({
     ...typography.bodySm,
     fontWeight: '700',
     color: colors.onPrimary,
+  },
+  // Barcode & QR Code Card Styles
+  barcodeCard: {
+    backgroundColor: colors.surfaceContainerLowest,
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    padding: spacing.gutter,
+    marginTop: spacing.stackMd,
+    marginBottom: spacing.stackSm,
+  },
+  barcodeCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+    marginBottom: spacing.tight,
+  },
+  barcodeHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  barcodeCardTitle: {
+    ...typography.bodyMd,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  barcodeStatusBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    borderRadius: borderRadius.DEFAULT,
+    borderWidth: 1,
+  },
+  barcodeStatusText: {
+    ...typography.caption,
+    fontWeight: '700',
+    fontSize: 11,
+  },
+  badgeGreen: {
+    backgroundColor: colors.statusGreenBg,
+    borderColor: 'rgba(27, 94, 32, 0.25)',
+  },
+  badgeAmber: {
+    backgroundColor: colors.statusAmberBg,
+    borderColor: 'rgba(230, 81, 0, 0.25)',
+  },
+  badgeRed: {
+    backgroundColor: colors.statusRedBg,
+    borderColor: 'rgba(183, 28, 28, 0.25)',
+  },
+  badgeNeutral: {
+    backgroundColor: colors.surfaceContainerLow,
+    borderColor: colors.borderSubtle,
+  },
+  textGreen: {
+    color: colors.statusGreenText,
+  },
+  textNeutral: {
+    color: colors.onSurfaceVariant,
+  },
+  barcodeBody: {
+    marginTop: spacing.tight,
+    gap: 4,
+  },
+  barcodeDataRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  barcodeDataLabel: {
+    ...typography.caption,
+    fontWeight: '600',
+    color: colors.onSurfaceVariant,
+    width: 95,
+  },
+  barcodeDataValue: {
+    ...typography.bodySm,
+    fontWeight: '600',
+    color: colors.onSurface,
+  },
+  barcodeDataValueCode: {
+    ...typography.bodySm,
+    fontWeight: '700',
+    fontFamily: 'monospace',
+    color: colors.primary,
+    letterSpacing: 0.5,
+  },
+  barcodeDataSubtext: {
+    ...typography.caption,
+    color: colors.onSurfaceVariant,
+    fontSize: 11,
+  },
+  barcodeConflictText: {
+    ...typography.caption,
+    color: colors.statusRedText,
+    fontWeight: '600',
+    marginTop: 4,
+  },
+  barcodeEmptyText: {
+    ...typography.bodySm,
+    color: colors.onSurfaceVariant,
+    fontStyle: 'italic',
+    marginTop: spacing.tight,
+  },
+  barcodeDisclaimer: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    marginTop: spacing.base,
+    paddingTop: spacing.tight,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSubtle,
+  },
+  barcodeDisclaimerText: {
+    ...typography.caption,
+    fontSize: 10.5,
+    color: colors.onSurfaceVariant,
+    flex: 1,
+    lineHeight: 14,
   },
 });
 

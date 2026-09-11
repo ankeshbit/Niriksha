@@ -165,27 +165,157 @@ class DeterministicRuleEngine:
                 evidence_items=[evidence_item]
             )
 
-        # 3. Missing Mandatory Declaration Check
-        if not effective_val or (not is_verified and extraction_status == "NOT_FOUND"):
-            evidence_item = EvidencePayload(
-                image_id=source_image_id,
-                bounding_box=None,
-                highlight_text="[DECLARATION NOT DETECTED]",
-                reason=f"Mandatory {rule.title} is missing from package labeling."
-            )
-            return RuleEvaluationResult(
-                rule_code=rule_code,
-                rule_version=rule.rule_version,
-                title=rule.title,
-                statutory_reference=rule.statutory_reference,
-                severity=rule.severity,
-                result_state=RuleResultState.POTENTIAL_NON_COMPLIANCE,
-                effective_value_used=None,
-                original_ocr_value=original_val,
-                is_verified_by_officer=is_verified,
-                explanation=f"Potential Non-Compliance: Required declaration under {rule.statutory_reference} is missing on the package.",
-                evidence_items=[evidence_item]
-            )
+        # Specific Rule: Country of Origin Declaration (Critical Fix #2)
+        if rule_code == "PCR_RULE_06_1_B":
+            if effective_val and len(effective_val) >= 2:
+                evidence_item = EvidencePayload(
+                    image_id=source_image_id,
+                    bounding_box=bbox,
+                    highlight_text=effective_val,
+                    reason=f"Country of origin explicitly declared as '{effective_val}'."
+                )
+                return RuleEvaluationResult(
+                    rule_code=rule_code,
+                    rule_version=rule.rule_version,
+                    title=rule.title,
+                    statutory_reference=rule.statutory_reference,
+                    severity=rule.severity,
+                    result_state=RuleResultState.PASS,
+                    effective_value_used=effective_val,
+                    original_ocr_value=original_val,
+                    is_verified_by_officer=is_verified,
+                    explanation=f"Country of origin explicitly declared on package as '{effective_val}'.",
+                    evidence_items=[evidence_item]
+                )
+            elif extraction_status == "NOT_FOUND" and (product_data.get("is_imported") or self._get_decl_field(decl, "is_imported")):
+                # Explicitly known to be imported commodity, but country of origin missing
+                evidence_item = EvidencePayload(
+                    image_id=source_image_id,
+                    bounding_box=None,
+                    highlight_text="[MISSING COUNTRY OF ORIGIN ON IMPORTED COMMODITY]",
+                    reason="Imported commodity is missing mandatory country of origin declaration."
+                )
+                return RuleEvaluationResult(
+                    rule_code=rule_code,
+                    rule_version=rule.rule_version,
+                    title=rule.title,
+                    statutory_reference=rule.statutory_reference,
+                    severity=rule.severity,
+                    result_state=RuleResultState.POTENTIAL_NON_COMPLIANCE,
+                    effective_value_used=None,
+                    original_ocr_value=original_val,
+                    is_verified_by_officer=is_verified,
+                    explanation="Potential Non-Compliance: Imported commodity package is missing mandatory Country of Origin declaration.",
+                    evidence_items=[evidence_item]
+                )
+            else:
+                # Critical Fix #2: Indian manufacturer address alone does NOT establish domestic origin.
+                evidence_item = EvidencePayload(
+                    image_id=source_image_id,
+                    bounding_box=None,
+                    highlight_text="[COUNTRY OF ORIGIN NOT EXPLICITLY DECLARED]",
+                    reason="Country of origin is not explicitly declared. An Indian address alone does not establish legal domestic origin or statutory exemption. Requires inspector verification."
+                )
+                return RuleEvaluationResult(
+                    rule_code=rule_code,
+                    rule_version=rule.rule_version,
+                    title=rule.title,
+                    statutory_reference=rule.statutory_reference,
+                    severity=rule.severity,
+                    result_state=RuleResultState.NEEDS_MANUAL_VERIFICATION,
+                    effective_value_used=None,
+                    original_ocr_value=original_val,
+                    is_verified_by_officer=is_verified,
+                    explanation=(
+                        "Country of Origin / Import Applicability: Country of origin is not explicitly declared on the package. "
+                        "Under Legal Metrology Rules, an Indian manufacturer address alone does not prove domestic origin or establish exemption. "
+                        "Requires inspector manual verification to determine whether the package is domestic or imported."
+                    ),
+                    evidence_items=[evidence_item]
+                )
+
+        # Specific Rule: Unit Sale Price (USP) Declaration (Critical Fix #6)
+        if rule_code == "PCR_RULE_UNIT_SALE_PRICE":
+            if effective_val:
+                evidence_item = EvidencePayload(
+                    image_id=source_image_id,
+                    bounding_box=bbox,
+                    highlight_text=effective_val,
+                    reason="Unit Sale Price detected on package. Governed by 2021 amendment GSR 779(E) (not in 2011 PDF GSR 202(E))."
+                )
+                return RuleEvaluationResult(
+                    rule_code=rule_code,
+                    rule_version=rule.rule_version,
+                    title=rule.title,
+                    statutory_reference=rule.statutory_reference,
+                    severity=rule.severity,
+                    result_state=RuleResultState.PASS,
+                    effective_value_used=effective_val,
+                    original_ocr_value=original_val,
+                    is_verified_by_officer=is_verified,
+                    explanation=f"Unit Sale Price declared as '{effective_val}'. Requirement derives from 2021 amendment; marked NEEDS_LEGAL_VERIFICATION against 2011 PDF.",
+                    evidence_items=[evidence_item]
+                )
+            else:
+                return RuleEvaluationResult(
+                    rule_code=rule_code,
+                    rule_version=rule.rule_version,
+                    title=rule.title,
+                    statutory_reference=rule.statutory_reference,
+                    severity=rule.severity,
+                    result_state=RuleResultState.NOT_APPLICABLE,
+                    effective_value_used=None,
+                    original_ocr_value=original_val,
+                    is_verified_by_officer=is_verified,
+                    explanation="Unit Sale Price not detected. Governed by 2021 amendment; not mandatory under principal 2011 Rules PDF for standard small packs.",
+                    evidence_items=[]
+                )
+
+        # 3. Missing Mandatory Declaration / OCR Uncertainty Check
+        if not effective_val or (not is_verified and extraction_status in ["NOT_FOUND", "LOW_CONFIDENCE", "OCR_FAILED", "OCR_UNAVAILABLE", "AMBIGUOUS", "NEEDS_REVIEW"]):
+            if not is_verified:
+                # OCR Uncertainty Safety: Automated failure to read/detect must never automatically
+                # convict of a legal violation. It routes to inspector manual verification.
+                evidence_item = EvidencePayload(
+                    image_id=source_image_id,
+                    bounding_box=None,
+                    highlight_text="[DECLARATION NOT DETECTED BY OCR]",
+                    reason=f"Mandatory declaration for {rule.title} was not detected by automated OCR ({extraction_status}). Requires physical package verification."
+                )
+                return RuleEvaluationResult(
+                    rule_code=rule_code,
+                    rule_version=rule.rule_version,
+                    title=rule.title,
+                    statutory_reference=rule.statutory_reference,
+                    severity=rule.severity,
+                    result_state=RuleResultState.NEEDS_MANUAL_VERIFICATION,
+                    effective_value_used=None,
+                    original_ocr_value=original_val,
+                    is_verified_by_officer=False,
+                    explanation=f"Needs Manual Verification: Mandatory declaration under {rule.statutory_reference} was not detected by automated OCR ({extraction_status}). Inspector must physically verify the package.",
+                    evidence_items=[evidence_item]
+                )
+            else:
+                # Officer explicitly confirmed the mandatory declaration is absent
+                evidence_item = EvidencePayload(
+                    image_id=source_image_id,
+                    bounding_box=None,
+                    highlight_text="[CONFIRMED MISSING BY INSPECTOR]",
+                    reason=f"Mandatory {rule.title} confirmed absent from package labeling by Inspecting Officer."
+                )
+                return RuleEvaluationResult(
+                    rule_code=rule_code,
+                    rule_version=rule.rule_version,
+                    title=rule.title,
+                    statutory_reference=rule.statutory_reference,
+                    severity=rule.severity,
+                    result_state=RuleResultState.POTENTIAL_NON_COMPLIANCE,
+                    effective_value_used=None,
+                    original_ocr_value=original_val,
+                    is_verified_by_officer=True,
+                    explanation=f"Potential Non-Compliance: Officer confirmed mandatory declaration under {rule.statutory_reference} is missing on the package.",
+                    evidence_items=[evidence_item]
+                )
 
         evidence_item = EvidencePayload(
             image_id=source_image_id,
@@ -368,12 +498,12 @@ class DeterministicRuleEngine:
                 effective_value_used=effective_val,
                 original_ocr_value=original_val,
                 is_verified_by_officer=is_verified,
-                explanation="Consumer care contact information declared in compliance with Rule 6(1)(g).",
+                explanation="Consumer care contact information declared in compliance with Rule 6(2).",
                 evidence_items=[evidence_item]
             )
 
         elif rule_code == "PCR_RULE_06_1_F":
-            # Commodity Name
+            # Commodity Name (Rule 6(1)(b) in PCR 2011)
             if len(effective_val) < 2:
                 return RuleEvaluationResult(
                     rule_code=rule_code,
@@ -398,43 +528,12 @@ class DeterministicRuleEngine:
                 effective_value_used=effective_val,
                 original_ocr_value=original_val,
                 is_verified_by_officer=is_verified,
-                explanation="Commodity identification declared in compliance with Rule 6(1)(f).",
+                explanation="Commodity identification declared in compliance with Rule 6(1)(b).",
                 evidence_items=[evidence_item]
             )
-
-        elif rule_code == "PCR_RULE_06_1_B":
-            # Country of Origin
-            if not effective_val or len(effective_val) < 2:
-                return RuleEvaluationResult(
-                    rule_code=rule_code,
-                    rule_version=rule.rule_version,
-                    title=rule.title,
-                    statutory_reference=rule.statutory_reference,
-                    severity=rule.severity,
-                    result_state=RuleResultState.POTENTIAL_NON_COMPLIANCE,
-                    effective_value_used=effective_val,
-                    original_ocr_value=original_val,
-                    is_verified_by_officer=is_verified,
-                    explanation="Country of origin not declared for applicable commodity.",
-                    evidence_items=[evidence_item]
-                )
-            return RuleEvaluationResult(
-                rule_code=rule_code,
-                rule_version=rule.rule_version,
-                title=rule.title,
-                statutory_reference=rule.statutory_reference,
-                severity=rule.severity,
-                result_state=RuleResultState.PASS,
-                effective_value_used=effective_val,
-                original_ocr_value=original_val,
-                is_verified_by_officer=is_verified,
-                explanation=f"Country of origin declared as '{effective_val}' in compliance with Rule 6(1)(b).",
-                evidence_items=[evidence_item]
-            )
-
         elif rule_code == "DATA_QUAL_PHONE_SYNTAX":
             # Phone Syntax
-            has_valid_phone = bool(re.search(r'(?:1800[-\s]?[0-9]{2,3}[-\s]?[0-9]{3,4}|\+?91[-\s]?[0-9]{10}|[0-9]{10})', effective_val))
+            has_valid_phone = bool(re.search(r'(?:1-800[-—\s]?[0-9]{3,4}[-—\s]?[0-9]{3,5}|1800[-—\s]?[0-9]{2,3}[-—\s]?[0-9]{3,4}|\+?91[-—\s]?[0-9]{10}|[0-9]{10})', effective_val))
             if not has_valid_phone:
                 return RuleEvaluationResult(
                     rule_code=rule_code,

@@ -1,4 +1,4 @@
-from pydantic import BaseModel, Field, ConfigDict
+from pydantic import BaseModel, Field, ConfigDict, model_validator
 from typing import Literal, Optional, List, Dict, Any
 from datetime import datetime
 
@@ -8,6 +8,9 @@ class HealthCheckResponse(BaseModel):
     environment: str
     database: str
     version: str = "1.0.0"
+    database_backend: Optional[str] = None
+    database_host: Optional[str] = None
+    database_driver: Optional[str] = None
 
 class TokenResponse(BaseModel):
     access_token: str
@@ -18,6 +21,7 @@ class TokenResponse(BaseModel):
     zone: str
     email: Optional[str] = None
     phone: Optional[str] = None
+    role: str = "INSPECTOR"
     last_login_at: Optional[datetime] = None
     previous_login_at: Optional[datetime] = None
 
@@ -58,6 +62,7 @@ class CreateInspectionRequest(BaseModel):
     batch_number: Optional[str] = Field(None, description="Batch / Lot number")
     notes: Optional[str] = Field(None, description="Additional inspection notes")
     client_draft_id: Optional[str] = Field(None, description="Client-generated local draft UUID for idempotent sync")
+    inspection_type: Optional[str] = Field("PHYSICAL", description="Analysis mode: PHYSICAL, ONLINE_LISTING, or HYBRID")
 
 class ProductResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -69,6 +74,8 @@ class ProductResponse(BaseModel):
     batch_number: Optional[str] = None
 
 class ImageQualityDetails(BaseModel):
+    model_config = ConfigDict(extra="ignore")
+
     quality_status: str
     quality_score: float
     blur_score: float
@@ -82,6 +89,45 @@ class ImageQualityDetails(BaseModel):
     height: int
     warnings: List[str]
     recommendation: str
+    engine: Optional[str] = "BlurDetection2"
+    status: Optional[str] = None
+    quality_decision: Optional[str] = None
+    image_id: Optional[str] = None
+    timestamp: Optional[str] = None
+
+class QualityCheckResponse(BaseModel):
+    status: str  # "ACCEPTABLE" | "BLURRY"
+    quality_decision: str  # "QUALITY_ACCEPTED" | "QUALITY_REJECTED"
+    blur_score: float
+    engine: str = "BlurDetection2"
+    image_id: Optional[str] = None
+    timestamp: str
+    reason: str
+    quality_status: str  # "GOOD" | "WARNING" | "POOR"
+    quality_score: float
+    details: Optional[ImageQualityDetails] = None
+
+class BarcodeItemResponse(BaseModel):
+    """Structured Barcode / QR Code Evidence Item."""
+    type: str                                    # e.g., 'EAN13', 'QRCODE', 'CODE128', 'UPCA'
+    value: str                                   # Decoded digits or string
+    confidence: Optional[float] = None           # Strict invariant: null unless decoder provides one
+    source_image_id: Optional[str] = None        # ID of image where detected
+    source_image_path: Optional[str] = None
+    bbox: Optional[List[int]] = None             # [x1, y1, x2, y2]
+    timestamp: Optional[str] = None
+    decoder: str = "pyzbar"                      # 'pyzbar' or 'opencv'
+    ocr_corroboration: Optional[str] = None      # 'CORROBORATING', 'EVIDENCE_CONFLICT', 'NO_OCR_BARCODE'
+    conflicting_ocr_value: Optional[str] = None
+
+class BarcodeInspectionSummaryResponse(BaseModel):
+    """Consolidated Barcode Evidence across an inspection."""
+    detected: bool = False
+    items: List[BarcodeItemResponse] = []
+    has_conflict: bool = False
+    conflict_description: Optional[str] = None
+    consolidated_value: Optional[str] = None
+    barcode_type: Optional[str] = None
 
 class ProductImageResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -99,6 +145,7 @@ class ProductImageResponse(BaseModel):
     quality_status: str
     quality_score: float
     quality_details: Optional[ImageQualityDetails] = None
+    barcodes: Optional[List[BarcodeItemResponse]] = None
     created_at: datetime
 
 class OCRTextBoxResponse(BaseModel):
@@ -107,6 +154,8 @@ class OCRTextBoxResponse(BaseModel):
     bbox: List[int]
     sequence: int
     image_id: Optional[str] = None
+    engine: Optional[str] = None
+    timestamp: Optional[str] = None
 
 class OCRResultResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
@@ -141,6 +190,9 @@ class DeclarationResponse(BaseModel):
     has_conflict: bool = False
     conflicts: Optional[List[Dict[str, Any]]] = None
     source_images: Optional[List[str]] = None
+    raw_text: Optional[str] = None
+    layout_region: Optional[str] = None
+    layout_bbox: Optional[List[int]] = None
     created_at: datetime
 
 class UpdateDeclarationRequest(BaseModel):
@@ -183,9 +235,26 @@ class FindingResponse(BaseModel):
     evidence_items: List[EvidenceResponse] = []
 
 class AdjudicateFindingRequest(BaseModel):
-    action: str = Field(..., description="Action: CONFIRMED, DISMISSED, NEEDS_MORE_EVIDENCE, NOT_APPLICABLE, CORRECTED")
+    action: Optional[str] = Field(None, description="Action: CONFIRMED, DISMISSED, NEEDS_MORE_EVIDENCE, NOT_APPLICABLE, CORRECTED")
+    adjudication_action: Optional[str] = Field(None, description="Alias for action")
     notes: Optional[str] = Field(None, description="Inspector justification or findings remarks")
     corrected_value: Optional[str] = Field(None, description="Inspector-provided corrected value (for CORRECTED action)")
+
+    @model_validator(mode="after")
+    def normalize_action(self):
+        raw = (self.action or self.adjudication_action or "").strip().upper()
+        mapping = {
+            "CONFIRM_COMPLIANT": "DISMISSED",  # If inspector confirms compliant, finding is dismissed
+            "CONFIRM": "CONFIRMED",
+            "DISMISS": "DISMISSED",
+            "REJECT": "DISMISSED",
+            "NEED_MORE_EVIDENCE": "NEEDS_MORE_EVIDENCE",
+            "MORE_EVIDENCE": "NEEDS_MORE_EVIDENCE",
+            "NA": "NOT_APPLICABLE",
+            "CORRECT": "CORRECTED"
+        }
+        self.action = mapping.get(raw, raw)
+        return self
 
 class RunOCRResponse(BaseModel):
     inspection_id: str
@@ -195,6 +264,7 @@ class RunOCRResponse(BaseModel):
     ocr_results: List[OCRResultResponse]
     declarations: List[DeclarationResponse]
     conflicts: List[Dict[str, Any]] = []
+    barcodes: Optional[BarcodeInspectionSummaryResponse] = None
 
 class EvaluateInspectionResponse(BaseModel):
     inspection_id: str
@@ -219,6 +289,8 @@ class ReportResponse(BaseModel):
     report_version: int
     pdf_path: str
     download_url: str
+    docx_path: Optional[str] = None
+    docx_download_url: Optional[str] = None
     legal_safety_statement: str
     generated_at: datetime
     inspection_number: Optional[str] = None
@@ -261,6 +333,7 @@ class InspectionResponse(BaseModel):
     location: str
     status: str
     overall_status: Optional[str] = None
+    client_draft_id: Optional[str] = None
     created_at: datetime
     finalized_at: Optional[datetime] = None
 
@@ -272,8 +345,10 @@ class InspectionDetailResponse(BaseModel):
     inspector_id: str
     location: str
     status: str
+    inspection_type: str = "PHYSICAL"
     overall_status: Optional[str] = None
     notes: Optional[str] = None
+    client_draft_id: Optional[str] = None
     created_at: datetime
     finalized_at: Optional[datetime] = None
     product: Optional[ProductResponse] = None
@@ -281,6 +356,8 @@ class InspectionDetailResponse(BaseModel):
     declarations: List[DeclarationResponse] = []
     compliance_checks: List[FindingResponse] = []
     report: Optional[ReportResponse] = None
+    barcodes: Optional[BarcodeInspectionSummaryResponse] = None
+    listing: Optional[Any] = None
 
 class RecentInspectionItem(BaseModel):
     id: str
@@ -317,3 +394,272 @@ class ReportEligibilityResponse(BaseModel):
     message: str
     blocking_images: List[BlockingImage] = []
     blocking_reasons: List[BlockingReason] = []
+
+# ----------------- Enforcement Dashboard Schemas -----------------
+
+class DashboardKPISummaryResponse(BaseModel):
+    """Dynamic Legal Metrology Enforcement KPIs calculated from live DB."""
+    total_inspections: int
+    completed_inspections: int
+    pending_verification: int
+    potential_non_compliance: int
+    compliant_inspections: int
+    reports_generated: int
+    manual_verification_required: int
+
+class DashboardInspectionListItem(BaseModel):
+    """Detailed inspection item for dashboard registry."""
+    id: str
+    inspection_number: str
+    product_name: str
+    brand_name: Optional[str] = None
+    category: str
+    inspector_id: str
+    inspector_name: str
+    location: str
+    created_at: datetime
+    status: str
+    overall_status: Optional[str] = None
+    has_report: bool = False
+    report_version: Optional[int] = None
+    pending_actions_count: int = 0
+
+class DashboardInspectionsListResponse(BaseModel):
+    """Paginated, filterable inspections list for dashboard."""
+    total: int
+    items: List[DashboardInspectionListItem]
+    limit: int
+    offset: int
+
+class PendingActionItem(BaseModel):
+    """Specific inspection action requiring officer verification or adjudication."""
+    inspection_id: str
+    inspection_number: str
+    product_name: str
+    action_type: str  # OCR_UNCERTAINTY, MISSING_DECLARATION, CONFLICTING_DECLARATION, POTENTIAL_NON_COMPLIANCE, PENDING_ADJUDICATION
+    title: str
+    description: str
+    severity: str  # CRITICAL, WARNING, INFO
+    created_at: datetime
+
+class DashboardPendingActionsResponse(BaseModel):
+    """Actionable queue of pending enforcement tasks."""
+    total: int
+    items: List[PendingActionItem]
+
+class ComplianceAnalyticsResponse(BaseModel):
+    """Compliance rates and breakdown analytics."""
+    has_sufficient_data: bool
+    total_evaluated: int
+    compliance_rate: float
+    potential_non_compliance_rate: float
+    manual_verification_rate: float
+    findings_by_field: Dict[str, int]
+    findings_by_rule: Dict[str, int]
+    findings_by_category: Dict[str, int]
+    inspections_over_time: List[Dict[str, Any]]
+
+class EnforcementActivityResponse(BaseModel):
+    """Jurisdictional and inspector enforcement activity."""
+    inspections_by_location: List[Dict[str, Any]]
+    inspections_by_inspector: List[Dict[str, Any]]
+    non_compliance_by_location: List[Dict[str, Any]]
+    top_flagged_rules: List[Dict[str, Any]]
+    repeatedly_inspected_products: List[Dict[str, Any]]
+
+
+# ===========================================================================
+# Repository & Search Schemas (PS 26034)
+# ===========================================================================
+
+class RepositoryInspectionItem(BaseModel):
+    """Comprehensive inspection record for the Inspection Repository & Global Search."""
+    id: str
+    inspection_number: str
+    product_name: str
+    brand_name: Optional[str] = None
+    category: str
+    manufacturer: Optional[str] = None
+    batch_number: Optional[str] = None
+    location: str
+    inspector_id: str
+    inspector_name: str
+    status: str
+    overall_status: Optional[str] = None
+    findings_count: int = 0
+    non_compliant_count: int = 0
+    has_report: bool = False
+    report_id: Optional[str] = None
+    created_at: datetime
+    finalized_at: Optional[datetime] = None
+
+
+class RepositoryInspectionsResponse(BaseModel):
+    """Paginated search response for the Inspection Repository."""
+    items: List[RepositoryInspectionItem]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class RepositoryProductItem(BaseModel):
+    """Aggregated product entity for the Product Repository."""
+    product_key: str
+    product_name: str
+    brand_name: Optional[str] = None
+    category: str
+    manufacturer: Optional[str] = None
+    inspection_count: int
+    last_inspection_date: Optional[datetime] = None
+    latest_compliance_status: Optional[str] = None
+    latest_inspection_id: Optional[str] = None
+
+
+class RepositoryProductsResponse(BaseModel):
+    """Paginated response for the Product Repository catalogue."""
+    items: List[RepositoryProductItem]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class RepositoryReportItem(BaseModel):
+    """Statutory report record with search metadata and retrieval links."""
+    id: str
+    inspection_id: str
+    inspection_number: str
+    product_name: Optional[str] = None
+    brand_name: Optional[str] = None
+    category: Optional[str] = None
+    report_version: int
+    download_url: str
+    inspector_id: Optional[str] = None
+    inspector_name: Optional[str] = None
+    generated_at: datetime
+    legal_safety_statement: str
+    overall_status: Optional[str] = None
+
+
+class RepositoryReportsResponse(BaseModel):
+    """Paginated search response for the Statutory Reports Archive."""
+    items: List[RepositoryReportItem]
+    total: int
+    page: int
+    page_size: int
+    total_pages: int
+
+
+class UserListItemResponse(BaseModel):
+    """Officer record for admin user management."""
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    officer_id: str
+    full_name: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    designation: str
+    zone: str
+    role: str
+    created_at: Optional[datetime] = None
+    last_login_at: Optional[datetime] = None
+
+
+class UpdateUserRoleRequest(BaseModel):
+    """Request payload to change an officer's role."""
+    role: Literal["INSPECTOR", "SUPERVISOR", "ADMIN"] = Field(
+        ...,
+        description="New role to assign to the officer (INSPECTOR, SUPERVISOR, ADMIN)"
+    )
+
+
+# ----------------- Product Information & Online Listing Schemas (PS 26034) -----------------
+
+class ProductListingCreateRequest(BaseModel):
+    product_name: Optional[str] = Field(None, description="Listing product name")
+    brand_name: Optional[str] = Field(None, description="Listing brand name")
+    mrp: Optional[str] = Field(None, description="Listing MRP / retail price (e.g. ₹55.00)")
+    net_quantity: Optional[str] = Field(None, description="Listing net quantity (e.g. 500 g)")
+    manufacturer_details: Optional[str] = Field(None, description="Manufacturer/Packer name and address")
+    importer_details: Optional[str] = Field(None, description="Importer name and address")
+    country_of_origin: Optional[str] = Field(None, description="Declared country of origin")
+    consumer_care_details: Optional[str] = Field(None, description="Consumer care contact details")
+    date_information: Optional[str] = Field(None, description="Date information if declared")
+    seller_information: Optional[str] = Field(None, description="Seller / vendor entity name")
+    product_description: Optional[str] = Field(None, description="Product description on listing")
+    listing_url: Optional[str] = Field(None, description="Listing reference URL or identifier")
+
+
+class ProductListingResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    inspection_id: str
+    product_name: Optional[str] = None
+    brand_name: Optional[str] = None
+    mrp: Optional[str] = None
+    net_quantity: Optional[str] = None
+    manufacturer_details: Optional[str] = None
+    importer_details: Optional[str] = None
+    country_of_origin: Optional[str] = None
+    consumer_care_details: Optional[str] = None
+    date_information: Optional[str] = None
+    seller_information: Optional[str] = None
+    product_description: Optional[str] = None
+    listing_url: Optional[str] = None
+    source: str = "MANUAL_LISTING_INPUT"
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+
+class ListingComparisonItemResponse(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: str
+    inspection_id: str
+    listing_id: str
+    field_name: str
+    listing_value: Optional[str] = None
+    package_value: Optional[str] = None
+    comparison_status: str  # 'MATCH', 'MISMATCH', 'MISSING_ON_LISTING', 'MISSING_ON_PACKAGE', 'UNCERTAIN'
+    difference_explanation: Optional[str] = None
+    package_ocr_evidence: Optional[str] = None
+    ocr_confidence: float = 0.0
+    source_image_id: Optional[str] = None
+    bounding_box_json: Optional[str] = None
+    applicable_rule_code: Optional[str] = None
+    inspector_status: str = "PENDING_REVIEW"
+    inspector_remarks: Optional[str] = None
+    adjudicated_by: Optional[str] = None
+    adjudicated_at: Optional[datetime] = None
+    listing_provenance: str = "MANUAL_LISTING_INPUT"
+    package_provenance: str = "PACKAGE_OCR"
+    created_at: datetime
+    updated_at: Optional[datetime] = None
+
+
+class ListingComparisonSummaryResponse(BaseModel):
+    inspection_id: str
+    inspection_number: str
+    total_fields_compared: int
+    matches_count: int
+    mismatches_count: int
+    missing_on_listing_count: int
+    missing_on_package_count: int
+    uncertain_count: int
+    has_discrepancies: bool
+    listing: Optional[ProductListingResponse] = None
+    comparisons: List[ListingComparisonItemResponse] = []
+
+
+class AdjudicateComparisonRequest(BaseModel):
+    status: Literal["VERIFIED_MATCH", "CONFIRMED_DISCREPANCY", "DISMISSED_DISCREPANCY"] = Field(
+        ...,
+        description="Adjudication outcome: VERIFIED_MATCH, CONFIRMED_DISCREPANCY, or DISMISSED_DISCREPANCY"
+    )
+    remarks: Optional[str] = Field(None, description="Inspector justification notes")
+
+
+

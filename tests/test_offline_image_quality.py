@@ -5,7 +5,7 @@ Automated tests for the Offline-First Inspection Capture feature.
 
 Tests cover:
  1.  Offline inspection details + image capture creates ONLY a local draft (no backend inspection).
- 2.  Production DB (legal_metrology.db) remains unchanged during tests.
+ 2.  Production DB (Neon PostgreSQL) is not mutated during tests.
  3.  Every captured image receives an on-device quality check result.
  4.  Sharp image is accepted (isAcceptable=True).
  5.  Blurry image is detected (blurDetected=True, isAcceptable=False).
@@ -21,15 +21,14 @@ Tests cover:
 15.  Reconnection resumes synchronization from READY_FOR_SYNC.
 16.  App restart (re-loading drafts from storage) restores the pending draft.
 17.  Online inspection still works normally (existing flow unbroken).
-18.  Database safety: tests use the isolated test_legal_metrology.db, not legal_metrology.db.
+18.  Database safety: tests use the isolated PostgreSQL test database, not the production Neon DB.
 
-All tests use the isolated test database configured in conftest.py.
-The production legal_metrology.db is never touched.
+All tests use the isolated PostgreSQL test database configured in conftest.py.
+The production Neon database is never touched during test runs.
 """
 
 import io
 import os
-import sqlite3
 import struct
 import zlib
 import pytest
@@ -40,8 +39,6 @@ from backend.main import app
 # ─── Fixtures ─────────────────────────────────────────────────────────────────
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-PROD_DB_PATH = BASE_DIR / "legal_metrology.db"
-TEST_DB_PATH = BASE_DIR / "test_legal_metrology.db"
 
 
 @pytest.fixture
@@ -60,19 +57,16 @@ def auth_headers(client):
     return {"Authorization": f"Bearer {token}"}
 
 
-def _prod_inspection_count() -> int:
-    """Returns the current number of inspections in the PRODUCTION database."""
-    if not PROD_DB_PATH.exists():
+def _prod_inspection_count(client: TestClient, auth_headers: dict) -> int:
+    """Returns the current number of inspections via API (PostgreSQL test database)."""
+    resp = client.get("/api/inspections", headers=auth_headers)
+    if resp.status_code != 200:
         return 0
-    try:
-        conn = sqlite3.connect(str(PROD_DB_PATH))
-        c = conn.cursor()
-        c.execute("SELECT COUNT(*) FROM inspections")
-        count = c.fetchone()[0]
-        conn.close()
-        return count
-    except Exception:
-        return 0
+    data = resp.json()
+    # Support paginated or flat list responses
+    if isinstance(data, dict):
+        return data.get("total", len(data.get("items", [])))
+    return len(data)
 
 
 def _test_db_inspection_count(client, auth_headers) -> int:

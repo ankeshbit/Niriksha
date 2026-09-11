@@ -51,7 +51,7 @@ export const ProfileScreen: React.FC = () => {
   const [showConfirmPassword, setShowConfirmPassword] = useState(false);
   const [passwordError, setPasswordError] = useState<string | null>(null);
   const [savingPassword, setSavingPassword] = useState(false);
-  const [passwordUpdatedTime, setPasswordUpdatedTime] = useState('Updated 30 days ago');
+  const [passwordUpdatedTime, setPasswordUpdatedTime] = useState('');
 
   // Sign Out Confirmation Modal State
   const [signOutModalVisible, setSignOutModalVisible] = useState(false);
@@ -237,6 +237,11 @@ export const ProfileScreen: React.FC = () => {
   const executeSignOut = async () => {
     try {
       setSigningOut(true);
+      try {
+        await api.logout();
+      } catch (logoutErr) {
+        console.warn('Backend logout notification skipped/failed:', logoutErr);
+      }
       await authStorage.clear();
       setSignOutModalVisible(false);
       navigation.reset({
@@ -390,7 +395,7 @@ export const ProfileScreen: React.FC = () => {
                   <MaterialIcons name="password" size={22} color={colors.onSurfaceVariant} />
                   <View style={styles.actionTextCol}>
                     <Text style={styles.fieldValueMd}>Change Password</Text>
-                    <Text style={styles.fieldValueSm}>{passwordUpdatedTime}</Text>
+                    {!!passwordUpdatedTime && <Text style={styles.fieldValueSm}>{passwordUpdatedTime}</Text>}
                   </View>
                 </View>
                 <MaterialIcons name="chevron-right" size={22} color={colors.onSurfaceVariant} />
