@@ -38,6 +38,9 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
 
   const [declarations, setDeclarations] = useState<any[]>([]);
   const [barcodesSummary, setBarcodesSummary] = useState<any | null>(null);
+  const [validationMatrix, setValidationMatrix] = useState<any | null>(null);
+  const [complianceSummary, setComplianceSummary] = useState<any | null>(null);
+  const [showMatrixTable, setShowMatrixTable] = useState(true);
   const [loading, setLoading] = useState(true);
   const [evaluating, setEvaluating] = useState(false);
 
@@ -49,12 +52,16 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
 
   const loadDeclarations = async () => {
     try {
-      const [declData, barcodeData] = await Promise.all([
+      const [declData, barcodeData, matrixData, summaryData] = await Promise.all([
         api.getDeclarations(inspectionId),
         api.getBarcodes(inspectionId).catch(() => null),
+        api.getDeclarationValidation(inspectionId).catch(() => null),
+        api.getComplianceSummary(inspectionId).catch(() => null),
       ]);
       setDeclarations(declData || []);
       setBarcodesSummary(barcodeData || null);
+      setValidationMatrix(matrixData || null);
+      setComplianceSummary(summaryData || null);
     } catch (err) {
       console.error('Failed to load declarations:', err);
     } finally {
@@ -279,9 +286,219 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
                         </View>
                       )}
                     </View>
+
+                    {/* Multi-Dimensional Indicators (PCR 2011 Rules 6, 7, 9, 12) */}
+                    <View style={styles.dimensionChipsRow}>
+                      {decl.readability_status ? (
+                        <View style={[
+                          styles.dimChip,
+                          decl.readability_status === 'READABLE' ? styles.dimChipGreen : styles.dimChipAmber
+                        ]}>
+                          <MaterialIcons
+                            name={decl.readability_status === 'READABLE' ? 'visibility' : 'visibility-off'}
+                            size={12}
+                            color={decl.readability_status === 'READABLE' ? colors.statusGreenText : colors.statusAmberText}
+                          />
+                          <Text style={[
+                            styles.dimChipText,
+                            decl.readability_status === 'READABLE' ? styles.dimTextGreen : styles.dimTextAmber
+                          ]}>
+                            {decl.readability_status.replace(/_/g, ' ')}
+                          </Text>
+                        </View>
+                      ) : null}
+
+                      {decl.placement_status ? (
+                        <View style={[
+                          styles.dimChip,
+                          decl.placement_status === 'PLACEMENT_COMPLIANT'
+                            ? styles.dimChipGreen
+                            : decl.placement_status === 'PLACEMENT_NON_COMPLIANT'
+                            ? styles.dimChipRed
+                            : styles.dimChipAmber
+                        ]}>
+                          <MaterialIcons
+                            name="crop-free"
+                            size={12}
+                            color={
+                              decl.placement_status === 'PLACEMENT_COMPLIANT'
+                                ? colors.statusGreenText
+                                : decl.placement_status === 'PLACEMENT_NON_COMPLIANT'
+                                ? colors.statusRedText
+                                : colors.statusAmberText
+                            }
+                          />
+                          <Text style={[
+                            styles.dimChipText,
+                            decl.placement_status === 'PLACEMENT_COMPLIANT'
+                              ? styles.dimTextGreen
+                              : decl.placement_status === 'PLACEMENT_NON_COMPLIANT'
+                              ? styles.dimTextRed
+                              : styles.dimTextAmber
+                          ]}>
+                            {decl.placement_status.replace('PLACEMENT_', '').replace(/_/g, ' ')}
+                          </Text>
+                        </View>
+                      ) : null}
+
+                      {decl.font_size_status ? (
+                        <View style={[
+                          styles.dimChip,
+                          decl.font_size_status === 'FONT_SIZE_COMPLIANT'
+                            ? styles.dimChipGreen
+                            : decl.font_size_status === 'FONT_SIZE_NON_COMPLIANT'
+                            ? styles.dimChipRed
+                            : styles.dimChipNeutral
+                        ]}>
+                          <MaterialIcons
+                            name="format-size"
+                            size={12}
+                            color={
+                              decl.font_size_status === 'FONT_SIZE_COMPLIANT'
+                                ? colors.statusGreenText
+                                : decl.font_size_status === 'FONT_SIZE_NON_COMPLIANT'
+                                ? colors.statusRedText
+                                : colors.onSurfaceVariant
+                            }
+                          />
+                          <Text style={[
+                            styles.dimChipText,
+                            decl.font_size_status === 'FONT_SIZE_COMPLIANT'
+                              ? styles.dimTextGreen
+                              : decl.font_size_status === 'FONT_SIZE_NON_COMPLIANT'
+                              ? styles.dimTextRed
+                              : styles.dimTextNeutral
+                          ]}>
+                            {decl.font_size_status.replace('FONT_SIZE_', '').replace(/_/g, ' ')}
+                          </Text>
+                        </View>
+                      ) : null}
+
+                      {decl.format_status ? (
+                        <View style={[
+                          styles.dimChip,
+                          decl.format_status === 'COMPLIANT' ? styles.dimChipGreen : styles.dimChipAmber
+                        ]}>
+                          <MaterialIcons
+                            name="rule"
+                            size={12}
+                            color={decl.format_status === 'COMPLIANT' ? colors.statusGreenText : colors.statusAmberText}
+                          />
+                          <Text style={[
+                            styles.dimChipText,
+                            decl.format_status === 'COMPLIANT' ? styles.dimTextGreen : styles.dimTextAmber
+                          ]}>
+                            Fmt: {decl.format_status.replace(/_/g, ' ')}
+                          </Text>
+                        </View>
+                      ) : null}
+                    </View>
                   </View>
                 );
               })}
+            </View>
+          )}
+
+          {/* Statutory Compliance Matrix Card (SIH PS 26034) */}
+          {validationMatrix && validationMatrix.matrix && validationMatrix.matrix.length > 0 && (
+            <View style={styles.matrixCard}>
+              <TouchableOpacity
+                style={styles.matrixCardHeader}
+                onPress={() => setShowMatrixTable(!showMatrixTable)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.matrixHeaderLeft}>
+                  <MaterialIcons name="verified-user" size={20} color={colors.primary} />
+                  <View>
+                    <Text style={styles.matrixCardTitle}>Declaration Compliance Matrix</Text>
+                    <Text style={styles.matrixCardSubtitle}>
+                      PCR 2011 Multi-dimensional Statutory Evaluation
+                    </Text>
+                  </View>
+                </View>
+                <MaterialIcons
+                  name={showMatrixTable ? 'expand-less' : 'expand-more'}
+                  size={24}
+                  color={colors.primary}
+                />
+              </TouchableOpacity>
+
+              {/* Summary Stats Badges */}
+              {complianceSummary && (
+                <View style={styles.matrixSummaryRow}>
+                  <View style={styles.summaryPill}>
+                    <Text style={styles.summaryPillLabel}>Detected</Text>
+                    <Text style={styles.summaryPillVal}>
+                      {complianceSummary.mandatory_declarations_detected}/7
+                    </Text>
+                  </View>
+                  <View style={styles.summaryPill}>
+                    <Text style={styles.summaryPillLabel}>Placement</Text>
+                    <Text style={[styles.summaryPillVal, styles.textGreen]}>
+                      {complianceSummary.placement_summary?.compliant || 0} OK
+                    </Text>
+                  </View>
+                  <View style={styles.summaryPill}>
+                    <Text style={styles.summaryPillLabel}>Readability</Text>
+                    <Text style={[styles.summaryPillVal, styles.textGreen]}>
+                      {complianceSummary.readability_summary?.good || 0} Good
+                    </Text>
+                  </View>
+                  <View style={styles.summaryPill}>
+                    <Text style={styles.summaryPillLabel}>Font Size</Text>
+                    <Text style={[styles.summaryPillVal, styles.textNeutral]}>
+                      {complianceSummary.font_size_summary?.undeterminable || 0} Undet
+                    </Text>
+                  </View>
+                </View>
+              )}
+
+              {showMatrixTable && (
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.matrixTableScroll}>
+                  <View style={styles.matrixTable}>
+                    {/* Header Row */}
+                    <View style={styles.matrixTableRowHeader}>
+                      <Text style={[styles.matrixTh, { width: 110 }]}>Declaration</Text>
+                      <Text style={[styles.matrixTh, { width: 55 }]}>Present</Text>
+                      <Text style={[styles.matrixTh, { width: 75 }]}>Readable</Text>
+                      <Text style={[styles.matrixTh, { width: 80 }]}>Placement</Text>
+                      <Text style={[styles.matrixTh, { width: 80 }]}>Font Size</Text>
+                      <Text style={[styles.matrixTh, { width: 75 }]}>Format</Text>
+                      <Text style={[styles.matrixTh, { width: 95 }]}>Status</Text>
+                    </View>
+
+                    {/* Data Rows */}
+                    {validationMatrix.matrix.map((row: any, rIdx: number) => {
+                      const isRowComp = row.overall_status === 'COMPLIANT';
+                      return (
+                        <View key={rIdx} style={[styles.matrixTableRow, rIdx % 2 === 1 && styles.matrixTableRowAlt]}>
+                          <Text style={[styles.matrixTdBold, { width: 110 }]} numberOfLines={1}>
+                            {FIELD_LABELS[row.declaration] || row.declaration.replace(/_/g, ' ')}
+                          </Text>
+                          <Text style={[styles.matrixTd, { width: 55 }, row.present ? styles.textGreen : styles.textRed]}>
+                            {row.present ? 'YES' : 'NO'}
+                          </Text>
+                          <Text style={[styles.matrixTd, { width: 75 }, row.readable === 'READABLE' ? styles.textGreen : styles.textAmber]} numberOfLines={1}>
+                            {row.readable ? row.readable.replace(/_/g, ' ') : '—'}
+                          </Text>
+                          <Text style={[styles.matrixTd, { width: 80 }, row.placement === 'PLACEMENT_COMPLIANT' ? styles.textGreen : styles.textAmber]} numberOfLines={1}>
+                            {row.placement ? row.placement.replace('PLACEMENT_', '').replace(/_/g, ' ') : '—'}
+                          </Text>
+                          <Text style={[styles.matrixTd, { width: 80 }, row.font_size === 'FONT_SIZE_COMPLIANT' ? styles.textGreen : styles.textNeutral]} numberOfLines={1}>
+                            {row.font_size ? row.font_size.replace('FONT_SIZE_', '').replace(/_/g, ' ') : '—'}
+                          </Text>
+                          <Text style={[styles.matrixTd, { width: 75 }, row.format === 'COMPLIANT' ? styles.textGreen : styles.textAmber]} numberOfLines={1}>
+                            {row.format ? row.format.replace(/_/g, ' ') : '—'}
+                          </Text>
+                          <Text style={[styles.matrixTdBold, { width: 95 }, isRowComp ? styles.textGreen : styles.textAmber]} numberOfLines={1}>
+                            {isRowComp ? 'COMPLIANT' : 'MANUAL VERIF'}
+                          </Text>
+                        </View>
+                      );
+                    })}
+                  </View>
+                </ScrollView>
+              )}
             </View>
           )}
 
@@ -952,6 +1169,162 @@ const styles = StyleSheet.create({
     color: colors.onSurfaceVariant,
     flex: 1,
     lineHeight: 14,
+  },
+  // Dimension Chips (PCR 2011 Multi-Dimensional Compliance)
+  dimensionChipsRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 6,
+    marginTop: 6,
+  },
+  dimChip: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingHorizontal: 7,
+    paddingVertical: 2.5,
+    borderRadius: borderRadius.DEFAULT,
+    borderWidth: 1,
+  },
+  dimChipGreen: {
+    backgroundColor: colors.statusGreenBg,
+    borderColor: 'rgba(27, 94, 32, 0.2)',
+  },
+  dimChipAmber: {
+    backgroundColor: colors.statusAmberBg,
+    borderColor: 'rgba(230, 81, 0, 0.2)',
+  },
+  dimChipRed: {
+    backgroundColor: colors.statusRedBg,
+    borderColor: 'rgba(183, 28, 28, 0.2)',
+  },
+  dimChipNeutral: {
+    backgroundColor: colors.surfaceContainerLow,
+    borderColor: colors.borderSubtle,
+  },
+  dimChipText: {
+    ...typography.caption,
+    fontSize: 10.5,
+    fontWeight: '600',
+  },
+  dimTextGreen: {
+    color: colors.statusGreenText,
+  },
+  dimTextAmber: {
+    color: colors.statusAmberText,
+  },
+  dimTextRed: {
+    color: colors.statusRedText,
+  },
+  dimTextNeutral: {
+    color: colors.onSurfaceVariant,
+  },
+  // Compliance Matrix Card Styles (SIH PS 26034)
+  matrixCard: {
+    backgroundColor: colors.surfaceContainerLowest,
+    borderRadius: borderRadius.lg,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    padding: spacing.gutter,
+    marginTop: spacing.stackMd,
+    marginBottom: spacing.stackSm,
+  },
+  matrixCardHeader: {
+    flexDirection: 'row',
+    justifyContent: 'space-between',
+    alignItems: 'center',
+  },
+  matrixHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+  },
+  matrixCardTitle: {
+    ...typography.bodyMd,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  matrixCardSubtitle: {
+    ...typography.caption,
+    color: colors.onSurfaceVariant,
+    fontSize: 11,
+  },
+  matrixSummaryRow: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: 8,
+    marginTop: 10,
+    paddingTop: 8,
+    borderTopWidth: 1,
+    borderTopColor: colors.borderSubtle,
+  },
+  summaryPill: {
+    flex: 1,
+    minWidth: 65,
+    backgroundColor: colors.surfaceContainerLow,
+    paddingVertical: 5,
+    paddingHorizontal: 8,
+    borderRadius: borderRadius.DEFAULT,
+    alignItems: 'center',
+  },
+  summaryPillLabel: {
+    ...typography.caption,
+    fontSize: 9.5,
+    color: colors.onSurfaceVariant,
+    textTransform: 'uppercase',
+  },
+  summaryPillVal: {
+    ...typography.caption,
+    fontWeight: '700',
+    fontSize: 11.5,
+    marginTop: 1,
+    color: colors.onSurface,
+  },
+  matrixTableScroll: {
+    marginTop: 10,
+  },
+  matrixTable: {
+    borderRadius: borderRadius.DEFAULT,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    overflow: 'hidden',
+  },
+  matrixTableRowHeader: {
+    flexDirection: 'row',
+    backgroundColor: colors.surfaceContainerLow,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.borderSubtle,
+  },
+  matrixTh: {
+    ...typography.caption,
+    fontWeight: '700',
+    fontSize: 10,
+    color: colors.primary,
+    textTransform: 'uppercase',
+  },
+  matrixTableRow: {
+    flexDirection: 'row',
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: 'rgba(0,0,0,0.04)',
+    alignItems: 'center',
+  },
+  matrixTableRowAlt: {
+    backgroundColor: 'rgba(0,0,0,0.015)',
+  },
+  matrixTd: {
+    ...typography.caption,
+    fontSize: 10.5,
+    color: colors.onSurface,
+  },
+  matrixTdBold: {
+    ...typography.caption,
+    fontSize: 10.5,
+    fontWeight: '700',
+    color: colors.onSurface,
   },
 });
 

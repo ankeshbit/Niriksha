@@ -58,6 +58,51 @@ def _docx_set_table_borders(table, border_color="CBD5E1"):
     )
     tblPr.append(borders)
 
+def _parse_declaration_compliance_row(d: Any) -> Dict[str, str]:
+    """Helper to parse or derive validation matrix values for report generation."""
+    matrix_raw = getattr(d, "validation_matrix_json", None)
+    if matrix_raw:
+        if isinstance(matrix_raw, str):
+            try:
+                matrix_raw = json.loads(matrix_raw)
+            except Exception:
+                matrix_raw = {}
+        if isinstance(matrix_raw, dict) and matrix_raw.get("declaration"):
+            return {
+                "field_name": matrix_raw.get("declaration") or getattr(d, "field_name", ""),
+                "present": "YES" if matrix_raw.get("present") else "NO",
+                "correct": "YES" if matrix_raw.get("correct") else ("NO" if matrix_raw.get("correct") is False else "PENDING"),
+                "readable": str(matrix_raw.get("readable") or "UNKNOWN"),
+                "placement": str(matrix_raw.get("placement") or "NOT_DETERMINABLE"),
+                "font_size": str(matrix_raw.get("font_size") or "UNDETERMINABLE"),
+                "format": "COMPLIANT" if matrix_raw.get("format") is True else ("NON_COMPLIANT" if matrix_raw.get("format") is False else str(matrix_raw.get("format") or "UNCERTAIN")),
+                "status": str(matrix_raw.get("overall_status") or "MANUAL_VERIFICATION_REQUIRED")
+            }
+
+    ext_val = getattr(d, "extracted_value", None)
+    has_val = bool(ext_val and str(ext_val).strip() and getattr(d, "extraction_status", "") != "NOT_FOUND")
+    p_status = getattr(d, "placement_status", None) or "NOT_DETERMINABLE"
+    f_status = getattr(d, "font_size_status", None) or "UNDETERMINABLE"
+    r_status = getattr(d, "readability_status", None) or ("READABLE" if has_val else "UNREADABLE")
+    fmt_status = getattr(d, "format_status", None) or ("COMPLIANT" if has_val else "UNCERTAIN")
+    v_status = getattr(d, "verification_status", None) or "UNVERIFIED"
+
+    correct_str = "YES" if v_status == "VERIFIED" else ("CORRECTED" if v_status == "CORRECTED" else "PENDING")
+    is_compliant = (has_val and p_status == "PLACEMENT_COMPLIANT" and r_status == "READABLE" and f_status == "FONT_SIZE_COMPLIANT" and fmt_status == "COMPLIANT")
+    overall = "COMPLIANT" if is_compliant else "MANUAL_VERIFICATION_REQUIRED"
+
+    return {
+        "field_name": getattr(d, "field_name", ""),
+        "present": "YES" if has_val else "NO",
+        "correct": correct_str,
+        "readable": r_status,
+        "placement": p_status,
+        "font_size": f_status,
+        "format": fmt_status,
+        "status": overall
+    }
+
+
 class StatutoryReportGenerator:
     """
     Statutory Legal Metrology PDF Report Generator.
@@ -425,7 +470,130 @@ class StatutoryReportGenerator:
         story.append(decl_table)
         story.append(Spacer(1, 8))
 
-        # 2b. Cross-Image Conflicts & Verification Section
+        # 4. Unified Declaration Compliance Matrix (SIH PS 26034 Requirement)
+        story.append(Paragraph("4. UNIFIED DECLARATION COMPLIANCE MATRIX (SIH PS 26034)", styles["SectionHeading"]))
+        story.append(Paragraph("<i>Comprehensive multi-dimensional evaluation: Presence, Correctness, Readability, Placement, Font Size, Format, and Adjudication Status under PCR 2011.</i>", styles["DisclaimerText"]))
+        story.append(Spacer(1, 4))
+
+        matrix_rows = [
+            [
+                Paragraph("<b>Declaration</b>", styles["BodySmallBold"]),
+                Paragraph("<b>Present</b>", styles["BodySmallBold"]),
+                Paragraph("<b>Correct</b>", styles["BodySmallBold"]),
+                Paragraph("<b>Readable</b>", styles["BodySmallBold"]),
+                Paragraph("<b>Placement</b>", styles["BodySmallBold"]),
+                Paragraph("<b>Font Size</b>", styles["BodySmallBold"]),
+                Paragraph("<b>Format</b>", styles["BodySmallBold"]),
+                Paragraph("<b>Status</b>", styles["BodySmallBold"])
+            ]
+        ]
+
+        for d in declarations:
+            mrow = _parse_declaration_compliance_row(d)
+            fn = mrow["field_name"]
+            flabel = field_labels.get(fn, fn.replace("_", " ").title())
+            
+            p_color = "<font color='green'>YES</font>" if mrow["present"] == "YES" else "<font color='red'>NO</font>"
+            c_color = "<font color='green'>YES</font>" if mrow["correct"] == "YES" else ("<font color='#b45309'>CORR</font>" if mrow["correct"] == "CORRECTED" else "<font color='#b45309'>PEND</font>")
+            
+            r_str = mrow["readable"].replace("READABLE", "READABLE").replace("POOR_READABILITY", "POOR").replace("NOT_OBSERVABLE", "NOT OBS")
+            r_color = f"<font color='green'>{r_str}</font>" if "READABLE" in mrow["readable"] else f"<font color='#b45309'>{r_str}</font>"
+            
+            pl_str = mrow["placement"].replace("PLACEMENT_", "").replace("COMPLIANT", "COMP").replace("NON_COMPLIANT", "NON-C").replace("UNCERTAIN", "UNCERT").replace("MANUAL_VERIFICATION_REQUIRED", "MANUAL")
+            pl_color = f"<font color='green'>{pl_str}</font>" if "COMPLIANT" in mrow["placement"] else f"<font color='#b45309'>{pl_str}</font>"
+            
+            fs_str = mrow["font_size"].replace("FONT_SIZE_", "").replace("UNDETERMINABLE", "UNDET").replace("COMPLIANT", "COMP").replace("NON_COMPLIANT", "NON-C").replace("MANUAL_VERIFICATION_REQUIRED", "MANUAL")
+            fs_color = f"<font color='green'>{fs_str}</font>" if "COMPLIANT" in mrow["font_size"] else f"<font color='#64748b'>{fs_str}</font>"
+            
+            fmt_str = mrow["format"].replace("COMPLIANT", "COMP").replace("NON_COMPLIANT", "NON-C").replace("UNCERTAIN", "UNCERT")
+            fmt_color = f"<font color='green'>{fmt_str}</font>" if "COMP" in mrow["format"] else f"<font color='#b45309'>{fmt_str}</font>"
+            
+            st_str = "COMPLIANT" if mrow["status"] == "COMPLIANT" else "MANUAL VERIF"
+            st_color = f"<font color='green'><b>{st_str}</b></font>" if mrow["status"] == "COMPLIANT" else f"<font color='#b45309'><b>{st_str}</b></font>"
+
+            matrix_rows.append([
+                Paragraph(flabel, styles["BodySmall"]),
+                Paragraph(p_color, styles["BodySmall"]),
+                Paragraph(c_color, styles["BodySmall"]),
+                Paragraph(r_color, styles["BodySmall"]),
+                Paragraph(pl_color, styles["BodySmall"]),
+                Paragraph(fs_color, styles["BodySmall"]),
+                Paragraph(fmt_color, styles["BodySmall"]),
+                Paragraph(st_color, styles["BodySmall"])
+            ])
+
+        if len(matrix_rows) == 1:
+            matrix_rows.append([Paragraph("No declarations evaluated.", styles["BodySmall"])] + [Paragraph("-", styles["BodySmall"]) for _ in range(7)])
+
+        matrix_table = Table(matrix_rows, colWidths=[130, 42, 45, 60, 68, 64, 52, 62])
+        matrix_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), BG_LIGHT),
+            ('BOX', (0, 0), (-1, -1), 0.5, BORDER_COLOR),
+            ('INNERGRID', (0, 0), (-1, -1), 0.5, BORDER_COLOR),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+            ('LEFTPADDING', (0, 0), (-1, -1), 4),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(matrix_table)
+        story.append(Spacer(1, 8))
+
+        # 5. Placement & Readability Evidence Audit
+        story.append(Paragraph("5. SPATIAL PLACEMENT & READABILITY EVIDENCE AUDIT", styles["SectionHeading"]))
+        audit_rows = [
+            [
+                Paragraph("<b>Declaration</b>", styles["BodySmallBold"]),
+                Paragraph("<b>Placement Rule & Region</b>", styles["BodySmallBold"]),
+                Paragraph("<b>Font Height & Calibration</b>", styles["BodySmallBold"]),
+                Paragraph("<b>Clarity / Contrast</b>", styles["BodySmallBold"])
+            ]
+        ]
+        for d in declarations:
+            fname = getattr(d, "field_name", "")
+            flabel = field_labels.get(fname, fname.replace("_", " ").title())
+            p_st = getattr(d, "placement_status", "NOT_DETERMINABLE") or "NOT_DETERMINABLE"
+            f_st = getattr(d, "font_size_status", "UNDETERMINABLE") or "UNDETERMINABLE"
+            r_st = getattr(d, "readability_status", "UNKNOWN") or "UNKNOWN"
+            
+            p_detail = ""
+            p_raw = getattr(d, "placement_details_json", None)
+            if p_raw:
+                p_dict = json.loads(p_raw) if isinstance(p_raw, str) else p_raw
+                p_detail = f" ({p_dict.get('detected_region', 'Unknown Region')})" if isinstance(p_dict, dict) else ""
+            
+            f_detail = ""
+            f_raw = getattr(d, "font_size_details_json", None)
+            if f_raw:
+                f_dict = json.loads(f_raw) if isinstance(f_raw, str) else f_raw
+                if isinstance(f_dict, dict) and f_dict.get("calibration_reference_present"):
+                    f_detail = f" ({f_dict.get('estimated_char_height_mm', 0):.1f}mm / req {f_dict.get('required_min_height_mm', 0):.1f}mm)"
+                else:
+                    f_detail = " (No physical scale: undeterminable)"
+            
+            audit_rows.append([
+                Paragraph(flabel, styles["BodySmallBold"]),
+                Paragraph(f"{p_st}{p_detail}", styles["BodySmall"]),
+                Paragraph(f"{f_st}{f_detail}", styles["BodySmall"]),
+                Paragraph(f"{r_st}", styles["BodySmall"])
+            ])
+            
+        if len(audit_rows) == 1:
+            audit_rows.append([Paragraph("No placement records.", styles["BodySmall"]), Paragraph("-", styles["BodySmall"]), Paragraph("-", styles["BodySmall"]), Paragraph("-", styles["BodySmall"])])
+            
+        audit_table = Table(audit_rows, colWidths=[130, 140, 160, 93])
+        audit_table.setStyle(TableStyle([
+            ('BACKGROUND', (0, 0), (-1, 0), BG_LIGHT),
+            ('BOX', (0, 0), (-1, -1), 0.5, BORDER_COLOR),
+            ('INNERGRID', (0, 0), (-1, -1), 0.5, BORDER_COLOR),
+            ('TOPPADDING', (0, 0), (-1, -1), 3),
+            ('BOTTOMPADDING', (0, 0), (-1, -1), 3),
+            ('LEFTPADDING', (0, 0), (-1, -1), 4),
+            ('RIGHTPADDING', (0, 0), (-1, -1), 4),
+        ]))
+        story.append(audit_table)
+        story.append(Spacer(1, 8))
+
+        # 6. Cross-Image Conflicts & Verification Section
         conflict_rows = [
             [
                 Paragraph("<b>Field Name</b>", styles["BodySmallBold"]),
@@ -456,7 +624,7 @@ class StatutoryReportGenerator:
                     Paragraph("<b>NEEDS MANUAL VERIFICATION</b><br/><font color='#475569'><i>Inspector must verify physical package</i></font>", styles["BodySmall"])
                 ])
 
-        story.append(Paragraph("4. CROSS-IMAGE VERIFICATION & CONFLICT AUDIT", styles["SectionHeading"]))
+        story.append(Paragraph("6. CROSS-IMAGE VERIFICATION & CONFLICT AUDIT", styles["SectionHeading"]))
         if has_any_conflict:
             conf_table = Table(conflict_rows, colWidths=[140, 240, 140])
             conf_table.setStyle(TableStyle([
@@ -482,7 +650,7 @@ class StatutoryReportGenerator:
         insufficient_cnt = sum(1 for c in compliance_checks if getattr(c, "result_state", "") in ["INSUFFICIENT_EVIDENCE", "NEEDS_MANUAL_VERIFICATION"])
         notapp_cnt = sum(1 for c in compliance_checks if getattr(c, "result_state", "") == "NOT_APPLICABLE")
 
-        story.append(Paragraph("5. AI-ASSISTED PRELIMINARY OBSERVATIONS VS. INSPECTOR ADJUDICATIONS", styles["SectionHeading"]))
+        story.append(Paragraph("7. AI-ASSISTED PRELIMINARY OBSERVATIONS VS. INSPECTOR ADJUDICATIONS", styles["SectionHeading"]))
         story.append(Paragraph("<i>Core Principle: AI detects and assists. Rules evaluate. Evidence supports. Inspector decides.</i>", styles["DisclaimerText"]))
         story.append(Spacer(1, 4))
         
@@ -1012,8 +1180,97 @@ class StatutoryReportGenerator:
             for i, w in enumerate(decl_widths):
                 row.cells[i].width = Inches(w)
 
+        # ----------------- 6b. UNIFIED DECLARATION COMPLIANCE MATRIX (SIH PS 26034) -----------------
+        add_heading("5. UNIFIED DECLARATION COMPLIANCE MATRIX (SIH PS 26034)")
+        add_p("Multi-dimensional audit across Presence, Correctness, Readability, Placement, Font Size, Format, and Adjudication Status under PCR 2011.", italic=True, size=8.5, color=CLR_MUTED, space_after=4)
+
+        matrix_table = doc.add_table(rows=1, cols=8)
+        _docx_set_table_borders(matrix_table, HEX_BORDER)
+        mat_widths = [1.5, 0.6, 0.7, 0.9, 1.0, 1.0, 0.8, 1.0]
+        format_header_row(matrix_table, ["Declaration", "Present", "Correct", "Readable", "Placement", "Font Size", "Format", "Status"], mat_widths)
+
+        for d in declarations:
+            mrow = _parse_declaration_compliance_row(d)
+            fn = mrow["field_name"]
+            flabel = field_labels.get(fn, fn.replace("_", " ").title())
+            p_color = CLR_PASS if mrow["present"] == "YES" else CLR_FAIL
+            c_color = CLR_PASS if mrow["correct"] == "YES" else CLR_WARN
+            r_color = CLR_PASS if "READABLE" in mrow["readable"] else CLR_WARN
+            pl_color = CLR_PASS if "COMPLIANT" in mrow["placement"] else CLR_WARN
+            fs_color = CLR_PASS if "COMPLIANT" in mrow["font_size"] else CLR_MUTED
+            fmt_color = CLR_PASS if "COMP" in mrow["format"] else CLR_WARN
+            st_color = CLR_PASS if mrow["status"] == "COMPLIANT" else CLR_WARN
+
+            row_cells = matrix_table.add_row().cells
+            populate_cell(row_cells[0], flabel, bold=True, size=8)
+            populate_cell(row_cells[1], mrow["present"], bold=True, color=p_color, size=8)
+            populate_cell(row_cells[2], mrow["correct"], bold=True, color=c_color, size=8)
+            populate_cell(row_cells[3], mrow["readable"], color=r_color, size=8)
+            populate_cell(row_cells[4], mrow["placement"].replace("PLACEMENT_", ""), color=pl_color, size=8)
+            populate_cell(row_cells[5], mrow["font_size"].replace("FONT_SIZE_", ""), color=fs_color, size=8)
+            populate_cell(row_cells[6], mrow["format"], color=fmt_color, size=8)
+            populate_cell(row_cells[7], mrow["status"].replace("MANUAL_VERIFICATION_REQUIRED", "MANUAL VERIF"), bold=True, color=st_color, size=8)
+
+        if not declarations:
+            row_cells = matrix_table.add_row().cells
+            populate_cell(row_cells[0], "No declarations evaluated", size=8)
+            for c_i in range(1, 8):
+                populate_cell(row_cells[c_i], "—", size=8)
+
+        for row in matrix_table.rows:
+            for i, w in enumerate(mat_widths):
+                row.cells[i].width = Inches(w)
+
+        # ----------------- 6c. SPATIAL PLACEMENT & READABILITY EVIDENCE AUDIT -----------------
+        add_heading("6. SPATIAL PLACEMENT, READABILITY & FONT-SIZE AUDIT")
+        add_p("Principal Display Panel (PDP) placement (Rule 6/7/12), physical scale calibration (Rule 9 Table 1), and image crop clarity.", italic=True, size=8.5, color=CLR_MUTED, space_after=4)
+
+        audit_table = doc.add_table(rows=1, cols=4)
+        _docx_set_table_borders(audit_table, HEX_BORDER)
+        aud_widths = [1.8, 1.9, 2.2, 1.6]
+        format_header_row(audit_table, ["Declaration", "Placement Rule & Region", "Font Height & Calibration", "Clarity & Contrast"], aud_widths)
+
+        for d in declarations:
+            fname = getattr(d, "field_name", "")
+            flabel = field_labels.get(fname, fname.replace("_", " ").title())
+            p_st = getattr(d, "placement_status", "NOT_DETERMINABLE") or "NOT_DETERMINABLE"
+            f_st = getattr(d, "font_size_status", "UNDETERMINABLE") or "UNDETERMINABLE"
+            r_st = getattr(d, "readability_status", "UNKNOWN") or "UNKNOWN"
+
+            p_detail = ""
+            p_raw = getattr(d, "placement_details_json", None)
+            if p_raw:
+                p_dict = json.loads(p_raw) if isinstance(p_raw, str) else p_raw
+                if isinstance(p_dict, dict) and p_dict.get("detected_region"):
+                    p_detail = f"\nRegion: {p_dict.get('detected_region')}"
+
+            f_detail = ""
+            f_raw = getattr(d, "font_size_details_json", None)
+            if f_raw:
+                f_dict = json.loads(f_raw) if isinstance(f_raw, str) else f_raw
+                if isinstance(f_dict, dict) and f_dict.get("calibration_reference_present"):
+                    f_detail = f"\n{f_dict.get('estimated_char_height_mm', 0):.1f}mm (Min: {f_dict.get('required_min_height_mm', 0):.1f}mm)"
+                else:
+                    f_detail = "\nNo physical calibration scale (Rule 9 Table 1)"
+
+            row_cells = audit_table.add_row().cells
+            populate_cell(row_cells[0], flabel, bold=True, size=8)
+            populate_cell(row_cells[1], f"{p_st}{p_detail}", size=8)
+            populate_cell(row_cells[2], f"{f_st}{f_detail}", size=8)
+            populate_cell(row_cells[3], r_st, size=8)
+
+        if not declarations:
+            row_cells = audit_table.add_row().cells
+            populate_cell(row_cells[0], "No placement records", size=8)
+            for c_i in range(1, 4):
+                populate_cell(row_cells[c_i], "—", size=8)
+
+        for row in audit_table.rows:
+            for i, w in enumerate(aud_widths):
+                row.cells[i].width = Inches(w)
+
         # ----------------- 7. CROSS-IMAGE VERIFICATION & CONFLICT AUDIT -----------------
-        add_heading("5. CROSS-IMAGE VERIFICATION & CONFLICT AUDIT")
+        add_heading("7. CROSS-IMAGE VERIFICATION & CONFLICT AUDIT")
         has_any_conflict = False
         conflict_items = []
         for d in declarations:
@@ -1051,7 +1308,7 @@ class StatutoryReportGenerator:
             add_p("No cross-image conflicts detected. Declaration values are consistent across all captured package views.", italic=True, size=8.5, color=CLR_MUTED)
 
         # ----------------- 8. DETERMINISTIC PCR 2011 RULE EVALUATION CHECKS -----------------
-        add_heading("6. DETERMINISTIC PCR 2011 STATUTORY EVALUATION CHECKS")
+        add_heading("8. DETERMINISTIC PCR 2011 STATUTORY EVALUATION CHECKS")
         rule_table = doc.add_table(rows=1, cols=6)
         _docx_set_table_borders(rule_table, HEX_BORDER)
         rule_widths = [1.4, 2.0, 0.9, 1.2, 0.6, 0.9]
@@ -1086,7 +1343,7 @@ class StatutoryReportGenerator:
                 row.cells[i].width = Inches(w)
 
         # ----------------- 9. FINDINGS & INSPECTOR ADJUDICATION -----------------
-        add_heading("7. AI-ASSISTED PRELIMINARY OBSERVATIONS VS. INSPECTOR ADJUDICATION")
+        add_heading("9. AI-ASSISTED PRELIMINARY OBSERVATIONS VS. INSPECTOR ADJUDICATION")
         add_p("Core Principle: AI detects and assists. Rules evaluate. Evidence supports. Inspector decides.", italic=True, size=8, color=CLR_MUTED, space_after=4)
 
         find_table = doc.add_table(rows=1, cols=5)
@@ -1135,7 +1392,7 @@ class StatutoryReportGenerator:
                 row.cells[i].width = Inches(w)
 
         # ----------------- 10. FINAL STATUTORY OVERALL STATUS BLOCK -----------------
-        add_heading("8. FINAL STATUTORY COMPLIANCE DETERMINATION")
+        add_heading("10. FINAL STATUTORY COMPLIANCE DETERMINATION")
         overall_status = getattr(inspection, "overall_status", "PENDING_REVIEW") or "PENDING_REVIEW"
         status_color = CLR_PASS if overall_status == "NO_POTENTIAL_VIOLATIONS" else (CLR_FAIL if overall_status == "POTENTIAL_NON_COMPLIANCE" else CLR_WARN)
         status_border_hex = HEX_PASS if overall_status == "NO_POTENTIAL_VIOLATIONS" else (HEX_FAIL if overall_status == "POTENTIAL_NON_COMPLIANCE" else HEX_WARN)
@@ -1157,7 +1414,7 @@ class StatutoryReportGenerator:
         add_p("• Final Inspector Decision: Authoritative statutory compliance determination under the Legal Metrology Act, 2009.", size=8.5, color=CLR_DARK, space_after=6)
 
         # ----------------- 11. STATUTORY LIMITATIONS & SAFETY STATEMENTS -----------------
-        add_heading("9. STATUTORY LIMITATIONS & AI SAFETY NOTICE")
+        add_heading("11. STATUTORY LIMITATIONS & AI SAFETY NOTICE")
 
         # Physical Quantity Limitation Notice
         quantity_limitation_text = (

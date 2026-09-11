@@ -193,7 +193,70 @@ class DeclarationResponse(BaseModel):
     raw_text: Optional[str] = None
     layout_region: Optional[str] = None
     layout_bbox: Optional[List[int]] = None
+    # PS 26034 Extended Analytical & Legal Validation Attributes
+    placement_status: Optional[str] = "NOT_DETERMINABLE"
+    placement_details: Optional[Dict[str, Any]] = None
+    font_size_status: Optional[str] = "FONT_SIZE_UNDETERMINABLE"
+    font_size_details: Optional[Dict[str, Any]] = None
+    readability_status: Optional[str] = "NOT_OBSERVABLE"
+    readability_details: Optional[Dict[str, Any]] = None
+    format_status: Optional[str] = "COMPLIANT"
+    format_details: Optional[Dict[str, Any]] = None
+    validation_matrix: Optional[Dict[str, Any]] = None
     created_at: datetime
+
+class DeclarationMatrixRowSchema(BaseModel):
+    field_name: str
+    field_label: str
+    is_present: bool
+    is_correct: str
+    readability_status: str
+    placement_status: str
+    font_size_status: str
+    format_status: str
+    overall_status: str
+    extracted_value: Optional[str] = None
+    effective_value: Optional[str] = None
+    confidence: float = 0.0
+    bounding_box: Optional[List[int]] = None
+    source_image_id: Optional[str] = None
+    view_type: Optional[str] = None
+    statutory_reference: Optional[str] = None
+    findings: List[str] = []
+    explanation: Optional[str] = None
+
+class DeclarationValidationMatrixResponse(BaseModel):
+    inspection_id: str
+    rows: List[DeclarationMatrixRowSchema]
+    total_mandatory: int
+    compliant_count: int
+    potential_violation_count: int
+    manual_verification_count: int
+    generated_at: str
+
+class ComplianceSummaryResponse(BaseModel):
+    inspection_id: str
+    overall_status: str
+    total_mandatory: int = 7
+    mandatory_detected: int = 0
+    mandatory_missing: int = 0
+    mandatory_correct: int = 0
+    mandatory_uncertain: int = 0
+    placement_compliant: int = 0
+    placement_uncertain: int = 0
+    placement_non_compliant: int = 0
+    readability_good: int = 0
+    readability_uncertain: int = 0
+    readability_poor: int = 0
+    font_size_compliant: int = 0
+    font_size_non_compliant: int = 0
+    font_size_undeterminable: int = 0
+    listing_comparison_matched: int = 0
+    listing_comparison_mismatched: int = 0
+    listing_comparison_uncertain: int = 0
+    potential_violations_count: int = 0
+    manual_verification_count: int = 0
+    timestamp: str
 
 class UpdateDeclarationRequest(BaseModel):
     corrected_value: Optional[str] = None

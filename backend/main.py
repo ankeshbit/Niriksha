@@ -107,7 +107,10 @@ from backend.schemas import (
     ProductListingResponse,
     ListingComparisonItemResponse,
     ListingComparisonSummaryResponse,
-    AdjudicateComparisonRequest
+    AdjudicateComparisonRequest,
+    DeclarationValidationMatrixResponse,
+    DeclarationMatrixRowSchema,
+    ComplianceSummaryResponse
 )
 from backend.auth_utils import verify_password, hash_password
 from backend.auth_service import (
@@ -122,6 +125,7 @@ from backend.image_quality import assess_image_quality, assess_blur_blur_detecti
 from backend.ocr_service import ocr_service
 from backend.barcode_service import barcode_service, BarcodeItem
 from backend.extraction_service import extraction_service, cross_image_verification
+from backend.declaration_validation_service import declaration_validation_engine
 from backend.rule_engine import (
     rule_engine,
     get_rule_by_code,
@@ -475,6 +479,15 @@ def serialize_declaration(decl: Declaration) -> DeclarationResponse:
         raw_text=raw_text,
         layout_region=layout_region,
         layout_bbox=layout_bbox,
+        placement_status=getattr(decl, "placement_status", "NOT_DETERMINABLE") or "NOT_DETERMINABLE",
+        placement_details=json.loads(decl.placement_details_json) if getattr(decl, "placement_details_json", None) else None,
+        font_size_status=getattr(decl, "font_size_status", "FONT_SIZE_UNDETERMINABLE") or "FONT_SIZE_UNDETERMINABLE",
+        font_size_details=json.loads(decl.font_size_details_json) if getattr(decl, "font_size_details_json", None) else None,
+        readability_status=getattr(decl, "readability_status", "NOT_OBSERVABLE") or "NOT_OBSERVABLE",
+        readability_details=json.loads(decl.readability_details_json) if getattr(decl, "readability_details_json", None) else None,
+        format_status=getattr(decl, "format_status", "COMPLIANT") or "COMPLIANT",
+        format_details=json.loads(decl.format_details_json) if getattr(decl, "format_details_json", None) else None,
+        validation_matrix=json.loads(decl.validation_matrix_json) if getattr(decl, "validation_matrix_json", None) else None,
         created_at=decl.created_at
     )
 
@@ -1241,6 +1254,8 @@ def _generate_product_key(product_name: str, brand_name: Optional[str], category
 
 
 @app.get("/api/repository/inspections", response_model=RepositoryInspectionsResponse, tags=["Repository & Search"])
+@app.get("/api/inspections/search", response_model=RepositoryInspectionsResponse, tags=["Repository & Search"])
+@app.get("/api/inspections/history", response_model=RepositoryInspectionsResponse, tags=["Repository & Search"])
 def search_repository_inspections(
     search: Optional[str] = Query(None, description="Search across ID, product, brand, category, manufacturer, inspector, location, batch, report"),
     status_filter: Optional[str] = Query(None, alias="status", description="Filter by lifecycle status"),
@@ -1403,6 +1418,7 @@ def search_repository_inspections(
 
 
 @app.get("/api/repository/products", response_model=RepositoryProductsResponse, tags=["Repository & Search"])
+@app.get("/api/products/search", response_model=RepositoryProductsResponse, tags=["Repository & Search"])
 def get_repository_products(
     search: Optional[str] = Query(None, description="Search across product name, brand, category, manufacturer"),
     category: Optional[str] = Query(None, description="Category filter"),
@@ -1493,6 +1509,7 @@ def get_repository_products(
 
 
 @app.get("/api/repository/products/{product_key}/inspections", response_model=RepositoryInspectionsResponse, tags=["Repository & Search"])
+@app.get("/api/products/{product_key}/history", response_model=RepositoryInspectionsResponse, tags=["Repository & Search"])
 def get_product_inspection_history(
     product_key: str,
     page: int = Query(1, ge=1),
@@ -2360,6 +2377,26 @@ def run_inspection_ocr_and_extraction(
         db.add(decl)
         saved_declarations.append(decl)
 
+    # Build and persist Unified Declaration Compliance Matrix (Placement, Font Size, Readability, Format)
+    try:
+        all_imgs = db.query(ProductImage).filter(ProductImage.inspection_id == inspection_id_str).all()
+        matrix_rows = declaration_validation_engine.build_declaration_matrix(saved_declarations, all_imgs)
+        matrix_row_map = {r.field_name: r for r in matrix_rows}
+        for decl in saved_declarations:
+            r = matrix_row_map.get(decl.field_name)
+            if r:
+                decl.placement_status = r.placement_status
+                decl.placement_details_json = json.dumps({"expected_panel": r.placement_status, "statutory_ref": r.statutory_reference})
+                decl.font_size_status = r.font_size_status
+                decl.font_size_details_json = json.dumps({"status": r.font_size_status})
+                decl.readability_status = r.readability_status
+                decl.readability_details_json = json.dumps({"status": r.readability_status, "confidence": decl.confidence})
+                decl.format_status = r.format_status
+                decl.format_details_json = json.dumps({"findings": r.findings, "explanation": r.explanation})
+                decl.validation_matrix_json = json.dumps(r.model_dump())
+    except Exception as e:
+        logger.warning(f"[DECLARATION_MATRIX_BUILD_WARN] {e}")
+
     # Re-attach inspection to session for final status update and audit log
     # (The session auto-reconnects to the DB on this query)
     db_inspection = db.query(Inspection).filter(Inspection.id == inspection_id_str).first()
@@ -2501,6 +2538,69 @@ def get_single_declaration(
         raise HTTPException(status_code=404, detail=f"Declaration field '{field_name}' not found")
 
     return serialize_declaration(decl)
+
+@app.get("/api/inspections/{inspection_id}/declaration-validation", response_model=DeclarationValidationMatrixResponse, tags=["OCR & Declarations"])
+def get_inspection_declaration_validation(
+    inspection_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Returns the Unified Declaration Compliance Matrix for an inspection.
+    Evaluates Presence, Correctness, Readability, Placement, Font Size, and Format under PCR 2011.
+    """
+    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    if not inspection:
+        raise HTTPException(status_code=404, detail="Inspection not found")
+    verify_inspection_access(inspection, current_user, allow_supervisory=True)
+
+    declarations = db.query(Declaration).filter(Declaration.inspection_id == inspection_id).all()
+    images = db.query(ProductImage).filter(ProductImage.inspection_id == inspection_id).all()
+
+    matrix_rows = declaration_validation_engine.build_declaration_matrix(declarations, images)
+
+    compliant_count = sum(1 for r in matrix_rows if r.overall_status == "COMPLIANT")
+    pot_viol_count = sum(1 for r in matrix_rows if r.overall_status == "POTENTIAL_NON_COMPLIANCE")
+    manual_ver_count = sum(1 for r in matrix_rows if r.overall_status == "MANUAL_VERIFICATION_REQUIRED")
+
+    row_schemas = [DeclarationMatrixRowSchema(**r.model_dump()) for r in matrix_rows]
+
+    return DeclarationValidationMatrixResponse(
+        inspection_id=inspection_id,
+        rows=row_schemas,
+        total_mandatory=len(row_schemas),
+        compliant_count=compliant_count,
+        potential_violation_count=pot_viol_count,
+        manual_verification_count=manual_ver_count,
+        generated_at=datetime.utcnow().isoformat()
+    )
+
+@app.get("/api/inspections/{inspection_id}/compliance-summary", response_model=ComplianceSummaryResponse, tags=["Rule Engine & Adjudication"])
+def get_inspection_compliance_summary(
+    inspection_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Returns the aggregate statutory compliance summary for an inspection.
+    Includes mandatory detection, placement, readability, font size, and listing discrepancy metrics.
+    """
+    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    if not inspection:
+        raise HTTPException(status_code=404, detail="Inspection not found")
+    verify_inspection_access(inspection, current_user, allow_supervisory=True)
+
+    declarations = db.query(Declaration).filter(Declaration.inspection_id == inspection_id).all()
+    images = db.query(ProductImage).filter(ProductImage.inspection_id == inspection_id).all()
+    listing_comps = db.query(ListingComparison).filter(ListingComparison.inspection_id == inspection_id).all()
+
+    matrix_rows = declaration_validation_engine.build_declaration_matrix(declarations, images)
+    summary_data = declaration_validation_engine.compute_compliance_summary(matrix_rows, listing_comps)
+
+    return ComplianceSummaryResponse(
+        inspection_id=inspection_id,
+        **summary_data.model_dump()
+    )
 
 @app.patch("/api/declarations/{declaration_id}", response_model=DeclarationResponse, tags=["OCR & Declarations"])
 def update_declaration(

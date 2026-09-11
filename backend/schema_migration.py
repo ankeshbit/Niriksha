@@ -72,6 +72,52 @@ def migrate():
             "column": "inspection_type",
             "ddl": "ALTER TABLE inspections ADD COLUMN inspection_type VARCHAR(50) DEFAULT 'PHYSICAL'",
         },
+        # Declarations: PS 26034 Extended Validation Attributes
+        {
+            "table": "declarations",
+            "column": "placement_status",
+            "ddl": "ALTER TABLE declarations ADD COLUMN placement_status VARCHAR(50) DEFAULT 'NOT_DETERMINABLE'",
+        },
+        {
+            "table": "declarations",
+            "column": "placement_details_json",
+            "ddl": "ALTER TABLE declarations ADD COLUMN placement_details_json TEXT",
+        },
+        {
+            "table": "declarations",
+            "column": "font_size_status",
+            "ddl": "ALTER TABLE declarations ADD COLUMN font_size_status VARCHAR(50) DEFAULT 'FONT_SIZE_UNDETERMINABLE'",
+        },
+        {
+            "table": "declarations",
+            "column": "font_size_details_json",
+            "ddl": "ALTER TABLE declarations ADD COLUMN font_size_details_json TEXT",
+        },
+        {
+            "table": "declarations",
+            "column": "readability_status",
+            "ddl": "ALTER TABLE declarations ADD COLUMN readability_status VARCHAR(50) DEFAULT 'NOT_OBSERVABLE'",
+        },
+        {
+            "table": "declarations",
+            "column": "readability_details_json",
+            "ddl": "ALTER TABLE declarations ADD COLUMN readability_details_json TEXT",
+        },
+        {
+            "table": "declarations",
+            "column": "format_status",
+            "ddl": "ALTER TABLE declarations ADD COLUMN format_status VARCHAR(50) DEFAULT 'COMPLIANT'",
+        },
+        {
+            "table": "declarations",
+            "column": "format_details_json",
+            "ddl": "ALTER TABLE declarations ADD COLUMN format_details_json TEXT",
+        },
+        {
+            "table": "declarations",
+            "column": "validation_matrix_json",
+            "ddl": "ALTER TABLE declarations ADD COLUMN validation_matrix_json TEXT",
+        },
     ]
 
     with engine.connect() as conn:

@@ -28,6 +28,7 @@ export const ReviewAndSubmitScreen: React.FC = () => {
   const [images, setImages] = useState<any[]>([]);
   const [declarations, setDeclarations] = useState<any[]>([]);
   const [findings, setFindings] = useState<any[]>([]);
+  const [complianceSummary, setComplianceSummary] = useState<any | null>(null);
   const [officerNotes, setOfficerNotes] = useState('Finalized by Inspecting Officer after human verification.');
   const [finalDecision, setFinalDecision] = useState<'NO_POTENTIAL_VIOLATIONS' | 'POTENTIAL_NON_COMPLIANCE' | 'NEEDS_MANUAL_VERIFICATION'>('NO_POTENTIAL_VIOLATIONS');
   const [loading, setLoading] = useState(true);
@@ -36,16 +37,18 @@ export const ReviewAndSubmitScreen: React.FC = () => {
   useEffect(() => {
     const loadAll = async () => {
       try {
-        const [insp, imgs, decls, fnds] = await Promise.all([
+        const [insp, imgs, decls, fnds, compSummary] = await Promise.all([
           api.getInspection(inspectionId),
           api.getInspectionImages(inspectionId),
           api.getDeclarations(inspectionId).catch(() => []),
           api.getFindings(inspectionId).catch(() => []),
+          api.getComplianceSummary(inspectionId).catch(() => null),
         ]);
         setInspection(insp);
         setImages(imgs || []);
         setDeclarations(decls || []);
         setFindings(fnds || []);
+        setComplianceSummary(compSummary || null);
 
         const hasViolations = (fnds || []).some((f: any) => f.adjudication_status === 'CONFIRMED' || f.result_state === 'POTENTIAL_NON_COMPLIANCE');
         const hasUnverified = (fnds || []).some((f: any) => f.result_state === 'INSUFFICIENT_EVIDENCE' || f.result_state === 'NEEDS_MANUAL_VERIFICATION');
@@ -327,6 +330,65 @@ export const ReviewAndSubmitScreen: React.FC = () => {
                   </View>
                 </View>
               </View>
+
+              {/* Section 4b: STATUTORY COMPLIANCE SUMMARY (EVIDENCE-FIRST) */}
+              {complianceSummary && (
+                <View style={styles.cardSection}>
+                  <View style={styles.cardHeader}>
+                    <Text style={styles.cardHeaderText}>STATUTORY COMPLIANCE SUMMARY</Text>
+                  </View>
+                  <View style={styles.cardBody}>
+                    <View style={styles.summaryItemRow}>
+                      <Text style={styles.summaryItemLabel}>Overall System Status</Text>
+                      <Text style={[
+                        styles.summaryItemValueBold,
+                        complianceSummary.overall_status === 'COMPLIANT'
+                          ? { color: colors.statusGreenText }
+                          : complianceSummary.overall_status === 'POTENTIAL_NON_COMPLIANCE'
+                          ? { color: colors.statusRedText }
+                          : { color: colors.statusAmberText }
+                      ]}>
+                        {complianceSummary.overall_status}
+                      </Text>
+                    </View>
+
+                    <View style={styles.summaryItemRow}>
+                      <Text style={styles.summaryItemLabel}>Mandatory Declarations</Text>
+                      <Text style={styles.summaryItemValue}>
+                        {complianceSummary.mandatory_declarations_detected} detected / {complianceSummary.mandatory_declarations_missing} missing ({complianceSummary.mandatory_declarations_uncertain} uncertain)
+                      </Text>
+                    </View>
+
+                    <View style={styles.summaryItemRow}>
+                      <Text style={styles.summaryItemLabel}>Placement Compliance</Text>
+                      <Text style={styles.summaryItemValue}>
+                        {complianceSummary.placement_summary?.compliant || 0} compliant • {complianceSummary.placement_summary?.uncertain || 0} uncertain • {complianceSummary.placement_summary?.non_compliant || 0} non-compliant
+                      </Text>
+                    </View>
+
+                    <View style={styles.summaryItemRow}>
+                      <Text style={styles.summaryItemLabel}>Readability Assessment</Text>
+                      <Text style={styles.summaryItemValue}>
+                        {complianceSummary.readability_summary?.good || 0} good • {complianceSummary.readability_summary?.uncertain || 0} uncertain • {complianceSummary.readability_summary?.poor || 0} poor
+                      </Text>
+                    </View>
+
+                    <View style={styles.summaryItemRow}>
+                      <Text style={styles.summaryItemLabel}>Font Size (Rule 9 Table 1)</Text>
+                      <Text style={styles.summaryItemValue}>
+                        {complianceSummary.font_size_summary?.compliant || 0} compliant • {complianceSummary.font_size_summary?.non_compliant || 0} non-compliant • {complianceSummary.font_size_summary?.undeterminable || 0} undeterminable
+                      </Text>
+                    </View>
+
+                    <View style={[styles.summaryItemRow, { borderBottomWidth: 0 }]}>
+                      <Text style={styles.summaryItemLabel}>Online Listing Comparison</Text>
+                      <Text style={styles.summaryItemValue}>
+                        {complianceSummary.listing_comparison_summary?.matched || 0} matched • {complianceSummary.listing_comparison_summary?.mismatched || 0} mismatched • {complianceSummary.listing_comparison_summary?.uncertain || 0} uncertain
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              )}
 
               {/* Section 5: Officer Final Legal Adjudication */}
               <View style={styles.cardSection}>

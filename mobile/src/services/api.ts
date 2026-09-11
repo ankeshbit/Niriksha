@@ -400,4 +400,72 @@ export const api = {
       method: 'POST',
       body: data,
     }),
+
+  // Declaration Validation Matrix & Compliance Summary (SIH PS 26034)
+  getDeclarationValidation: (inspectionId: string) =>
+    apiRequest(`/api/inspections/${inspectionId}/declaration-validation`),
+  getComplianceSummary: (inspectionId: string) =>
+    apiRequest(`/api/inspections/${inspectionId}/compliance-summary`),
+
+  // Search, Retrieval & Product Repository (SIH PS 26034)
+  searchInspections: (params?: {
+    search?: string;
+    status?: string;
+    overall_status?: string;
+    start_date?: string;
+    end_date?: string;
+    category?: string;
+    location?: string;
+    finding_type?: string;
+    has_report?: boolean;
+    page?: number;
+    page_size?: number;
+  }) => {
+    let query = '';
+    if (params) {
+      const cleanParams: Record<string, string> = {};
+      Object.entries(params).forEach(([k, v]) => {
+        if (v !== undefined && v !== null && String(v).trim() !== '') {
+          cleanParams[k] = String(v);
+        }
+      });
+      const q = new URLSearchParams(cleanParams).toString();
+      if (q) query = '?' + q;
+    }
+    return apiRequest(`/api/inspections/search${query}`);
+  },
+  searchProducts: (params?: {
+    search?: string;
+    category?: string;
+    compliance_status?: string;
+    page?: number;
+    page_size?: number;
+  }) => {
+    let query = '';
+    if (params) {
+      const cleanParams: Record<string, string> = {};
+      Object.entries(params).forEach(([k, v]) => {
+        if (v !== undefined && v !== null && String(v).trim() !== '') {
+          cleanParams[k] = String(v);
+        }
+      });
+      const q = new URLSearchParams(cleanParams).toString();
+      if (q) query = '?' + q;
+    }
+    return apiRequest(`/api/products/search${query}`);
+  },
+  getProductHistory: (productKey: string, params?: { page?: number; page_size?: number }) => {
+    let query = '';
+    if (params) {
+      const cleanParams: Record<string, string> = {};
+      Object.entries(params).forEach(([k, v]) => {
+        if (v !== undefined && v !== null && String(v).trim() !== '') {
+          cleanParams[k] = String(v);
+        }
+      });
+      const q = new URLSearchParams(cleanParams).toString();
+      if (q) query = '?' + q;
+    }
+    return apiRequest(`/api/products/${encodeURIComponent(productKey)}/history${query}`);
+  },
 };

@@ -144,6 +144,16 @@ class Declaration(Base):
     verified_at = Column(DateTime, nullable=True)
     correction_reason = Column(Text, nullable=True)
     source_image_id = Column(String(36), ForeignKey("product_images.id"), nullable=True)
+    # PS 26034 Extended Analytical & Legal Validation Attributes
+    placement_status = Column(String(50), default="NOT_DETERMINABLE")  # PLACEMENT_COMPLIANT, PLACEMENT_NON_COMPLIANT, PLACEMENT_UNCERTAIN, NOT_DETERMINABLE, NOT_APPLICABLE, MANUAL_VERIFICATION_REQUIRED
+    placement_details_json = Column(Text, nullable=True)
+    font_size_status = Column(String(50), default="FONT_SIZE_UNDETERMINABLE")  # FONT_SIZE_COMPLIANT, FONT_SIZE_NON_COMPLIANT, FONT_SIZE_UNCERTAIN, FONT_SIZE_UNDETERMINABLE, NOT_APPLICABLE, MANUAL_VERIFICATION_REQUIRED
+    font_size_details_json = Column(Text, nullable=True)
+    readability_status = Column(String(50), default="NOT_OBSERVABLE")  # READABLE, POOR_READABILITY, UNREADABLE, UNCERTAIN, NOT_OBSERVABLE, MANUAL_VERIFICATION_REQUIRED
+    readability_details_json = Column(Text, nullable=True)
+    format_status = Column(String(50), default="COMPLIANT")  # COMPLIANT, NON_COMPLIANT, POTENTIAL_MISLEADING, UNCERTAIN, NOT_APPLICABLE
+    format_details_json = Column(Text, nullable=True)
+    validation_matrix_json = Column(Text, nullable=True)
     created_at = Column(DateTime, default=datetime.utcnow)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow)
 

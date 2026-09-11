@@ -1,6 +1,7 @@
 # NiriKsha — System Architecture & Technical Design
 
-> **NiriKsha — SIH Prototype 2026 (For demonstration and evaluation purposes only)**
+> **NiriKsha — SIH Prototype 2026 (Problem Statement 26034)**  
+> *“Software System to check compliance of Packaged Commodities under Legal Metrology (Packaged Commodities) Rules, 2011 by scanning products, images and labels.”*
 
 ---
 
@@ -8,59 +9,88 @@
 
 **NiriKsha** is an AI-assisted legal metrology inspection and compliance decision-support system designed to evaluate packaged commodities against statutory declaration standards under the **Legal Metrology (Packaged Commodities) Rules, 2011 (PCR 2011)**.
 
-The system enforces a **statutory safety principle**: AI and computer vision are strictly restricted to assistive roles (image ingestion, image quality assessment, text recognition, and structured field extraction). All legal compliance determinations and enforcement decisions are executed by a **deterministic statutory rule engine** coupled with a **human-in-the-loop inspector adjudication workflow**.
+The system enforces a **statutory safety principle**: AI and computer vision are strictly restricted to assistive roles (image ingestion, image quality assessment, text recognition, spatial coordinate detection, and structured field extraction). All legal compliance determinations and enforcement decisions are executed by a **deterministic statutory rule engine** coupled with a **human-in-the-loop inspector adjudication workflow**.
 
 ---
 
-## 2. High-Level Architecture
+## 2. Technology Stack & Database Invariants
+
+- **Field Inspector Mobile Client:** React Native + Expo + TypeScript (Android / iOS / Web).
+- **Backend API Gateway:** FastAPI (Python 3.10+) running with Uvicorn.
+- **Database Engine (STRICT INVARIANT):**
+  - **Production:** Neon PostgreSQL (Cloud-native serverless PostgreSQL with TLS encryption).
+  - **Testing:** Dedicated separate Neon PostgreSQL test database.
+  - **SQLite:** **STRICTLY FORBIDDEN** for application runtime and automated testing. Zero local `.db` files, zero in-memory SQLite instances.
+- **OCR Engine:** PaddleOCR CPU singleton (1024px dimension cap) with Tesseract fallback where configured.
+- **Computer Vision:** OpenCV (Laplacian blur variance, luminance contrast analysis).
+- **Report Engines:**
+  - ReportLab (Formal sealed statutory PDF reports with SHA-256 integrity hash).
+  - python-docx (Editable statutory Word reports with evidence plates).
+
+---
+
+## 3. High-Level Architecture Diagram
 
 ```mermaid
 flowchart TD
-    subgraph Client Layer
+    subgraph Client Layer [Field Inspector Terminal]
         A[React Native / Expo Mobile App<br/>Android / iOS / Web]
-        B[Static Inspection Portal<br/>FastAPI Mounted UI]
+        A1[Offline Draft Storage<br/>AsyncStorage & SecureStore]
     end
 
     subgraph API Gateway & REST Layer
         C[FastAPI Application Server<br/>Uvicorn / Python 3.10+]
-        D[JWT Authentication & RBAC]
+        D[JWT Authentication & RBAC<br/>INSPECTOR, SUPERVISOR, ADMIN]
         E[CORS & Static Asset Middleware]
     end
 
-    subgraph Application Core Services
+    subgraph Core AI & Vision Services
         F[Image Quality Assessment<br/>OpenCV Laplacian & Glare]
-        G[Modular OCR Coordinator<br/>Morphological / Tesseract / CLAHE]
-        H[Declaration Extraction Service<br/>Regex & Heuristic Parsers]
-        I[Deterministic PCR Rule Engine<br/>Statutory Rules 6-1-A to G]
-        J[ReportLab PDF Engine<br/>Inspection Certificate Generation]
+        G[PaddleOCR Singleton<br/>1024px Dim Limit + Spatial BBoxes]
+        H[Multi-Panel Text Consolidation<br/>Cross-Image Conflict Detection]
     end
 
-    subgraph Data & Storage Layer
-        K[(Relational Database<br/>SQLite / PostgreSQL Supabase)]
+    subgraph Legal Metrology Compliance Engine [PCR 2011]
+        I1[Placement Analysis Engine<br/>Rules 6, 7 & 12 PDP Validation]
+        I2[Font Size Analysis Pipeline<br/>Rule 9 Table 1 Physical Thresholds]
+        I3[Declaration Readability Engine<br/>Crop Laplacian Blur & Contrast]
+        I4[Misleading / Format Validator<br/>MRP Tax Qualifiers & Metric Units]
+        I5[Unified Compliance Matrix<br/>7-Dimensional Statutory Table]
+    end
+
+    subgraph Evidence & Statutory Reports
+        J1[ReportLab PDF Engine<br/>Tamper-Evident SHA-256 Sealed Reports]
+        J2[python-docx Export Engine<br/>Editable Official Word Documents]
+        J3[Product Repository & History<br/>Chronological Surveillance Archive]
+    end
+
+    subgraph Persistence Layer [PostgreSQL ONLY]
+        K[(Neon PostgreSQL Database<br/>Production / Test Isolation)]
         L[Local & Cloud Storage<br/>uploads/ & generated_reports/]
     end
 
-    A -->|HTTPS / JSON & Multipart| C
-    B -->|HTTP| C
+    A -->|HTTPS / REST API| C
+    A <-->|Local Sync| A1
     C --> D
     C --> E
     C --> F
     C --> G
     C --> H
-    C --> I
-    C --> J
-    D --> K
-    F --> L
-    G --> K
-    H --> K
-    I --> K
-    J --> L
-    J --> K
+    H --> I1
+    H --> I2
+    H --> I3
+    H --> I4
+    I1 & I2 & I3 & I4 --> I5
+    I5 --> J1
+    I5 --> J2
+    I5 --> J3
+    D & F & G & H & I5 & J1 & J2 & J3 <--> K
+    F & J1 & J2 <--> L
 ```
 
 ---
 
-## 3. End-to-End Inspection Pipeline
+## 4. End-to-End Inspection Pipeline
 
 ```mermaid
 sequenceDiagram
@@ -69,10 +99,10 @@ sequenceDiagram
     participant App as Mobile App (React Native)
     participant API as FastAPI REST API
     participant CV as OpenCV Image Quality
-    participant OCR as Modular OCR & Extraction
-    participant RE as Deterministic Rule Engine
-    participant DB as Relational Database
-    participant PDF as ReportLab Service
+    participant OCR as PaddleOCR Singleton
+    participant CE as Compliance Engine (Placement / Font / Readability)
+    participant DB as Neon PostgreSQL
+    participant Report as PDF / DOCX Generators
 
     Inspector->>App: Authenticate (Officer ID + Password)
     App->>API: POST /api/auth/login
@@ -92,179 +122,45 @@ sequenceDiagram
 
     Inspector->>App: Trigger Automated Declaration Extraction
     App->>API: POST /api/inspections/{id}/ocr
-    API->>OCR: Preprocess (CLAHE) + OCR + Field Parser
-    OCR-->>API: 7 Structured Declarations (with Bounding Boxes & Confidence)
-    API->>DB: Store Raw OCR & Structured Declarations
-    API-->>App: Declarations List
+    API->>OCR: PaddleOCR Singleton (1024px cap) + Layout Extraction
+    OCR-->>API: Bounding Boxes, Confidence & Raw Transcripts
+    API->>CE: Run Placement, Font-Size, Readability & Format Engines
+    CE-->>API: Unified Compliance Matrix Table
+    API->>DB: Store Declarations, Evidence & Matrix JSON
+    API-->>App: Extracted Declarations + Compliance Matrix
 
-    opt Inspector Correction
-        Inspector->>App: Correct Misread Value / Unit
-        App->>API: PATCH /api/declarations/{id}
-        API->>DB: Store Corrected Value (Original OCR Preserved Immutably)
+    opt Inspector Adjudication
+        Inspector->>App: Review Evidence, Adjust Declarations, Adjudicate Findings
+        App->>API: PATCH /api/findings/{id}/adjudicate
+        API->>DB: Update Adjudication Status (CONFIRMED / DISMISSED / MANUAL)
     end
-
-    Inspector->>App: Run Statutory Evaluation
-    App->>API: POST /api/inspections/{id}/evaluate
-    API->>RE: Evaluate Declarations against PCR 2011 Rules
-    RE-->>API: Findings (PASS / POTENTIAL_NON_COMPLIANCE / INSUFFICIENT_EVIDENCE / NOT_APPLICABLE)
-    API->>DB: Persist Compliance Checks & Evidence Links
-    API-->>App: Findings & Photographic Evidence Overlays
-
-    Inspector->>App: Adjudicate Findings (Confirm / Dismiss / Correct / Request Image / N/A)
-    App->>API: PATCH /api/findings/{id}/adjudicate
-    API->>DB: Save Decision & Statutory Notes in Audit Log
 
     Inspector->>App: Finalize Inspection
     App->>API: POST /api/inspections/{id}/finalize
-    Note over API: HTTP 409 Gate: Blocks finalization if any finding is unresolved
-    API->>PDF: Compile Official Inspection Report PDF
-    PDF-->>API: Generated PDF Binary
-    API->>DB: Update Status (COMPLETED) & Save Report Record
-    API-->>App: Finalized Inspection & PDF Download URL
+    API->>Report: Generate Immutable PDF (SHA-256) & DOCX
+    API->>DB: Persist Sealed Reports & Mark Finalized
+    API-->>App: Finalized Status & Download URLs
 ```
 
 ---
 
-## 4. Component Deep Dives
+## 5. Compliance Engine Modules (PCR 2011)
 
-### 4.1 Mobile Application (`mobile/`)
-- **Framework**: React Native 0.74.5 with Expo SDK 51.
-- **Language**: TypeScript (`tsconfig.json` with strict mode enabled).
-- **Navigation**: Native Stack Navigator (`@react-navigation/native-stack`) managing authenticated officer flows.
-- **State & Storage**: `expo-secure-store` for JWT persistence, `expo-file-system` and `expo-sharing` for report caching and PDF distribution.
-- **Offline Drafts**: Local state management allowing inspection registration in offline or low-connectivity retail environments.
-
-### 4.2 REST API & Gateway (`backend/main.py`)
-- **Framework**: FastAPI with asynchronous endpoints.
-- **Security**: OAuth2 Bearer scheme with JWT (HS256) signature verification and bcrypt password hashing.
-- **Error Handling**: Standardized HTTP status codes with structured error payloads (`401` Unauthorized, `404` Not Found, `409` Conflict / Unresolved Findings Gate, `422` Validation Error).
-- **CORS**: Configured for cross-origin local development and mobile network connectivity.
-
-### 4.3 Image Quality Assessment (`backend/image_quality.py`)
-- **Blur Detection**: Calculates the variance of the Laplacian operator on grayscale package images. Scores below the threshold indicate motion or focus blur.
-- **Glare & Exposure Analysis**: Computes pixel luminance percentiles (95th and 5th percentiles) to detect specular reflection on glossy laminate packaging or underexposed low-light captures.
-- **Dimension Check**: Validates minimum resolution requirements (800x600 px) to ensure sufficient DPI for optical character extraction.
-
-### 4.4 OCR & Declaration Extraction (`backend/ocr_service.py`, `backend/extraction_service.py`)
-- **Image Preprocessing**: Non-destructive CLAHE (Contrast Limited Adaptive Histogram Equalization) on a derived image copy.
-- **Text Region Detection**: Morphological rectangular dilation kernels `(20, 3)` merge character contours into horizontal text line bounding boxes `[x1, y1, x2, y2]`.
-- **Statutory Extraction**: Heuristic and regular expression parsing maps raw OCR text blocks to 7 mandatory declaration fields defined under Rule 6(1) of PCR 2011.
-
-### 4.5 Deterministic Rule Engine (`backend/rule_engine/`)
-The rule engine evaluates structured declarations against codified statutory logic without non-deterministic LLM variance.
-
-| Statutory Rule | Code | Requirement |
-|---|---|---|
-| **Rule 6(1)(a)** | `PCR_RULE_06_1_A` | Name and complete address of the Manufacturer, Packer, or Importer. |
-| **Rule 6(1)(b)** | `PCR_RULE_06_1_B` | Country of Origin for imported commodities. |
-| **Rule 6(1)(c)** | `PCR_RULE_06_1_C` | Net Quantity in standard metric SI units (`g`, `kg`, `ml`, `l`, `m`, `cm`, `number/units`). |
-| **Rule 6(1)(d)** | `PCR_RULE_06_1_D` | Month and Year of manufacture, packing, or import. |
-| **Rule 6(1)(e)** | `PCR_RULE_06_1_E` | Maximum Retail Price (MRP) formatted with statutory tax qualifier ("inclusive of all taxes" / "incl. of all taxes"). |
-| **Rule 6(1)(f)** | `PCR_RULE_06_1_F` | Common or generic name of the packaged commodity. |
-| **Rule 6(1)(g)** | `PCR_RULE_06_1_G` | Consumer care details (name/designation, address, telephone number, email). |
-
-### 4.6 Statutory Report Generation (`backend/report_service.py`)
-- **Engine**: ReportLab PDF library.
-- **Output**: Formal Inspection Certificate PDF including:
-  - Inspection metadata (Number, Date, Officer ID, Location, Commodity Details)
-  - Statutory findings table with rule references, extracted values, and compliance states
-  - Photographic evidence block showing cropped package labels and bounding boxes
-  - Inspector adjudication actions, notes, and digital sign-off
-  - Official statutory disclaimer stating the advisory and decision-support nature of the system
+1. **Placement Analysis (`backend/placement_service.py`):**  
+   Evaluates Principal Display Panel (PDP) placement for Net Quantity and Commodity Name under Rules 6, 7 & 12. Distinguishes front PDP from information panels.
+2. **Font-Size Analysis (`backend/font_size_service.py`):**  
+   Evaluates character height against Rule 9 Table 1 thresholds (1.0mm, 2.0mm, 4.0mm, 6.0mm). Strictly enforces anti-fabrication: without physical calibration, returns `FONT_SIZE_UNDETERMINABLE` rather than guessing millimeters from pixels.
+3. **Declaration Readability (`backend/readability_service.py`):**  
+   Measures localized bounding box blur variance and contrast. Never converts observation defects or low confidence into automatic legal violations.
+4. **Format & Misleading Validation (`backend/declaration_validation_service.py`):**  
+   Validates mandatory statutory qualifiers (e.g. MRP "inclusive of all taxes", SI metric units, date plausibility, and consumer care channels).
+5. **Unified Declaration Compliance Matrix:**  
+   Generates a 7-dimensional compliance table displayed on the mobile terminal and statutory reports.
 
 ---
 
-## 5. Database Schema & Relationships
+## 6. Security, RBAC & Immutability
 
-```mermaid
-erDiagram
-    USERS ||--o{ INSPECTIONS : conducts
-    USERS ||--o{ INSPECTOR_REVIEWS : records
-    INSPECTIONS ||--|| PRODUCTS : inspects
-    INSPECTIONS ||--o{ PRODUCT_IMAGES : contains
-    INSPECTIONS ||--o{ DECLARATIONS : has
-    INSPECTIONS ||--o{ COMPLIANCE_CHECKS : evaluates
-    INSPECTIONS ||--o{ AUDIT_LOGS : logs
-    INSPECTIONS ||--o| REPORTS : generates
-    COMPLIANCE_CHECKS ||--o{ EVIDENCE : links
-    COMPLIANCE_CHECKS ||--o{ INSPECTOR_REVIEWS : adjudicates
-
-    USERS {
-        string id PK
-        string officer_id UK
-        string full_name
-        string designation
-        string zone
-        string password_hash
-        string role
-    }
-
-    INSPECTIONS {
-        string id PK
-        string inspection_number UK
-        string inspector_id FK
-        string location
-        string status
-        string overall_status
-        datetime created_at
-        datetime finalized_at
-    }
-
-    PRODUCTS {
-        string id PK
-        string inspection_id FK
-        string product_name
-        string brand_name
-        string category
-        string batch_number
-    }
-
-    PRODUCT_IMAGES {
-        string id PK
-        string inspection_id FK
-        string file_path
-        string view_type
-        float blur_score
-        float glare_score
-        float quality_score
-        string quality_status
-    }
-
-    DECLARATIONS {
-        string id PK
-        string inspection_id FK
-        string field_name
-        string extracted_value
-        string corrected_value
-        string verification_status
-        float confidence
-    }
-
-    COMPLIANCE_CHECKS {
-        string id PK
-        string inspection_id FK
-        string rule_code
-        string rule_name
-        string result_state
-        string adjudication_action
-        string officer_notes
-    }
-
-    AUDIT_LOGS {
-        string id PK
-        string inspection_id FK
-        string actor_id FK
-        string action
-        string details_json
-        datetime created_at
-    }
-
-    REPORTS {
-        string id PK
-        string inspection_id FK
-        string report_number UK
-        integer report_version
-        string pdf_path
-        datetime generated_at
-    }
-```
+- **Role-Based Access Control:** Field Inspectors are isolated to their own inspections. Supervisors and Admins possess audit and cross-district surveillance access.
+- **Report Immutability:** Finalized reports are sealed with SHA-256 integrity hashes. Once generated, reports cannot be altered or deleted.
+- **Database Safety Guard:** Hard safety guards in test configurations immediately terminate any destructive operations if the test database hostname or database matches production.
