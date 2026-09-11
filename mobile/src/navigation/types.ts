@@ -1,4 +1,5 @@
 export type RootStackParamList = {
+  Intro: undefined;
   Login: undefined;
   Dashboard: undefined;
   NewInspection: undefined;

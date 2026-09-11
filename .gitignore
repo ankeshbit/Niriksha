@@ -26,6 +26,7 @@ android-sdk/
 jdk-17/
 cmdline-tools.zip
 *.zip
+/*.mp4
 stitch_screens/
 
 
