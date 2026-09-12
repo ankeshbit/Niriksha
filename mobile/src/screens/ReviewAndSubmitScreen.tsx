@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import {
   View,
   Text,
@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   TextInput,
   Alert,
+  Platform,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -15,7 +16,7 @@ import { colors, typography, spacing, borderRadius } from '../theme/tokens';
 import { BottomNav } from '../components/BottomNav';
 import { ProfileAvatar } from '../components/ProfileAvatar';
 import { api } from '../services/api';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { useNavigation, useRoute, useFocusEffect, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 
@@ -34,40 +35,43 @@ export const ReviewAndSubmitScreen: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [finalizing, setFinalizing] = useState(false);
 
-  useEffect(() => {
-    const loadAll = async () => {
-      try {
-        const [insp, imgs, decls, fnds, compSummary] = await Promise.all([
-          api.getInspection(inspectionId),
-          api.getInspectionImages(inspectionId),
-          api.getDeclarations(inspectionId).catch(() => []),
-          api.getFindings(inspectionId).catch(() => []),
-          api.getComplianceSummary(inspectionId).catch(() => null),
-        ]);
-        setInspection(insp);
-        setImages(imgs || []);
-        setDeclarations(decls || []);
-        setFindings(fnds || []);
-        setComplianceSummary(compSummary || null);
+  const loadAll = useCallback(async () => {
+    try {
+      const [insp, imgs, decls, fnds, compSummary] = await Promise.all([
+        api.getInspection(inspectionId),
+        api.getInspectionImages(inspectionId),
+        api.getDeclarations(inspectionId).catch(() => []),
+        api.getFindings(inspectionId).catch(() => []),
+        api.getComplianceSummary(inspectionId).catch(() => null),
+      ]);
+      setInspection(insp);
+      setImages(imgs || []);
+      setDeclarations(decls || []);
+      setFindings(fnds || []);
+      setComplianceSummary(compSummary || null);
 
-        const hasViolations = (fnds || []).some((f: any) => f.adjudication_status === 'CONFIRMED' || f.result_state === 'POTENTIAL_NON_COMPLIANCE');
-        const hasUnverified = (fnds || []).some((f: any) => f.result_state === 'INSUFFICIENT_EVIDENCE' || f.result_state === 'NEEDS_MANUAL_VERIFICATION');
-        if (hasViolations) {
-          setFinalDecision('POTENTIAL_NON_COMPLIANCE');
-        } else if (hasUnverified) {
-          setFinalDecision('NEEDS_MANUAL_VERIFICATION');
-        } else {
-          setFinalDecision('NO_POTENTIAL_VIOLATIONS');
-        }
-      } catch (err) {
-        console.error('Failed to load review summary:', err);
-      } finally {
-        setLoading(false);
+      const hasViolations = (fnds || []).some((f: any) => f.adjudication_status === 'CONFIRMED' || f.result_state === 'POTENTIAL_NON_COMPLIANCE');
+      const hasUnverified = (fnds || []).some((f: any) => f.result_state === 'INSUFFICIENT_EVIDENCE' || f.result_state === 'NEEDS_MANUAL_VERIFICATION');
+      if (hasViolations) {
+        setFinalDecision('POTENTIAL_NON_COMPLIANCE');
+      } else if (hasUnverified) {
+        setFinalDecision('NEEDS_MANUAL_VERIFICATION');
+      } else {
+        setFinalDecision('NO_POTENTIAL_VIOLATIONS');
       }
-    };
-
-    loadAll();
+    } catch (err) {
+      console.error('Failed to load review summary:', err);
+    } finally {
+      setLoading(false);
+    }
   }, [inspectionId]);
+
+  // Re-fetch on focus to guarantee fresh adjudication status after returning from FindingsScreen
+  useFocusEffect(
+    useCallback(() => {
+      loadAll();
+    }, [loadAll])
+  );
 
   const unadjudicatedFindings = findings.filter((f) => {
     // AUDIT-MOB-02: Use actual FindingResponse schema fields (result_state, adjudication_status)
@@ -81,21 +85,34 @@ export const ReviewAndSubmitScreen: React.FC = () => {
 
   const handleFinalize = async () => {
     if (unadjudicatedFindings.length > 0) {
-      Alert.alert(
-        'Action Required: Pending Adjudication',
-        `Cannot finalize inspection: ${unadjudicatedFindings.length} finding(s) require inspector adjudication. Please review and adjudicate before submitting.`,
-        [
-          {
-            text: 'Review Findings',
-            onPress: () =>
-              navigation.navigate('Findings', {
-                inspectionId,
-                inspectionNumber: inspection?.inspection_number || inspectionNumber,
-              }),
-          },
-          { text: 'Cancel', style: 'cancel' },
-        ]
-      );
+      const msg = `Cannot finalize inspection: ${unadjudicatedFindings.length} finding(s) require inspector adjudication. Navigating to adjudication screen...`;
+      if (Platform.OS === 'web' && typeof window !== 'undefined') {
+        const proceed = window.confirm(
+          `Action Required: Pending Adjudication\n\n${unadjudicatedFindings.length} finding(s) require inspector adjudication before generating the official report.\n\nClick OK to Review & Adjudicate Findings now.`
+        );
+        if (proceed) {
+          navigation.navigate('Findings', {
+            inspectionId,
+            inspectionNumber: inspection?.inspection_number || inspectionNumber,
+          });
+        }
+      } else {
+        Alert.alert(
+          'Action Required: Pending Adjudication',
+          `Cannot finalize inspection: ${unadjudicatedFindings.length} finding(s) require inspector adjudication. Please review and adjudicate before submitting.`,
+          [
+            {
+              text: 'Review Findings',
+              onPress: () =>
+                navigation.navigate('Findings', {
+                  inspectionId,
+                  inspectionNumber: inspection?.inspection_number || inspectionNumber,
+                }),
+            },
+            { text: 'Cancel', style: 'cancel' },
+          ]
+        );
+      }
       return;
     }
 
@@ -113,16 +130,25 @@ export const ReviewAndSubmitScreen: React.FC = () => {
     } catch (err: any) {
       const errMsg = err?.message || 'Could not finalize inspection.';
       if (errMsg.includes('report could not be generated')) {
-        Alert.alert(
-          'Report Generation Notice',
-          'Inspection submitted, but the official report could not be generated. Please retry report generation.',
-          [
-            { text: 'Cancel', style: 'cancel' },
-            { text: 'Retry Report', onPress: () => handleFinalize() },
-          ]
-        );
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          const retry = window.confirm('Report Generation Notice: Inspection submitted, but the official report could not be generated. Retry now?');
+          if (retry) handleFinalize();
+        } else {
+          Alert.alert(
+            'Report Generation Notice',
+            'Inspection submitted, but the official report could not be generated. Please retry report generation.',
+            [
+              { text: 'Cancel', style: 'cancel' },
+              { text: 'Retry Report', onPress: () => handleFinalize() },
+            ]
+          );
+        }
       } else {
-        Alert.alert('Finalization Error', errMsg);
+        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+          window.alert(`Finalization Error: ${errMsg}`);
+        } else {
+          Alert.alert('Finalization Error', errMsg);
+        }
       }
     } finally {
       setFinalizing(false);
@@ -515,7 +541,10 @@ export const ReviewAndSubmitScreen: React.FC = () => {
                 </TouchableOpacity>
 
                 <TouchableOpacity
-                  style={styles.submitBtn}
+                  style={[
+                    styles.submitBtn,
+                    unadjudicatedFindings.length > 0 && styles.submitBtnPending,
+                  ]}
                   onPress={handleFinalize}
                   disabled={finalizing}
                   activeOpacity={0.85}
@@ -524,8 +553,16 @@ export const ReviewAndSubmitScreen: React.FC = () => {
                     <ActivityIndicator size="small" color={colors.onPrimary} />
                   ) : (
                     <View style={styles.submitBtnContent}>
-                      <MaterialIcons name="assignment-turned-in" size={18} color={colors.onPrimary} />
-                      <Text style={styles.submitBtnText}>Submit Inspection & Generate Report</Text>
+                      <MaterialIcons
+                        name={unadjudicatedFindings.length > 0 ? "gavel" : "assignment-turned-in"}
+                        size={18}
+                        color={colors.onPrimary}
+                      />
+                      <Text style={styles.submitBtnText}>
+                        {unadjudicatedFindings.length > 0
+                          ? `Review & Adjudicate (${unadjudicatedFindings.length} Pending)`
+                          : 'Submit Inspection & Generate Report'}
+                      </Text>
                     </View>
                   )}
                 </TouchableOpacity>
@@ -773,6 +810,9 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.DEFAULT,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  submitBtnPending: {
+    backgroundColor: colors.statusAmberText,
   },
   submitBtnContent: {
     flexDirection: 'row',
