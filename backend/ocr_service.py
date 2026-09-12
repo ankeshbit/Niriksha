@@ -638,6 +638,41 @@ class ModularOCRService:
         self.tesseract_engine = TesseractOCREngine()
         self.morph_engine = MorphologicalOpenCVOCREngine()
 
+    def warmup_inference(self) -> None:
+        """
+        Runs a tiny synthetic image through PaddleOCR to amortize JIT/kernel-compilation cost
+        before the first real inspection request. This ensures subsequent requests run at warm
+        (~15-20s) rather than cold (~70s) inference speed.
+
+        Uses a 100x50 white image generated entirely in memory — no disk I/O, no file writes.
+        Only calls the PaddleOCR predict() path; does NOT run Tesseract, extraction, or any
+        business logic. Safe to call at server startup in a background thread.
+        """
+        if not self.paddle_engine.is_available():
+            logger.info("[OCR_WARMUP_SKIP] PaddleOCR not available, skipping warmup")
+            return
+        try:
+            t0 = time.time()
+            logger.info("[OCR_WARMUP_START] Running synthetic warmup inference to amortize JIT cost")
+            ocr = self.paddle_engine._get_ocr_instance()
+            if ocr is None:
+                logger.warning("[OCR_WARMUP_SKIP] PaddleOCR instance could not be obtained")
+                return
+            # Create a minimal 100x50 pure-white BGR image in memory (no disk I/O)
+            dummy_img = np.full((50, 100, 3), 255, dtype=np.uint8)
+            # Run inference — result may be empty (no text), which is correct and expected
+            try:
+                ocr.predict(dummy_img)
+            except Exception:
+                try:
+                    ocr.ocr(dummy_img)
+                except Exception:
+                    pass  # Warmup failure is non-fatal; real requests will handle their own errors
+            elapsed = time.time() - t0
+            logger.info(f"[OCR_WARMUP_COMPLETE] PaddleOCR JIT warmup finished in {elapsed:.2f}s")
+        except Exception as e:
+            logger.warning(f"[OCR_WARMUP_ERROR] Warmup raised unexpected error (non-fatal): {e}")
+
     def _prepare_variants(self, img: np.ndarray) -> List[Tuple[str, np.ndarray, float, float]]:
         """
         Creates in-memory preprocessing variants:
