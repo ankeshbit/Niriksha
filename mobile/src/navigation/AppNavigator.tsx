@@ -18,7 +18,12 @@ import { ReportPreviewScreen } from '../screens/ReportPreviewScreen';
 import { ReportsListScreen } from '../screens/ReportsListScreen';
 import { ProfileScreen } from '../screens/ProfileScreen';
 import { DraftOfflineScreen } from '../screens/DraftOfflineScreen';
+import { InspectionsScreen } from '../screens/InspectionsScreen';
 import { ListingComparisonScreen } from '../screens/ListingComparisonScreen';
+import { SupervisorDashboardScreen } from '../screens/SupervisorDashboardScreen';
+import { SupervisorAllInspectionsScreen } from '../screens/SupervisorAllInspectionsScreen';
+import { SupervisorInspectorsScreen } from '../screens/SupervisorInspectorsScreen';
+import { SupervisorInspectionDetailScreen } from '../screens/SupervisorInspectionDetailScreen';
 
 const Stack = createNativeStackNavigator<RootStackParamList>();
 
@@ -46,7 +51,12 @@ export const AppNavigator: React.FC = () => {
         <Stack.Screen name="ReportsList" component={ReportsListScreen} />
         <Stack.Screen name="Profile" component={ProfileScreen} />
         <Stack.Screen name="DraftOffline" component={DraftOfflineScreen} />
+        <Stack.Screen name="Inspections" component={InspectionsScreen} />
         <Stack.Screen name="ListingComparison" component={ListingComparisonScreen} />
+        <Stack.Screen name="SupervisorDashboard" component={SupervisorDashboardScreen} />
+        <Stack.Screen name="SupervisorAllInspections" component={SupervisorAllInspectionsScreen} />
+        <Stack.Screen name="SupervisorInspectors" component={SupervisorInspectorsScreen} />
+        <Stack.Screen name="SupervisorInspectionDetail" component={SupervisorInspectionDetailScreen} />
       </Stack.Navigator>
     </NavigationContainer>
   );

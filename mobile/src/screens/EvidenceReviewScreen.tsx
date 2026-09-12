@@ -171,7 +171,7 @@ export const EvidenceReviewScreen: React.FC = () => {
               <View style={styles.infoCard}>
                 <Text style={styles.infoCardLabel}>Why was this flagged?</Text>
                 <Text style={styles.infoCardValue}>
-                  {finding ? finding.explanation || finding.description : 'The MRP declaration could not be reliably read from the provided image. Further verification by the authorized inspector is required.'}
+                  {finding ? (finding.explanation || finding.description || 'No explanation provided.') : 'Finding details are unavailable.'}
                 </Text>
               </View>
 
@@ -182,7 +182,7 @@ export const EvidenceReviewScreen: React.FC = () => {
                   <MaterialIcons name="gavel" size={20} color={colors.primary} />
                   <View style={{ flex: 1 }}>
                     <Text style={styles.ruleTitle}>Legal Metrology (Packaged Commodities) Rules, 2011</Text>
-                    <Text style={styles.ruleSub}>Rule Version: v1.0 • Rule: {finding?.rule_code || 'LM-RULE-002'}</Text>
+                    <Text style={styles.ruleSub}>Rule Version: v1.0 • Rule: {finding?.rule_code || 'N/A'}</Text>
                   </View>
                 </View>
               </View>

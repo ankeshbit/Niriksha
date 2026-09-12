@@ -32,6 +32,7 @@ import os
 import struct
 import zlib
 import pytest
+from typing import Optional
 from pathlib import Path
 from fastapi.testclient import TestClient
 from backend.main import app
@@ -57,16 +58,26 @@ def auth_headers(client):
     return {"Authorization": f"Bearer {token}"}
 
 
-def _prod_inspection_count(client: TestClient, auth_headers: dict) -> int:
-    """Returns the current number of inspections via API (PostgreSQL test database)."""
-    resp = client.get("/api/inspections", headers=auth_headers)
-    if resp.status_code != 200:
-        return 0
-    data = resp.json()
-    # Support paginated or flat list responses
-    if isinstance(data, dict):
-        return data.get("total", len(data.get("items", [])))
-    return len(data)
+def _prod_inspection_count(client: Optional[TestClient] = None, auth_headers: Optional[dict] = None) -> int:
+    """Returns the current number of inspections in the production Neon database (read-only count)."""
+    prod_url = os.environ.get("ORIGINAL_PRODUCTION_DATABASE_URL", "")
+    if prod_url:
+        try:
+            from sqlalchemy import create_engine, text
+            prod_engine = create_engine(prod_url, connect_args={"connect_timeout": 5})
+            with prod_engine.connect() as conn:
+                count = conn.execute(text("SELECT COUNT(*) FROM inspections")).scalar()
+                return int(count or 0)
+        except Exception:
+            pass
+    if client is not None and auth_headers is not None:
+        resp = client.get("/api/inspections", headers=auth_headers)
+        if resp.status_code == 200:
+            data = resp.json()
+            if isinstance(data, dict):
+                return data.get("total", len(data.get("items", [])))
+            return len(data)
+    return 0
 
 
 def _test_db_inspection_count(client, auth_headers) -> int:
@@ -78,6 +89,8 @@ def _test_db_inspection_count(client, auth_headers) -> int:
             return len(data)
         if isinstance(data, dict) and "items" in data:
             return len(data["items"])
+        if isinstance(data, dict) and "total" in data:
+            return data["total"]
     return 0
 
 
@@ -128,14 +141,16 @@ def _make_minimal_png(width: int = 600, height: int = 500, sharp: bool = True) -
 
 def test_18_database_safety_test_db_used(client, auth_headers):
     """
-    Verifies the test suite uses test_legal_metrology.db, not legal_metrology.db.
+    Verifies the test suite uses dedicated Neon PostgreSQL test database, not production.
     This is the DATABASE SAFETY hard guarantee.
     """
-    # The DATABASE_URL environment variable must point to the test db
-    db_url = os.environ.get("DATABASE_URL", "")
-    assert "test_legal_metrology" in db_url, (
-        f"SAFETY VIOLATION: Tests are using wrong database URL: {db_url}"
-    )
+    from backend.database import verify_test_database_safety
+    test_db_url = os.environ.get("DATABASE_URL", "")
+    prod_db_url = os.environ.get("ORIGINAL_PRODUCTION_DATABASE_URL", "")
+    assert test_db_url, "DATABASE_URL must be configured for tests"
+    assert not test_db_url.startswith("sqlite"), f"SAFETY VIOLATION: SQLite is not permitted: {test_db_url}"
+    if prod_db_url:
+        verify_test_database_safety(prod_db_url, test_db_url)
 
     # Verify we can reach the health endpoint (test DB is working)
     resp = client.get("/api/health")

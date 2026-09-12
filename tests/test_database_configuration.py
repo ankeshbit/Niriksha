@@ -142,11 +142,15 @@ def test_test_database_isolation():
     assert "postgresql" in engine_url_str.lower() or "postgres" in engine_url_str.lower(), (
         f"Test engine must be PostgreSQL. Got: {engine_url_str}"
     )
-    # Test DB must differ from production (different database name)
-    prod_url = os.environ.get("DATABASE_URL", "")
+    # Test DB must differ from production (different database identity)
+    from backend.database import verify_test_database_safety
+    prod_url = os.environ.get("ORIGINAL_PRODUCTION_DATABASE_URL", "")
+    assert prod_url, "ORIGINAL_PRODUCTION_DATABASE_URL must be recorded by conftest"
     assert engine_url_str != prod_url, (
         "Test engine URL must not match the production DATABASE_URL."
     )
+    # Explicit invariant check: CURRENT TEST DATABASE != PRODUCTION DATABASE
+    verify_test_database_safety(prod_url, engine_url_str)
 
 
 def test_no_silent_provider_switching():

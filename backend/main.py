@@ -36,7 +36,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from sqlalchemy.orm import Session, joinedload
-from sqlalchemy import text, or_, and_, func, distinct, case
+from sqlalchemy import text, or_, and_, func, distinct, case, desc, asc
 from sqlalchemy.exc import IntegrityError
 
 from backend.config import settings
@@ -110,7 +110,15 @@ from backend.schemas import (
     AdjudicateComparisonRequest,
     DeclarationValidationMatrixResponse,
     DeclarationMatrixRowSchema,
-    ComplianceSummaryResponse
+    ComplianceSummaryResponse,
+    DeleteInspectionRequest,
+    DeleteInspectionResponse,
+    DeleteReportResponse,
+    SupervisorDashboardResponse,
+    SupervisorInspectorSummary,
+    SupervisorInspectorsListResponse,
+    SupervisorInspectionSummaryItem,
+    SupervisorInspectionsListResponse
 )
 from backend.auth_utils import verify_password, hash_password
 from backend.auth_service import (
@@ -119,6 +127,7 @@ from backend.auth_service import (
     require_roles,
     require_inspector,
     require_supervisor_or_admin,
+    require_supervisor,
     require_admin
 )
 from backend.image_quality import assess_image_quality, assess_blur_blur_detection2
@@ -134,6 +143,7 @@ from backend.rule_engine import (
 )
 from backend.listing_service import execute_listing_comparison
 from backend.report_service import report_generator
+from backend.compliance_summary_utils import compute_canonical_compliance_metrics
 from backend.supabase_storage import storage_service
 from backend.seed import seed_database
 from backend.schema_migration import migrate
@@ -491,6 +501,21 @@ def serialize_declaration(decl: Declaration) -> DeclarationResponse:
         created_at=decl.created_at
     )
 
+def get_inspection_by_id_or_number(db: Session, identifier: str) -> Optional[Inspection]:
+    """
+    Resolves an inspection by UUID or human-readable inspection_number (e.g. 'LM-2026-00023').
+    Guarantees deterministic lookup regardless of which identifier caller provides.
+    """
+    if not identifier:
+        return None
+    ident = str(identifier).strip()
+    return db.query(Inspection).filter(
+        or_(
+            Inspection.id == ident,
+            Inspection.inspection_number == ident
+        )
+    ).first()
+
 def serialize_finding(check: ComplianceCheck) -> FindingResponse:
     evidence_items = []
     for ev in check.evidence:
@@ -515,6 +540,7 @@ def serialize_finding(check: ComplianceCheck) -> FindingResponse:
     rule_ver = check.rule_version if check.rule_version else None
     rule_version_number = rule_ver.version_number if rule_ver else None
     statutory_reference = rule_ver.statutory_reference if rule_ver else None
+    category = rule_ver.category if rule_ver else "CATEGORY_A_LEGAL"
 
     return FindingResponse(
         id=check.id,
@@ -533,7 +559,11 @@ def serialize_finding(check: ComplianceCheck) -> FindingResponse:
         adjudicated_by=check.adjudicated_by,
         adjudicated_at=check.adjudicated_at,
         created_at=check.created_at,
-        evidence_items=evidence_items
+        evidence_items=evidence_items,
+        category=category,
+        status=check.result_state,
+        adjudication=check.adjudication_status or "PENDING",
+        description=check.explanation
     )
 
 def serialize_report(rep: Report) -> ReportResponse:
@@ -551,7 +581,8 @@ def serialize_report(rep: Report) -> ReportResponse:
         inspection_number=insp.inspection_number if insp else None,
         product_name=insp.product.product_name if (insp and insp.product) else None,
         location=insp.location if insp else None,
-        overall_status=insp.overall_status if insp else None
+        overall_status=insp.overall_status if insp else None,
+        pdf_hash=getattr(rep, "pdf_hash", None)
     )
 
 # ----------------- Health & Auth Endpoints -----------------
@@ -1662,7 +1693,8 @@ def search_repository_reports(
             inspector_name=officer.full_name if officer else None,
             generated_at=r.generated_at,
             legal_safety_statement=r.legal_safety_statement,
-            overall_status=insp.overall_status if insp else None
+            overall_status=insp.overall_status if insp else None,
+            pdf_hash=getattr(r, "pdf_hash", None)
         ))
 
     return RepositoryReportsResponse(
@@ -1820,7 +1852,7 @@ def get_inspection_details(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Retrieves single inspection details by ID."""
+    """Retrieves single inspection details by ID or inspection number."""
     inspection = db.query(Inspection).options(
         joinedload(Inspection.product),
         joinedload(Inspection.images),
@@ -1828,7 +1860,12 @@ def get_inspection_details(
         joinedload(Inspection.compliance_checks),
         joinedload(Inspection.report),
         joinedload(Inspection.listing)
-    ).filter(Inspection.id == inspection_id).first()
+    ).filter(
+        or_(
+            Inspection.id == inspection_id,
+            Inspection.inspection_number == inspection_id
+        )
+    ).first()
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection record not found")
     verify_inspection_access(inspection, current_user, allow_supervisory=True)
@@ -2150,11 +2187,83 @@ async def check_image_quality_endpoint(
         details=details
     )
 
-# ----------------- OCR & Declaration Extraction Endpoints -----------------
+import threading
+_ocr_active_events: dict = {}
+_ocr_active_lock = threading.Lock()
+
+def _build_existing_ocr_response(inspection_id: str, db: Session) -> Optional[RunOCRResponse]:
+    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    if not inspection or inspection.status != "EXTRACTION_COMPLETE":
+        return None
+    existing_decls = db.query(Declaration).filter(Declaration.inspection_id == inspection_id).all()
+    if not existing_decls:
+        return None
+    images = db.query(ProductImage).filter(ProductImage.inspection_id == inspection_id).all()
+    img_ids = [img.id for img in images]
+    existing_ocr = db.query(OCRResult).filter(OCRResult.image_id.in_(img_ids)).all() if img_ids else []
+
+    conflicts_list = []
+    for d in existing_decls:
+        if d.correction_reason:
+            try:
+                cdata = json.loads(d.correction_reason)
+                if isinstance(cdata, dict) and cdata.get("conflict"):
+                    conflicts_list.append(cdata)
+            except Exception:
+                pass
+
+    per_img_bc = {}
+    for img in images:
+        if img.quality_metadata_json:
+            try:
+                q_meta = json.loads(img.quality_metadata_json)
+                if "barcodes" in q_meta:
+                    from backend.schemas import BarcodeItem
+                    per_img_bc[img.id] = [BarcodeItem(**b) for b in q_meta["barcodes"]]
+            except Exception:
+                pass
+    cons_bc = barcode_service.consolidate_multi_image_barcodes(per_img_bc) if per_img_bc else None
+
+    logger.info(
+        f"[OCR_IDEMPOTENT_REUSE] inspection_id={inspection_id} "
+        f"Returning existing {len(existing_decls)} declarations and {len(existing_ocr)} OCR results without re-running"
+    )
+    return RunOCRResponse(
+        inspection_id=str(inspection_id),
+        status="EXTRACTION_COMPLETE",
+        total_images_processed=len(images),
+        declarations_count=len(existing_decls),
+        ocr_results=[serialize_ocr_result(r) for r in existing_ocr],
+        declarations=[serialize_declaration(d) for d in existing_decls],
+        conflicts=conflicts_list,
+        barcodes=BarcodeInspectionSummaryResponse(**cons_bc.model_dump()) if cons_bc else None
+    )
+
+from contextlib import contextmanager
+
+@contextmanager
+def _ocr_concurrency_guard(inspection_id: str):
+    with _ocr_active_lock:
+        event = _ocr_active_events.get(inspection_id)
+        if event is None:
+            event = threading.Event()
+            _ocr_active_events[inspection_id] = event
+            is_primary = True
+        else:
+            is_primary = False
+    try:
+        yield is_primary, event
+    finally:
+        if is_primary:
+            with _ocr_active_lock:
+                ev = _ocr_active_events.pop(inspection_id, None)
+                if ev:
+                    ev.set()
 
 @app.post("/api/inspections/{inspection_id}/ocr", response_model=RunOCRResponse, tags=["OCR & Declarations"])
 def run_inspection_ocr_and_extraction(
     inspection_id: str,
+    force: bool = False,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -2171,6 +2280,12 @@ def run_inspection_ocr_and_extraction(
             detail="Cannot run or modify OCR for an inspection that has been finalized or has an official report."
         )
 
+    # 1. Fast path: Idempotent re-use of already extracted declarations
+    if not force:
+        cached_resp = _build_existing_ocr_response(inspection_id, db)
+        if cached_resp:
+            return cached_resp
+
     images = db.query(ProductImage).filter(
         ProductImage.inspection_id == inspection_id
     ).order_by(ProductImage.sequence_order.asc()).all()
@@ -2178,15 +2293,27 @@ def run_inspection_ocr_and_extraction(
     if not images:
         raise HTTPException(status_code=400, detail="Cannot run OCR: No images uploaded for this inspection")
 
-    t_ocr_req_start = time.time()
-    ocr_req_id = uuid.uuid4().hex[:8]
-    logger.info(
-        f"[OCR_START] req_id={ocr_req_id} inspection_id={inspection_id} "
-        f"num_images={len(images)}"
-    )
+    with _ocr_concurrency_guard(inspection_id) as (is_primary_worker, in_flight_event):
+        if not is_primary_worker:
+            logger.info(f"[OCR_CONCURRENCY_WAIT] inspection_id={inspection_id} Waiting for active OCR inference")
+            db.close()
+            in_flight_event.wait(timeout=600.0)
+            cached_resp = _build_existing_ocr_response(inspection_id, db)
+            if cached_resp:
+                return cached_resp
+            reloaded = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+            if reloaded and reloaded.status == "OCR_PROCESSING":
+                raise HTTPException(status_code=504, detail="OCR processing timed out on concurrent worker")
 
-    inspection.status = "OCR_PROCESSING"
-    db.commit()
+        t_ocr_req_start = time.time()
+        ocr_req_id = uuid.uuid4().hex[:8]
+        logger.info(
+            f"[OCR_START] req_id={ocr_req_id} inspection_id={inspection_id} "
+            f"num_images={len(images)}"
+        )
+
+        inspection.status = "OCR_PROCESSING"
+        db.commit()
 
     # --- CRITICAL: Extract ALL needed primitive values before closing the session ---
     # After db.close(), ALL ORM objects (inspection, images, current_user) become detached.
@@ -2505,13 +2632,13 @@ def get_inspection_declarations(
     current_user: User = Depends(get_current_user)
 ):
     """Retrieves extracted structured declarations for an inspection."""
-    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    inspection = get_inspection_by_id_or_number(db, inspection_id)
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")
     verify_inspection_access(inspection, current_user, allow_supervisory=True)
 
     declarations = db.query(Declaration).filter(
-        Declaration.inspection_id == inspection_id
+        Declaration.inspection_id == inspection.id
     ).order_by(Declaration.created_at.asc()).all()
 
     return [serialize_declaration(d) for d in declarations]
@@ -2524,13 +2651,13 @@ def get_single_declaration(
     current_user: User = Depends(get_current_user)
 ):
     """Retrieves a single declaration field by name."""
-    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    inspection = get_inspection_by_id_or_number(db, inspection_id)
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")
     verify_inspection_access(inspection, current_user, allow_supervisory=True)
 
     decl = db.query(Declaration).filter(
-        Declaration.inspection_id == inspection_id,
+        Declaration.inspection_id == inspection.id,
         Declaration.field_name == field_name
     ).first()
 
@@ -2549,13 +2676,13 @@ def get_inspection_declaration_validation(
     Returns the Unified Declaration Compliance Matrix for an inspection.
     Evaluates Presence, Correctness, Readability, Placement, Font Size, and Format under PCR 2011.
     """
-    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    inspection = get_inspection_by_id_or_number(db, inspection_id)
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")
     verify_inspection_access(inspection, current_user, allow_supervisory=True)
 
-    declarations = db.query(Declaration).filter(Declaration.inspection_id == inspection_id).all()
-    images = db.query(ProductImage).filter(ProductImage.inspection_id == inspection_id).all()
+    declarations = db.query(Declaration).filter(Declaration.inspection_id == inspection.id).all()
+    images = db.query(ProductImage).filter(ProductImage.inspection_id == inspection.id).all()
 
     matrix_rows = declaration_validation_engine.build_declaration_matrix(declarations, images)
 
@@ -2566,7 +2693,7 @@ def get_inspection_declaration_validation(
     row_schemas = [DeclarationMatrixRowSchema(**r.model_dump()) for r in matrix_rows]
 
     return DeclarationValidationMatrixResponse(
-        inspection_id=inspection_id,
+        inspection_id=inspection.id,
         rows=row_schemas,
         total_mandatory=len(row_schemas),
         compliant_count=compliant_count,
@@ -2583,22 +2710,59 @@ def get_inspection_compliance_summary(
 ):
     """
     Returns the aggregate statutory compliance summary for an inspection.
-    Includes mandatory detection, placement, readability, font size, and listing discrepancy metrics.
+    Includes mandatory detection, placement, readability, font size, listing discrepancy metrics,
+    and live inspection-specific rule compliance finding metrics.
     """
-    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    inspection = get_inspection_by_id_or_number(db, inspection_id)
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")
     verify_inspection_access(inspection, current_user, allow_supervisory=True)
 
-    declarations = db.query(Declaration).filter(Declaration.inspection_id == inspection_id).all()
-    images = db.query(ProductImage).filter(ProductImage.inspection_id == inspection_id).all()
-    listing_comps = db.query(ListingComparison).filter(ListingComparison.inspection_id == inspection_id).all()
+    real_inspection_id = inspection.id
+
+    declarations = db.query(Declaration).filter(Declaration.inspection_id == real_inspection_id).all()
+    images = db.query(ProductImage).filter(ProductImage.inspection_id == real_inspection_id).all()
+    listing_comps = db.query(ListingComparison).filter(ListingComparison.inspection_id == real_inspection_id).all()
 
     matrix_rows = declaration_validation_engine.build_declaration_matrix(declarations, images)
     summary_data = declaration_validation_engine.compute_compliance_summary(matrix_rows, listing_comps)
 
+    checks = db.query(ComplianceCheck).filter(
+        ComplianceCheck.inspection_id == real_inspection_id
+    ).options(joinedload(ComplianceCheck.rule_version), joinedload(ComplianceCheck.evidence)).order_by(ComplianceCheck.created_at.asc()).all()
+
+    evaluation_completed = (
+        inspection.status in ("RULE_EVALUATION_COMPLETE", "REPORT_GENERATED", "COMPLETED")
+        or len(checks) > 0
+    )
+
+    # Canonical mutually exclusive compliance metrics
+    metrics = compute_canonical_compliance_metrics(checks)
+    compliant_checks = metrics["compliant_checks"]
+    no_potential_violations = compliant_checks
+    potential_non_compliance = metrics["potential_non_compliance"]
+    needs_manual_verification = metrics["needs_manual_verification"]
+    warnings = metrics["warnings"]
+
+    serialized_findings = [serialize_finding(c) for c in checks]
+
+    logger.info(
+        "Compliance summary for %s (id=%s): total_checks=%d, compliant=%d, non_comp=%d, manual=%d, warnings=%d, completed=%s",
+        inspection.inspection_number, real_inspection_id, len(checks),
+        compliant_checks, potential_non_compliance, needs_manual_verification, warnings, evaluation_completed
+    )
+
     return ComplianceSummaryResponse(
-        inspection_id=inspection_id,
+        inspection_id=real_inspection_id,
+        inspection_number=inspection.inspection_number,
+        evaluation_completed=evaluation_completed,
+        compliant_checks=compliant_checks,
+        no_potential_violations=no_potential_violations,
+        potential_non_compliance=potential_non_compliance,
+        needs_manual_verification=needs_manual_verification,
+        warnings=warnings,
+        total_findings=len(checks),
+        findings=serialized_findings,
         **summary_data.model_dump()
     )
 
@@ -2670,7 +2834,7 @@ def evaluate_inspection_rules(
     Generates potential non-compliance findings with photographic evidence and statutory references.
     AI is strictly excluded from compliance adjudication.
     """
-    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    inspection = get_inspection_by_id_or_number(db, inspection_id)
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")
     verify_inspection_access(inspection, current_user, allow_supervisory=False)
@@ -2682,8 +2846,8 @@ def evaluate_inspection_rules(
             detail="Cannot evaluate or modify rules for an inspection that has been finalized or has an official report."
         )
 
-    declarations = db.query(Declaration).filter(Declaration.inspection_id == inspection_id).all()
-    images = db.query(ProductImage).filter(ProductImage.inspection_id == inspection_id).all()
+    declarations = db.query(Declaration).filter(Declaration.inspection_id == inspection.id).all()
+    images = db.query(ProductImage).filter(ProductImage.inspection_id == inspection.id).all()
 
     product_data = {
         "product_name": inspection.product.product_name if inspection.product else "",
@@ -2692,10 +2856,10 @@ def evaluate_inspection_rules(
     }
 
     # Execute deterministic rule engine
-    eval_results = rule_engine.evaluate_inspection(inspection_id, product_data, declarations, images)
+    eval_results = rule_engine.evaluate_inspection(inspection.id, product_data, declarations, images)
 
     # Idempotent replacement of previous checks and evidence for this inspection
-    existing_checks = db.query(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection_id).all()
+    existing_checks = db.query(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection.id).all()
     check_ids = [c.id for c in existing_checks]
     if check_ids:
         db.query(Evidence).filter(Evidence.check_id.in_(check_ids)).delete(synchronize_session=False)
@@ -2748,7 +2912,7 @@ def evaluate_inspection_rules(
         rule_version_id = rule_ver.id
 
         check = ComplianceCheck(
-            inspection_id=inspection_id,
+            inspection_id=inspection.id,
             rule_version_id=rule_version_id,
             rule_code=res.rule_code,
             title=res.title,
@@ -2836,13 +3000,13 @@ def get_inspection_findings(
     current_user: User = Depends(get_current_user)
 ):
     """Retrieves all potential findings and compliance check results for an inspection."""
-    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    inspection = get_inspection_by_id_or_number(db, inspection_id)
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")
     verify_inspection_access(inspection, current_user, allow_supervisory=True)
 
     checks = db.query(ComplianceCheck).filter(
-        ComplianceCheck.inspection_id == inspection_id
+        ComplianceCheck.inspection_id == inspection.id
     ).order_by(ComplianceCheck.created_at.asc()).all()
 
     return [serialize_finding(c) for c in checks]
@@ -3058,13 +3222,14 @@ def generate_inspection_report(
     exists on disk, returns the existing report without incrementing the version number,
     unless force_regenerate=True is explicitly passed.
     """
-    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    inspection = get_inspection_by_id_or_number(db, inspection_id)
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")
     verify_inspection_access(inspection, current_user, allow_supervisory=False)
+    real_inspection_id = inspection.id
 
     # --- Idempotency guard for finalized inspections (AUDIT-REP-01) ---
-    existing_report = db.query(Report).filter(Report.inspection_id == inspection_id).first()
+    existing_report = db.query(Report).filter(Report.inspection_id == real_inspection_id).first()
     if (
         existing_report
         and inspection.status == "COMPLETED"
@@ -3078,9 +3243,9 @@ def generate_inspection_report(
                 inspection=inspection,
                 product=inspection.product,
                 inspector=inspection.inspector or current_user,
-                declarations=db.query(Declaration).filter(Declaration.inspection_id == inspection_id).all(),
-                compliance_checks=db.query(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection_id).all(),
-                evidence_items=db.query(Evidence).join(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection_id).all(),
+                declarations=db.query(Declaration).filter(Declaration.inspection_id == real_inspection_id).all(),
+                compliance_checks=db.query(ComplianceCheck).filter(ComplianceCheck.inspection_id == real_inspection_id).all(),
+                evidence_items=db.query(Evidence).join(ComplianceCheck).filter(ComplianceCheck.inspection_id == real_inspection_id).all(),
                 report_version=existing_report.report_version
             )
             db.commit()
@@ -3089,28 +3254,33 @@ def generate_inspection_report(
 
     product = inspection.product
     inspector = inspection.inspector or current_user
-    declarations = db.query(Declaration).filter(Declaration.inspection_id == inspection_id).all()
-    compliance_checks = db.query(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection_id).all()
-    evidence_items = db.query(Evidence).join(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection_id).all()
+    declarations = db.query(Declaration).filter(Declaration.inspection_id == real_inspection_id).all()
+    compliance_checks = db.query(ComplianceCheck).filter(ComplianceCheck.inspection_id == real_inspection_id).all()
+    evidence_items = db.query(Evidence).join(ComplianceCheck).filter(ComplianceCheck.inspection_id == real_inspection_id).all()
 
     # Determine version: preserve version if recovering missing PDF for COMPLETED inspection;
     # otherwise increment version for new report generation.
+    # Determine version and deterministic report record ID
     if existing_report and inspection.status == "COMPLETED" and not force_regenerate:
         # PDF missing on disk for finalized — regenerate at same version
         new_version = existing_report.report_version
+        report_record_id = existing_report.id
     elif existing_report:
         new_version = existing_report.report_version + 1
+        report_record_id = existing_report.id
     else:
         new_version = 1
+        report_record_id = str(uuid.uuid4())
 
-    pdf_path = report_generator.generate_pdf(
+    pdf_path, pdf_hash = report_generator.generate_pdf_with_hash(
         inspection=inspection,
         product=product,
         inspector=inspector,
         declarations=declarations,
         compliance_checks=compliance_checks,
         evidence_items=evidence_items,
-        report_version=new_version
+        report_version=new_version,
+        report_id=report_record_id,
     )
 
     docx_path = report_generator.generate_docx(
@@ -3128,7 +3298,7 @@ def generate_inspection_report(
         try:
             with open(pdf_path, "rb") as f:
                 pdf_bytes = f.read()
-            storage_service.upload_report_pdf(inspection_id, new_version, pdf_bytes)
+            storage_service.upload_report_pdf(real_inspection_id, new_version, pdf_bytes)
         except Exception as e:
             print(f"[SupabaseStorage] Warning: Failed to upload report PDF to Supabase: {e}")
 
@@ -3141,15 +3311,18 @@ def generate_inspection_report(
         existing_report.report_version = new_version
         existing_report.pdf_path = pdf_path
         existing_report.docx_path = docx_path
+        existing_report.pdf_hash = pdf_hash
         existing_report.legal_safety_statement = safety_statement
         existing_report.generated_at = datetime.utcnow()
         report_record = existing_report
     else:
         report_record = Report(
-            inspection_id=inspection_id,
+            id=report_record_id,
+            inspection_id=real_inspection_id,
             report_version=new_version,
             pdf_path=pdf_path,
             docx_path=docx_path,
+            pdf_hash=pdf_hash,
             legal_safety_statement=safety_statement
         )
         db.add(report_record)
@@ -3160,7 +3333,7 @@ def generate_inspection_report(
         "REPORT_GENERATED",
         "report",
         report_record.id,
-        inspection_id,
+        real_inspection_id,
         details=f"Generated statutory PDF & DOCX inspection reports v{new_version} ({inspection.inspection_number})"
     )
 
@@ -3176,15 +3349,15 @@ def get_inspection_report_metadata(
     current_user: User = Depends(get_current_user)
 ):
     """Retrieves metadata of the statutory inspection report."""
-    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    inspection = get_inspection_by_id_or_number(db, inspection_id)
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")
     verify_inspection_access(inspection, current_user, allow_supervisory=True)
 
-    report_record = db.query(Report).filter(Report.inspection_id == inspection_id).first()
+    report_record = db.query(Report).filter(Report.inspection_id == inspection.id).first()
     if not report_record:
         # Auto-generate if not yet generated
-        return generate_inspection_report(inspection_id, db, current_user)
+        return generate_inspection_report(inspection.id, db, current_user)
 
     return serialize_report(report_record)
 
@@ -3195,15 +3368,15 @@ def stream_inspection_report_pdf(
     current_user: User = Depends(get_current_user)
 ):
     """Streams the official PDF binary for viewing or download."""
-    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    inspection = get_inspection_by_id_or_number(db, inspection_id)
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")
     verify_inspection_access(inspection, current_user, allow_supervisory=True)
 
-    report_record = db.query(Report).filter(Report.inspection_id == inspection_id).first()
+    report_record = db.query(Report).filter(Report.inspection_id == inspection.id).first()
     if not report_record or not Path(report_record.pdf_path).exists():
-        generate_inspection_report(inspection_id, db, current_user)
-        report_record = db.query(Report).filter(Report.inspection_id == inspection_id).first()
+        generate_inspection_report(inspection.id, db, current_user)
+        report_record = db.query(Report).filter(Report.inspection_id == inspection.id).first()
 
     pdf_file = Path(report_record.pdf_path)
     if not pdf_file.exists():
@@ -3227,22 +3400,22 @@ def stream_inspection_report_docx(
     Authorization: Inspector can download their own report; Supervisor/Admin can access any report.
     Idempotency: Exporting does NOT increment report version or alter records.
     """
-    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    inspection = get_inspection_by_id_or_number(db, inspection_id)
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")
     verify_inspection_access(inspection, current_user, allow_supervisory=True)
 
-    report_record = db.query(Report).filter(Report.inspection_id == inspection_id).first()
+    report_record = db.query(Report).filter(Report.inspection_id == inspection.id).first()
     if not report_record:
-        generate_inspection_report(inspection_id, db, current_user)
-        report_record = db.query(Report).filter(Report.inspection_id == inspection_id).first()
+        generate_inspection_report(inspection.id, db, current_user)
+        report_record = db.query(Report).filter(Report.inspection_id == inspection.id).first()
 
     # Ensure DOCX is available on disk at current version
     docx_file = Path(report_record.docx_path) if getattr(report_record, "docx_path", None) else None
     if not docx_file or not docx_file.exists():
-        declarations = db.query(Declaration).filter(Declaration.inspection_id == inspection_id).all()
-        compliance_checks = db.query(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection_id).all()
-        evidence_items = db.query(Evidence).join(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection_id).all()
+        declarations = db.query(Declaration).filter(Declaration.inspection_id == inspection.id).all()
+        compliance_checks = db.query(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection.id).all()
+        evidence_items = db.query(Evidence).join(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection.id).all()
         gen_docx = report_generator.generate_docx(
             inspection=inspection,
             product=inspection.product,
@@ -3911,4 +4084,582 @@ def root_index():
 </body>
 </html>"""
     return HTMLResponse(content=html_content)
+
+
+# ===========================================================================
+# SUPERVISOR MANAGEMENT ENDPOINTS (NIRIKSHA ROLE-BASED ACCESS CONTROL)
+# ===========================================================================
+
+@app.get("/api/supervisor/dashboard", response_model=SupervisorDashboardResponse, tags=["Supervisor Management"])
+def get_supervisor_dashboard(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_supervisor_or_admin)
+):
+    """
+    Returns real-time management KPIs aggregated across ALL Field Inspectors.
+    Every metric is computed live from Neon PostgreSQL — zero hardcoded / fake data.
+    """
+    total_inspections = db.query(Inspection).count()
+    
+    # Today's Inspections
+    today_inspections = db.query(Inspection).filter(
+        func.date(Inspection.created_at) == func.current_date()
+    ).count()
+
+    # Completed vs Pending Inspections
+    completed_inspections = db.query(Inspection).filter(
+        or_(Inspection.status == "COMPLETED", Inspection.finalized_at.isnot(None))
+    ).count()
+    pending_inspections = db.query(Inspection).filter(
+        and_(Inspection.status != "COMPLETED", Inspection.finalized_at.is_(None))
+    ).count()
+
+    # Compliance states
+    potential_non_compliance = db.query(Inspection).filter(
+        Inspection.overall_status == "POTENTIAL_NON_COMPLIANCE"
+    ).count()
+
+    # Reports generated
+    reports_generated = db.query(Report).count()
+
+    # Active inspectors (distinct inspectors who submitted inspections)
+    active_inspectors_count = db.query(func.count(distinct(Inspection.inspector_id))).scalar() or 0
+
+    # Inspections requiring manual verification
+    unresolved_decl_subq = db.query(distinct(Declaration.inspection_id)).filter(
+        Declaration.extraction_status.in_(["NOT_FOUND", "CONFLICTING", "LOW_CONFIDENCE", "NEEDS_REVIEW"])
+    )
+    unresolved_check_subq = db.query(distinct(ComplianceCheck.inspection_id)).filter(
+        ComplianceCheck.result_state == "POTENTIAL_NON_COMPLIANCE",
+        ComplianceCheck.adjudication_status == "PENDING"
+    )
+    manual_verification_required = db.query(Inspection).filter(
+        or_(
+            Inspection.overall_status == "NEEDS_MANUAL_VERIFICATION",
+            Inspection.id.in_(unresolved_decl_subq),
+            Inspection.id.in_(unresolved_check_subq)
+        )
+    ).count()
+
+    # Recent Submissions (limit 10)
+    recent_objs = db.query(Inspection).order_by(Inspection.created_at.desc()).limit(10).all()
+    recent_submissions = [
+        RecentInspectionItem(
+            id=insp.id,
+            inspection_number=insp.inspection_number,
+            product_name=insp.product.product_name if insp.product else "Unnamed Commodity",
+            location=insp.location,
+            status=insp.status,
+            overall_status=insp.overall_status,
+            created_at=insp.created_at
+        )
+        for insp in recent_objs
+    ]
+
+    # Grouping by Inspector
+    insp_user_rows = db.query(
+        User.id,
+        User.officer_id,
+        User.full_name,
+        User.zone,
+        func.count(Inspection.id).label("total"),
+        func.sum(case((or_(Inspection.status == "COMPLETED", Inspection.finalized_at.isnot(None)), 1), else_=0)).label("completed"),
+        func.sum(case((Inspection.overall_status == "POTENTIAL_NON_COMPLIANCE", 1), else_=0)).label("non_compliant"),
+        func.sum(case((Inspection.overall_status == "NEEDS_MANUAL_VERIFICATION", 1), else_=0)).label("manual_verification")
+    ).join(Inspection, User.id == Inspection.inspector_id).group_by(
+        User.id, User.officer_id, User.full_name, User.zone
+    ).all()
+
+    inspections_by_inspector = [
+        {
+            "inspector_id": r[0],
+            "officer_id": r[1] or "N/A",
+            "full_name": r[2] or "Inspector",
+            "zone": r[3] or "Field",
+            "total": int(r[4] or 0),
+            "completed": int(r[5] or 0),
+            "pending": int((r[4] or 0) - (r[5] or 0)),
+            "non_compliant": int(r[6] or 0),
+            "manual_verification": int(r[7] or 0),
+        }
+        for r in insp_user_rows
+    ]
+
+    # Category breakdown
+    cat_rows = db.query(
+        Product.category,
+        func.count(Inspection.id)
+    ).join(Inspection, Product.inspection_id == Inspection.id).group_by(Product.category).all()
+    inspections_by_category = {r[0] or "Other": int(r[1]) for r in cat_rows}
+
+    # Status breakdown
+    status_rows = db.query(
+        Inspection.status,
+        func.count(Inspection.id)
+    ).group_by(Inspection.status).all()
+    inspections_by_status = {r[0]: int(r[1]) for r in status_rows}
+
+    # Timeline distribution
+    time_rows = db.query(
+        func.date(Inspection.created_at).label("insp_date"),
+        func.count(Inspection.id).label("total"),
+        func.sum(case((Inspection.overall_status.in_(["NO_POTENTIAL_VIOLATIONS", "VERIFIED_COMPLIANT"]), 1), else_=0)).label("compliant"),
+        func.sum(case((Inspection.overall_status == "POTENTIAL_NON_COMPLIANCE", 1), else_=0)).label("non_compliant")
+    ).group_by("insp_date").order_by("insp_date").all()
+
+    inspections_by_date = [
+        {
+            "date": str(r.insp_date),
+            "total": int(r.total or 0),
+            "compliant": int(r.compliant or 0),
+            "non_compliant": int(r.non_compliant or 0)
+        }
+        for r in time_rows
+    ]
+
+    # Inspections requiring attention
+    attention_objs = db.query(Inspection).filter(
+        or_(
+            Inspection.overall_status == "NEEDS_MANUAL_VERIFICATION",
+            Inspection.id.in_(unresolved_decl_subq),
+            Inspection.id.in_(unresolved_check_subq)
+        )
+    ).order_by(Inspection.created_at.desc()).limit(10).all()
+
+    inspections_requiring_attention = [
+        {
+            "id": insp.id,
+            "inspection_number": insp.inspection_number,
+            "product_name": insp.product.product_name if insp.product else "Unnamed Commodity",
+            "inspector": insp.inspector.full_name if insp.inspector else "Field Inspector",
+            "officer_id": insp.inspector.officer_id if insp.inspector else "N/A",
+            "location": insp.location,
+            "created_at": insp.created_at.isoformat() if insp.created_at else None,
+            "overall_status": insp.overall_status
+        }
+        for insp in attention_objs
+    ]
+
+    return SupervisorDashboardResponse(
+        total_inspections=total_inspections,
+        today_inspections=today_inspections,
+        completed_inspections=completed_inspections,
+        pending_inspections=pending_inspections,
+        manual_verification_required=manual_verification_required,
+        potential_non_compliance=potential_non_compliance,
+        reports_generated=reports_generated,
+        active_inspectors_count=active_inspectors_count,
+        recent_submissions=recent_submissions,
+        inspections_by_inspector=inspections_by_inspector,
+        inspections_by_category=inspections_by_category,
+        inspections_by_status=inspections_by_status,
+        inspections_by_date=inspections_by_date,
+        inspections_requiring_attention=inspections_requiring_attention
+    )
+
+
+@app.get("/api/supervisor/inspectors", response_model=SupervisorInspectorsListResponse, tags=["Supervisor Management"])
+def get_supervisor_inspectors(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_supervisor_or_admin)
+):
+    """
+    Returns the list of all Field Inspectors dynamically from the database,
+    along with their real enforcement metrics and workload statistics.
+    """
+    inspectors = db.query(User).filter(User.role == "INSPECTOR").order_by(User.full_name).all()
+    
+    # Precompute inspector metrics via group-by
+    stats_map = {}
+    stats_rows = db.query(
+        Inspection.inspector_id,
+        func.count(Inspection.id).label("total"),
+        func.sum(case((or_(Inspection.status == "COMPLETED", Inspection.finalized_at.isnot(None)), 1), else_=0)).label("completed"),
+        func.sum(case((Inspection.overall_status == "POTENTIAL_NON_COMPLIANCE", 1), else_=0)).label("non_compliant"),
+        func.sum(case((Inspection.overall_status == "NEEDS_MANUAL_VERIFICATION", 1), else_=0)).label("manual_verification"),
+        func.max(Inspection.created_at).label("last_active")
+    ).group_by(Inspection.inspector_id).all()
+
+    for r in stats_rows:
+        stats_map[r[0]] = {
+            "total": int(r[1] or 0),
+            "completed": int(r[2] or 0),
+            "non_compliant": int(r[3] or 0),
+            "manual_verification": int(r[4] or 0),
+            "last_active": r[5]
+        }
+
+    # Precompute reports per inspector
+    rep_rows = db.query(
+        Inspection.inspector_id,
+        func.count(Report.id).label("reports_count")
+    ).join(Report, Inspection.id == Report.inspection_id).group_by(Inspection.inspector_id).all()
+    report_map = {r[0]: int(r[1] or 0) for r in rep_rows}
+
+    results = []
+    for insp in inspectors:
+        st = stats_map.get(insp.id, {})
+        tot = st.get("total", 0)
+        comp = st.get("completed", 0)
+        pend = tot - comp
+        results.append(
+            SupervisorInspectorSummary(
+                inspector_id=insp.id,
+                officer_id=insp.officer_id,
+                full_name=insp.full_name,
+                designation=insp.designation,
+                zone=insp.zone,
+                email=insp.email,
+                phone=insp.phone,
+                total_inspections=tot,
+                completed_inspections=comp,
+                pending_inspections=pend,
+                potential_non_compliance=st.get("non_compliant", 0),
+                manual_verification_required=st.get("manual_verification", 0),
+                reports_generated=report_map.get(insp.id, 0),
+                last_active=st.get("last_active")
+            )
+        )
+
+    return SupervisorInspectorsListResponse(inspectors=results, total_count=len(results))
+
+
+@app.get("/api/supervisor/inspections", response_model=SupervisorInspectionsListResponse, tags=["Supervisor Management"])
+def get_supervisor_inspections(
+    page: int = Query(1, ge=1, description="Page number (1-indexed)"),
+    page_size: int = Query(20, ge=1, le=100, description="Items per page"),
+    search: Optional[str] = Query(None, description="Search across inspection number, product, brand, inspector name, officer ID, location"),
+    inspector_id: Optional[str] = Query(None, description="Filter by specific inspector ID or officer ID"),
+    status: Optional[str] = Query(None, description="Filter by lifecycle status"),
+    overall_status: Optional[str] = Query(None, description="Filter by compliance outcome"),
+    category: Optional[str] = Query(None, description="Filter by commodity category"),
+    has_report: Optional[bool] = Query(None, description="Filter by whether report is generated"),
+    date_from: Optional[str] = Query(None, description="Filter inspections created on or after date (YYYY-MM-DD or ISO)"),
+    date_to: Optional[str] = Query(None, description="Filter inspections created on or before date (YYYY-MM-DD or ISO)"),
+    sort_by: str = Query("created_at", description="Sort field: created_at, inspection_number, inspector, status, compliance"),
+    sort_order: str = Query("desc", description="Sort direction: asc or desc"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_supervisor_or_admin)
+):
+    """
+    Supervisor repository query endpoint.
+    Protected strictly by SUPERVISOR or ADMIN authorization.
+    Returns paginated lightweight summaries (omits heavy OCR/declarations) for responsive mobile viewing.
+    """
+    query = db.query(Inspection).outerjoin(Product, Inspection.id == Product.inspection_id).outerjoin(User, Inspection.inspector_id == User.id).outerjoin(Report, Inspection.id == Report.inspection_id)
+
+    # Inspector filter
+    if inspector_id and inspector_id.strip():
+        insp_val = inspector_id.strip()
+        query = query.filter(
+            or_(
+                Inspection.inspector_id == insp_val,
+                User.officer_id == insp_val,
+                User.id == insp_val
+            )
+        )
+
+    # Status filters
+    if status and status.strip():
+        query = query.filter(Inspection.status == status.strip())
+    if overall_status and overall_status.strip():
+        query = query.filter(Inspection.overall_status == overall_status.strip())
+    if category and category.strip():
+        query = query.filter(Product.category == category.strip())
+
+    if has_report is True:
+        query = query.filter(Report.id.isnot(None))
+    elif has_report is False:
+        query = query.filter(Report.id.is_(None))
+
+    # Date filters
+    if date_from and date_from.strip():
+        parsed_from = _parse_dashboard_date_filter(date_from, is_end_date=False)
+        query = query.filter(Inspection.created_at >= parsed_from)
+    if date_to and date_to.strip():
+        parsed_to = _parse_dashboard_date_filter(date_to, is_end_date=True)
+        query = query.filter(Inspection.created_at <= parsed_to)
+
+    # Search filter
+    if search and search.strip():
+        term = f"%{search.strip()}%"
+        query = query.filter(
+            or_(
+                Inspection.inspection_number.ilike(term),
+                Inspection.id.ilike(term),
+                Product.product_name.ilike(term),
+                Product.brand_name.ilike(term),
+                Product.batch_number.ilike(term),
+                Inspection.location.ilike(term),
+                User.officer_id.ilike(term),
+                User.full_name.ilike(term)
+            )
+        )
+
+    total_count = query.count()
+    total_pages = max(1, (total_count + page_size - 1) // page_size) if total_count > 0 else 1
+
+    # Sorting
+    sort_dir = desc if sort_order.lower() == "desc" else asc
+    if sort_by == "inspection_number":
+        query = query.order_by(sort_dir(Inspection.inspection_number))
+    elif sort_by == "inspector":
+        query = query.order_by(sort_dir(User.full_name))
+    elif sort_by == "status":
+        query = query.order_by(sort_dir(Inspection.status))
+    elif sort_by == "compliance":
+        query = query.order_by(sort_dir(Inspection.overall_status))
+    else:
+        query = query.order_by(sort_dir(Inspection.created_at))
+
+    offset = (page - 1) * page_size
+    inspections = query.options(
+        joinedload(Inspection.product),
+        joinedload(Inspection.inspector),
+        joinedload(Inspection.report),
+        joinedload(Inspection.compliance_checks)
+    ).offset(offset).limit(page_size).all()
+
+    items: List[SupervisorInspectionSummaryItem] = []
+    for insp in inspections:
+        prod = insp.product
+        p_name = prod.product_name if prod else "Unnamed Commodity"
+        b_name = prod.brand_name if prod else None
+        cat = prod.category if prod else "General"
+        insp_user = insp.inspector
+        i_name = insp_user.full_name if insp_user else "Unknown Inspector"
+        i_officer_id = insp_user.officer_id if insp_user else (insp.inspector_id or "N/A")
+
+        checks = insp.compliance_checks or []
+        findings_count = len(checks)
+        non_compliant_count = sum(1 for c in checks if c.result_state == "POTENTIAL_NON_COMPLIANCE")
+
+        items.append(
+            SupervisorInspectionSummaryItem(
+                id=insp.id,
+                inspection_number=insp.inspection_number,
+                product_name=p_name,
+                brand_name=b_name,
+                category=cat,
+                location=insp.location or "Not Specified",
+                inspector_id=i_officer_id,
+                inspector_name=i_name,
+                status=insp.status,
+                overall_status=insp.overall_status,
+                created_at=insp.created_at,
+                finalized_at=insp.finalized_at,
+                has_report=insp.report is not None,
+                report_id=insp.report.id if insp.report else None,
+                findings_count=findings_count,
+                non_compliant_count=non_compliant_count
+            )
+        )
+
+    return SupervisorInspectionsListResponse(
+        items=items,
+        total_count=total_count,
+        page=page,
+        page_size=page_size,
+        total_pages=total_pages
+    )
+
+
+@app.delete("/api/inspections/{inspection_id}", response_model=DeleteInspectionResponse, tags=["Supervisor Management"])
+def delete_inspection(
+    inspection_id: str,
+    payload: Optional[DeleteInspectionRequest] = Body(None),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_supervisor_or_admin)
+):
+    """
+    Supervisor destructive inspection deletion.
+    Enforces backend role verification (SUPERVISOR or ADMIN only; INSPECTOR rejected with 403).
+    Requires matching confirmation inspection number.
+    Cascades child records safely inside an atomic DB transaction, cleans physical files, and records an immutable audit log.
+    Reference data (users, rule versions) and other inspections remain intact.
+    """
+    inspection = db.query(Inspection).filter(
+        or_(Inspection.id == inspection_id, Inspection.inspection_number == inspection_id)
+    ).first()
+
+    if not inspection:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Inspection '{inspection_id}' not found."
+        )
+
+    # Validate confirmation inspection number
+    if not payload or not payload.confirmation_inspection_number:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Confirmation inspection number is required. Please type the exact inspection number to confirm deletion."
+        )
+
+    entered_clean = payload.confirmation_inspection_number.strip().upper()
+    actual_clean = inspection.inspection_number.strip().upper()
+    if entered_clean != actual_clean:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail=f"Confirmation mismatch: Typed '{payload.confirmation_inspection_number}', but actual inspection number is '{inspection.inspection_number}'. Deletion aborted."
+        )
+
+    saved_insp_id = inspection.id
+    saved_insp_num = inspection.inspection_number
+    product_name = inspection.product.product_name if inspection.product else "N/A"
+    inspector_officer_id = inspection.inspector.officer_id if inspection.inspector else "N/A"
+    reason_text = payload.reason.strip() if (payload and payload.reason and payload.reason.strip()) else "Supervisor management deletion"
+
+    # Gather physical files to delete safely after successful database commit
+    files_to_remove = []
+    if inspection.report:
+        for file_path in [inspection.report.pdf_path, inspection.report.docx_path]:
+            if file_path and os.path.isfile(file_path):
+                files_to_remove.append(file_path)
+
+    for img in inspection.images:
+        if img.file_path and os.path.isfile(img.file_path):
+            files_to_remove.append(img.file_path)
+
+    # Perform atomic DB transaction
+    try:
+        # Audit logging before deletion — record survives deletion because inspection_id is None
+        # and full historical snapshot is preserved in details JSON
+        audit = AuditLog(
+            inspection_id=None,
+            actor_id=current_user.officer_id,
+            action="INSPECTION_DELETED",
+            entity_type="inspection",
+            entity_id=saved_insp_id,
+            details=json.dumps({
+                "inspection_uuid": saved_insp_id,
+                "inspection_number": saved_insp_num,
+                "product_name": product_name,
+                "inspector_id": inspector_officer_id,
+                "supervisor_id": current_user.officer_id,
+                "supervisor_name": current_user.full_name,
+                "reason": reason_text,
+                "deleted_at": datetime.utcnow().isoformat(),
+                "outcome": "SUCCESS"
+            })
+        )
+        db.add(audit)
+
+        # Explicitly decouple all historical audit logs for this inspection by setting inspection_id to NULL
+        # This preserves the entire audit history while preventing FK constraint violation during deletion
+        db.query(AuditLog).filter(AuditLog.inspection_id == saved_insp_id).update({"inspection_id": None})
+
+        # Cascading database deletion (models specify cascade="all, delete-orphan")
+        db.delete(inspection)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.error(f"[Supervisor Deletion Failed] Could not delete inspection {saved_insp_num}: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database transaction failed while deleting inspection {saved_insp_num}. Rollback executed; no changes saved."
+        )
+
+    # Post-commit failure-aware physical file cleanup
+    for fp in files_to_remove:
+        try:
+            if os.path.isfile(fp):
+                os.remove(fp)
+        except Exception as file_err:
+            logger.warning(f"[Supervisor Deletion Notice] Could not remove physical file '{fp}': {file_err}")
+
+    logger.info(f"[Supervisor Audit] Inspection {saved_insp_num} deleted by Supervisor {current_user.officer_id}")
+
+    return DeleteInspectionResponse(
+        success=True,
+        message=f"Inspection {saved_insp_num} and associated inspection data deleted successfully.",
+        inspection_id=saved_insp_id,
+        inspection_number=saved_insp_num
+    )
+
+
+@app.delete("/api/inspections/{inspection_id}/report", response_model=DeleteReportResponse, tags=["Supervisor Management"])
+def delete_inspection_report(
+    inspection_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_supervisor_or_admin)
+):
+    """
+    Supervisor report deletion.
+    Enforces backend role verification (SUPERVISOR or ADMIN only; INSPECTOR rejected with 403).
+    Removes the Report database record and associated physical files inside an atomic transaction.
+    The Inspection and all other inspection data remain completely intact.
+    """
+    inspection = db.query(Inspection).filter(
+        or_(Inspection.id == inspection_id, Inspection.inspection_number == inspection_id)
+    ).first()
+
+    if not inspection:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"Inspection '{inspection_id}' not found."
+        )
+
+    report = db.query(Report).filter(Report.inspection_id == inspection.id).first()
+    if not report:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND,
+            detail=f"No report found for inspection '{inspection.inspection_number}'."
+        )
+
+    saved_report_id = report.id
+    files_to_remove = []
+    for fp in [report.pdf_path, report.docx_path]:
+        if fp and os.path.isfile(fp):
+            files_to_remove.append(fp)
+
+    try:
+        # Create immutable audit log record
+        audit = AuditLog(
+            inspection_id=inspection.id,
+            actor_id=current_user.officer_id,
+            action="REPORT_DELETED",
+            entity_type="report",
+            entity_id=saved_report_id,
+            details=json.dumps({
+                "inspection_id": inspection.id,
+                "inspection_number": inspection.inspection_number,
+                "report_id": saved_report_id,
+                "report_version": report.report_version,
+                "pdf_hash": report.pdf_hash,
+                "supervisor_id": current_user.officer_id,
+                "supervisor_name": current_user.full_name,
+                "deleted_at": datetime.utcnow().isoformat(),
+                "outcome": "SUCCESS"
+            })
+        )
+        db.add(audit)
+
+        # Delete Report record (Inspection remains untouched)
+        db.delete(report)
+        db.commit()
+    except Exception as exc:
+        db.rollback()
+        logger.error(f"[Supervisor Deletion Failed] Could not delete report {saved_report_id}: {exc}")
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Database transaction failed while deleting report for inspection {inspection.inspection_number}. Rollback executed."
+        )
+
+    # Post-commit physical file cleanup
+    for fp in files_to_remove:
+        try:
+            if os.path.isfile(fp):
+                os.remove(fp)
+        except Exception as e:
+            logger.warning(f"Could not remove report file {fp}: {e}")
+
+    logger.info(f"[Supervisor Audit] Report {saved_report_id} for inspection {inspection.inspection_number} deleted by Supervisor {current_user.officer_id}")
+
+    return DeleteReportResponse(
+        success=True,
+        message=f"Report for inspection {inspection.inspection_number} deleted successfully. Inspection remains intact.",
+        inspection_id=inspection.id,
+        report_id=saved_report_id
+    )
+
 

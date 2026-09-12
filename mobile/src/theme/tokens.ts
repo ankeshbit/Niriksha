@@ -54,6 +54,11 @@ export const colors = {
 };
 
 export const spacing = {
+  xs: 4,
+  sm: 8,
+  md: 12,
+  lg: 16,
+  xl: 24,
   tight: 4,
   base: 8,
   stackSm: 8,
@@ -67,9 +72,11 @@ export const spacing = {
 export const borderRadius = {
   default: 2,
   DEFAULT: 2,
-  sm: 2,
-  lg: 4,
-  xl: 8,
+  xs: 2,
+  sm: 4,
+  md: 8,
+  lg: 12,
+  xl: 16,
   full: 12,
   round: 9999,
 };

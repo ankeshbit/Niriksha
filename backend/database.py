@@ -58,3 +58,66 @@ def get_database_backend_info() -> Dict[str, Any]:
         "is_sqlite": False,
     }
 
+
+def normalize_db_identity(url_str: str) -> Dict[str, str]:
+    """Parses and normalizes a database URL into host, database name, and normalized identity.
+    
+    Rejects:
+    - Missing / None / empty / whitespace URLs
+    - SQLite or :memory: databases
+    - Unsupported database engines (MySQL, MongoDB, etc.)
+    """
+    from urllib.parse import urlparse
+
+    if not url_str or not str(url_str).strip():
+        raise ValueError("Database URL cannot be empty or whitespace.")
+
+    clean_url = str(url_str).strip()
+    clean_lower = clean_url.lower()
+
+    if "sqlite" in clean_lower or ":memory:" in clean_lower:
+        raise ValueError(f"SQLite / in-memory database is strictly forbidden in NiriKsha: {clean_url!r}")
+
+    unsupported_schemes = ["mysql", "mongodb", "oracle", "mssql", "redis"]
+    for scheme in unsupported_schemes:
+        if clean_lower.startswith(scheme):
+            raise ValueError(f"Unsupported database scheme '{scheme}'. Only PostgreSQL/Neon is supported.")
+
+    parsed = urlparse(clean_url.replace("postgresql+psycopg", "postgresql"))
+    driver_scheme = parsed.scheme.split("+")[0]
+    if driver_scheme not in ("postgresql", "postgres"):
+        raise ValueError(f"Unsupported database scheme '{driver_scheme}'. Only PostgreSQL/Neon is supported.")
+
+    host = (parsed.hostname or parsed.netloc.split("@")[-1].split(":")[0]).lower().strip()
+    database = parsed.path.lstrip("/").split("?")[0].lower().strip()
+
+    if not host:
+        raise ValueError(f"Invalid PostgreSQL URL: missing host in {clean_url!r}")
+    if not database:
+        raise ValueError(f"Invalid PostgreSQL URL: missing database name in {clean_url!r}")
+
+    return {
+        "host": host,
+        "database": database,
+        "identity": f"{host}/{database}"
+    }
+
+
+def verify_test_database_safety(prod_url: str, test_url: str) -> None:
+    """Explicitly verifies test database identity against production database identity.
+    
+    Fails fast if:
+    - Either URL is missing, empty, whitespace, or points to SQLite/unsupported databases
+    - Both URLs resolve to the same host and database identity
+    """
+    prod_info = normalize_db_identity(prod_url)
+    test_info = normalize_db_identity(test_url)
+
+    if prod_info["identity"] == test_info["identity"]:
+        raise RuntimeError(
+            f"[CRITICAL SAFETY VIOLATION] Test database resolves to the same physical Neon database as production!\n"
+            f"Production: {prod_info['identity']}\n"
+            f"Test:       {test_info['identity']}\n"
+            f"Tests MUST use a separate Neon database."
+        )
+

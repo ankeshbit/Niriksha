@@ -135,7 +135,10 @@ def test_mysql_url_rejected():
 
 def test_test_url_differs_from_production_url():
     """TEST_DATABASE_URL must not equal the production DATABASE_URL."""
-    prod_url = os.environ.get("DATABASE_URL", "").strip()
+    prod_url = (
+        os.environ.get("ORIGINAL_PRODUCTION_DATABASE_URL", "").strip()
+        or os.environ.get("DATABASE_URL", "").strip()
+    )
     test_url = os.environ.get("TEST_DATABASE_URL", "").strip()
     if prod_url and test_url:
         assert prod_url != test_url, (

@@ -32,11 +32,11 @@ export const LoginScreen: React.FC = () => {
   useEffect(() => {
     Promise.all([authStorage.getToken(), authStorage.getProfile()]).then(([token, profile]) => {
       if (token) {
-        if (profile?.role && profile.role !== 'INSPECTOR') {
-          authStorage.clear();
-          return;
+        if (profile?.role === 'SUPERVISOR') {
+          navigation.replace('SupervisorDashboard');
+        } else {
+          navigation.replace('Dashboard');
         }
-        navigation.replace('Dashboard');
       }
     });
   }, []);
@@ -56,13 +56,7 @@ export const LoginScreen: React.FC = () => {
         password: password.trim(),
       });
 
-      // Mobile app is strictly for Field Inspectors only. Reject Supervisor / Admin roles.
-      if (data.role && data.role !== 'INSPECTOR') {
-        await authStorage.clear();
-        setErrorMessage('This mobile application is for Field Inspectors only.');
-        return;
-      }
-
+      // Save authenticated profile and role dynamically from session/JWT
       await authStorage.saveToken(data.access_token);
       await authStorage.saveProfile({
         officer_id: data.officer_id,
@@ -72,7 +66,12 @@ export const LoginScreen: React.FC = () => {
         role: data.role,
       });
 
-      navigation.replace('Dashboard');
+      // Route dynamically based on user role
+      if (data.role === 'SUPERVISOR') {
+        navigation.replace('SupervisorDashboard');
+      } else {
+        navigation.replace('Dashboard');
+      }
     } catch (err: any) {
       const msg = String(err?.message || '');
       if (

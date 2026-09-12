@@ -20,6 +20,8 @@ from backend.report_service import report_generator
 from backend.config import settings
 
 def seed_single_demo_inspection():
+    if getattr(settings, "ENVIRONMENT", "").lower() == "production":
+        raise RuntimeError("seed_demo_inspection.py cannot be executed in production environment.")
     db = SessionLocal()
     try:
         # 1. Verify Seed Officer exists

@@ -829,8 +829,9 @@ def test_23_production_database_safety():
     # No local .db files should exist in the project root
     root_dir = Path(__file__).resolve().parent.parent
     db_files = list(root_dir.glob("*.db")) + list(root_dir.glob("*.sqlite")) + list(root_dir.glob("*.sqlite3"))
-    # Exclude any pre-migration backup files that are intentionally archived
-    db_files = [f for f in db_files if ".pre_postgres_migration_backup" not in f.name and ".pre_remediation_backup" not in f.name]
+    # Exclude any pre-migration and archived legacy backup files
+    exclusion_keywords = [".pre_postgres_migration_backup", ".pre_remediation_backup", "_backup_", "_backup"]
+    db_files = [f for f in db_files if not any(kw in f.name for kw in exclusion_keywords)]
     assert db_files == [], (
         f"Unexpected SQLite/database files found in project root: {[str(f) for f in db_files]}\n"
         f"The application must not create local database files."

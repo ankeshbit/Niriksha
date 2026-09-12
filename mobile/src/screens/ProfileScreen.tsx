@@ -95,9 +95,9 @@ export const ProfileScreen: React.FC = () => {
   }, []);
 
   const officerName = profile?.full_name || 'Inspector';
-  const officerId = profile?.officer_id || 'DOCA-INSP-842';
+  const officerId = profile?.officer_id || 'Not Assigned';
   const officerRole = profile?.designation || 'Inspector (Legal Metrology)';
-  const officerZone = profile?.zone || 'Northern Zone - Delhi HQ';
+  const officerZone = profile?.zone || 'Not Assigned';
   const officerEmail = profile?.email || '';
   const officerPhone = profile?.phone || '';
 

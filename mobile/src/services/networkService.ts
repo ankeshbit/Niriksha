@@ -233,9 +233,11 @@ class NetworkService {
         return false;
       }
 
-      const isReachable = response.ok;
-      this.setState(isReachable ? 'ONLINE' : 'OFFLINE');
-      return isReachable;
+      // HTTP response received means device successfully reached the server.
+      // Server errors (500/502/503) are application errors, NOT network disconnects.
+      const isServerReachable = Boolean(response);
+      this.setState(isServerReachable ? 'ONLINE' : 'OFFLINE');
+      return response.ok;
     } catch (e: any) {
       // FIX-RC-TIMEOUT: Distinguish timeout (AbortError) from network unreachable.
       // A timeout means the backend is slow, not necessarily gone.

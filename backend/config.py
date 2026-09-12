@@ -34,6 +34,13 @@ class Settings(BaseSettings):
 
         # ── Fail fast: DATABASE_URL is mandatory in every environment ──────────
         if not raw_url:
+            if self.ENVIRONMENT == "production":
+                raise ValueError(
+                    "DATABASE_URL environment variable is required in production environment.\n"
+                    "NiriKsha requires Neon PostgreSQL.\n"
+                    "Set DATABASE_URL=postgresql+psycopg://... in your .env file.\n"
+                    "Application startup aborted. Do NOT create a local database."
+                )
             raise ValueError(
                 "DATABASE_URL environment variable is not configured.\n"
                 "NiriKsha requires Neon PostgreSQL.\n"
@@ -43,6 +50,13 @@ class Settings(BaseSettings):
 
         # ── Reject SQLite in every environment (dev and production) ────────────
         if raw_url.startswith("sqlite"):
+            if self.ENVIRONMENT == "production":
+                raise ValueError(
+                    f"SQLite DATABASE_URL is not permitted in production environment.\n"
+                    f"Received: {raw_url!r}\n"
+                    f"NiriKsha requires Neon PostgreSQL as its only database.\n"
+                    f"Set DATABASE_URL=postgresql+psycopg://... in your .env file."
+                )
             raise ValueError(
                 f"SQLite DATABASE_URL is strictly forbidden in NiriKsha.\n"
                 f"Received: {raw_url!r}\n"
@@ -79,6 +93,13 @@ class Settings(BaseSettings):
     SEED_OFFICER_NAME: str = "Inspector Rajesh Kumar"
     SEED_OFFICER_DESIGNATION: str = "Senior Inspector (Legal Metrology)"
     SEED_OFFICER_ZONE: str = "Northern Zone - Delhi HQ"
+
+    # Supervisor Account Settings
+    SEED_SUPERVISOR_ID: str = "DOCA-SUP-101"
+    SEED_SUPERVISOR_PASSWORD: Optional[str] = None
+    SEED_SUPERVISOR_NAME: str = "NiriKsha Supervisor"
+    SEED_SUPERVISOR_DESIGNATION: str = "Supervisory Officer (Legal Metrology)"
+    SEED_SUPERVISOR_ZONE: str = "Central HQ"
 
     # File Storage Paths
     UPLOAD_DIR: str = "./uploads"

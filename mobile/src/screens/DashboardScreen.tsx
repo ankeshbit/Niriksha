@@ -48,6 +48,7 @@ export const DashboardScreen: React.FC = () => {
   const insets = useSafeAreaInsets();
   const [profile, setProfile] = useState<any>(null);
   const [kpis, setKpis] = useState<any>(null);
+  const [kpiError, setKpiError] = useState(false);
   const [inspections, setInspections] = useState<any[]>([]);
   const [pendingActions, setPendingActions] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -61,13 +62,18 @@ export const DashboardScreen: React.FC = () => {
 
   const loadData = async (silent = false) => {
     try {
+      let kpiFailed = false;
       const [prof, kpiRes, inspRes, pendingRes] = await Promise.all([
         authStorage.getProfile(),
-        api.getDashboardSummary().catch(() => null),
+        api.getDashboardSummary().catch(() => {
+          kpiFailed = true;
+          return null;
+        }),
         api.getDashboardInspections({ limit: 100 }).catch(() => null),
         api.getDashboardPendingActions(50).catch(() => null),
       ]);
       setProfile(prof);
+      setKpiError(kpiFailed || !kpiRes);
       setKpis(kpiRes);
       setInspections(inspRes?.items || []);
       setPendingActions(pendingRes?.items || []);
@@ -100,9 +106,11 @@ export const DashboardScreen: React.FC = () => {
     year: 'numeric',
   });
 
-  const formatCount = (val?: number) => {
-    const num = val ?? 0;
-    return num < 10 ? `0${num}` : `${num}`;
+  const formatCount = (val?: number | null) => {
+    if (val === undefined || val === null) {
+      return '—';
+    }
+    return val < 10 ? `0${val}` : `${val}`;
   };
 
   // Filter Registry Items
@@ -208,7 +216,7 @@ export const DashboardScreen: React.FC = () => {
                 </Text>
                 <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 2 }}>
                   <Text style={styles.welcomeSubtext}>
-                    ID: {profile?.officer_id || 'DOCA-INSP-842'} • {todayStr}
+                    ID: {profile?.officer_id || 'ID Pending'} • {todayStr}
                   </Text>
                   <View style={[styles.roleBadge, styles.roleBadgeInspector]}>
                     <Text style={[styles.roleBadgeText, styles.roleBadgeTextInspector]}>
@@ -232,6 +240,14 @@ export const DashboardScreen: React.FC = () => {
             <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 40 }} />
           ) : (
             <>
+              {kpiError && (
+                <View style={{ flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between', backgroundColor: colors.statusAmberBg, paddingHorizontal: 12, paddingVertical: 8, borderRadius: borderRadius.sm, marginHorizontal: spacing.marginX, marginBottom: 12, borderWidth: 1, borderColor: 'rgba(230, 81, 0, 0.25)' }}>
+                  <Text style={{ fontSize: 12, color: colors.statusAmberText, flex: 1 }}>Unable to load live dashboard statistics.</Text>
+                  <TouchableOpacity onPress={() => loadData(false)} activeOpacity={0.7} style={{ paddingHorizontal: 8, paddingVertical: 4 }}>
+                    <Text style={{ fontSize: 12, fontWeight: '700', color: colors.statusAmberText }}>Retry</Text>
+                  </TouchableOpacity>
+                </View>
+              )}
               {/* Statutory KPI Grid (All 7 Metrics) */}
               <View style={styles.metricsContainer}>
                 {/* Row 1: Core Lifecycle */}

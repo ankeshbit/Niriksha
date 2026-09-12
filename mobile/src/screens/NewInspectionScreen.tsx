@@ -567,8 +567,8 @@ export const NewInspectionScreen: React.FC = () => {
   });
 
   const inspectorIdString = profile
-    ? `${profile.full_name || 'Rajesh Kumar'} (${profile.officer_id || 'LM-IND-442'})`
-    : 'Rajesh Kumar (LM-IND-442)';
+    ? `${profile.full_name || 'Inspector'} (${profile.officer_id || 'ID Pending'})`
+    : 'Authenticated Inspector';
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>

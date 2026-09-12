@@ -131,49 +131,31 @@ def setup_test_environment():
     """
     # ── HARD SAFETY GUARD: NEVER ALLOW DESTRUCTIVE OPS AGAINST PRODUCTION ─────
     engine_url_str = str(test_engine.url)
-    if engine_url_str.startswith("sqlite"):
-        raise RuntimeError("[CRITICAL SAFETY ERROR] Test engine must not use SQLite.")
-
-    # 1. Reject if test engine URL equals production URL
     if _PROD_URL:
-        _norm_engine = engine_url_str.replace("postgresql+psycopg", "postgresql").split("?")[0].rstrip("/")
-        _norm_prod = _PROD_URL.replace("postgresql+psycopg", "postgresql").split("?")[0].rstrip("/")
-        if _norm_engine == _norm_prod:
-            raise RuntimeError(
-                "[CRITICAL SAFETY ERROR] Test engine resolves to production DATABASE_URL!\n"
-                f"Destructive operation (drop_all/create_all) aborted immediately to protect production data."
-            )
-
-        # 2. Reject if resolved physical hostname and database name match production
-        _p_prod = _urlparse(_PROD_URL.replace("postgresql+psycopg", "postgresql"))
-        _p_test = _urlparse(engine_url_str.replace("postgresql+psycopg", "postgresql"))
-        _h_prod = (_p_prod.hostname or _p_prod.netloc.split("@")[-1]).lower()
-        _h_test = (_p_test.hostname or _p_test.netloc.split("@")[-1]).lower()
-        _d_prod = _p_prod.path.lstrip("/").split("?")[0].lower()
-        _d_test = _p_test.path.lstrip("/").split("?")[0].lower()
-        if _h_prod and _h_test and _h_prod == _h_test and _d_prod == _d_test:
-            raise RuntimeError(
-                f"[CRITICAL SAFETY ERROR] Test engine resolves to the same physical database as production!\n"
-                f"Host: {_h_test!r}, Database: {_d_test!r}\n"
-                f"Destructive operation (drop_all/create_all) aborted immediately to protect production data."
-            )
+        from backend.database import verify_test_database_safety
+        verify_test_database_safety(_PROD_URL, engine_url_str)
 
     # Runtime guard: test reports must not be production reports dir
     reports_dir_str = str(main_module.REPORTS_DIR).replace("\\", "/")
     if reports_dir_str.endswith("generated_reports") or "generated_reports" in reports_dir_str.split("/"):
         raise RuntimeError("Test report paths cannot point to generated_reports/.")
 
-    # ── Guaranteed clean slate: drop and recreate all tables ──────────────────
-    Base.metadata.drop_all(bind=test_engine)
+    # ── Safe test schema creation: Ensure all tables and columns exist ──────────
     Base.metadata.create_all(bind=test_engine)
+    try:
+        from backend.schema_migration import migrate
+        migrate()
+    except Exception as _mig_err:
+        print(f"[Conftest Warning] Schema migration notice: {_mig_err}")
 
-    # Seed test user and rule versions
+    # Seed test users, counters, and rule versions
     db = TestSessionLocal()
     try:
-        from backend.models import User, RuleVersion
+        from datetime import datetime
+        from backend.models import User, RuleVersion, InspectionNumberCounter
         from backend.auth_utils import hash_password
 
-        # 1. Seed test officer
+        # 1. Seed test inspector
         officer = db.query(User).filter(User.officer_id == settings.SEED_OFFICER_ID).first()
         if not officer:
             officer = User(
@@ -188,7 +170,44 @@ def setup_test_environment():
             )
             db.add(officer)
 
-        # 2. Seed PCR 2011 Rules
+        # 2. Seed test supervisor
+        supervisor = db.query(User).filter(User.officer_id == "DOCA-SUP-101").first()
+        if not supervisor:
+            supervisor = User(
+                officer_id="DOCA-SUP-101",
+                full_name="Supervisor Anjali Sharma",
+                email="anjali.sharma@lm.gov.in",
+                phone="+91 98765 11101",
+                designation="Supervisory Officer (Legal Metrology)",
+                zone="Northern Zone - Delhi HQ",
+                password_hash=hash_password("admin123"),
+                role="SUPERVISOR"
+            )
+            db.add(supervisor)
+
+        # 3. Seed test admin
+        admin_user = db.query(User).filter(User.officer_id == "DOCA-ADMIN-001").first()
+        if not admin_user:
+            admin_user = User(
+                officer_id="DOCA-ADMIN-001",
+                full_name="Director Vikram Malhotra",
+                email="vikram.malhotra@lm.gov.in",
+                phone="+91 98765 00001",
+                designation="Director of Legal Metrology (Admin)",
+                zone="HQ - New Delhi",
+                password_hash=hash_password("admin123"),
+                role="ADMIN"
+            )
+            db.add(admin_user)
+
+        # 4. Seed counters for current year & 2026
+        current_year = datetime.utcnow().year
+        for yr in (current_year, 2026):
+            counter = db.query(InspectionNumberCounter).filter(InspectionNumberCounter.year == yr).first()
+            if not counter:
+                db.add(InspectionNumberCounter(year=yr, next_number=1))
+
+        # 5. Seed PCR 2011 Rules
         from backend.rule_engine.registry import get_all_rules
         for r_def in get_all_rules():
             existing_rule = db.query(RuleVersion).filter(

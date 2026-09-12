@@ -17,7 +17,7 @@ from fastapi.testclient import TestClient
 # Note: DATABASE_URL is configured by tests/conftest.py to point to the PostgreSQL test database.
 from backend.main import app
 from backend.config import settings
-from backend.database import SessionLocal, get_db
+from backend.database import SessionLocal, get_db, engine
 from backend.models import User, Inspection, Product, ProductImage
 from backend.ocr_service import OCRResultData, OCRTextBox
 

@@ -234,36 +234,6 @@ class DeclarationValidationMatrixResponse(BaseModel):
     manual_verification_count: int
     generated_at: str
 
-class ComplianceSummaryResponse(BaseModel):
-    inspection_id: str
-    overall_status: str
-    total_mandatory: int = 7
-    mandatory_detected: int = 0
-    mandatory_missing: int = 0
-    mandatory_correct: int = 0
-    mandatory_uncertain: int = 0
-    placement_compliant: int = 0
-    placement_uncertain: int = 0
-    placement_non_compliant: int = 0
-    readability_good: int = 0
-    readability_uncertain: int = 0
-    readability_poor: int = 0
-    font_size_compliant: int = 0
-    font_size_non_compliant: int = 0
-    font_size_undeterminable: int = 0
-    listing_comparison_matched: int = 0
-    listing_comparison_mismatched: int = 0
-    listing_comparison_uncertain: int = 0
-    potential_violations_count: int = 0
-    manual_verification_count: int = 0
-    timestamp: str
-
-class UpdateDeclarationRequest(BaseModel):
-    corrected_value: Optional[str] = None
-    verification_status: Optional[str] = "VERIFIED"
-    correction_reason: Optional[str] = None
-    is_applicable: Optional[bool] = None
-
 class EvidenceResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -296,6 +266,50 @@ class FindingResponse(BaseModel):
     adjudicated_at: Optional[datetime] = None
     created_at: datetime
     evidence_items: List[EvidenceResponse] = []
+    category: Optional[str] = "CATEGORY_A_LEGAL"
+    status: Optional[str] = None
+    adjudication: Optional[str] = None
+    description: Optional[str] = None
+
+class ComplianceSummaryResponse(BaseModel):
+    inspection_id: str
+    inspection_number: Optional[str] = None
+    overall_status: str
+    evaluation_completed: bool = False
+    # Semantically clear bucket names (mutually exclusive, cover all rows)
+    compliant_checks: int = 0           # PASS + NOT_APPLICABLE + DISMISSED/CORRECTED
+    no_potential_violations: int = 0     # backward-compat alias for compliant_checks
+    potential_non_compliance: int = 0
+    needs_manual_verification: int = 0
+    warnings: int = 0                    # CATEGORY_B_DATA_QUALITY only when not already in another bucket
+    total_findings: int = 0              # total ComplianceCheck rows for this inspection
+    findings: List[FindingResponse] = []
+    total_mandatory: int = 7
+    mandatory_detected: int = 0
+    mandatory_missing: int = 0
+    mandatory_correct: int = 0
+    mandatory_uncertain: int = 0
+    placement_compliant: int = 0
+    placement_uncertain: int = 0
+    placement_non_compliant: int = 0
+    readability_good: int = 0
+    readability_uncertain: int = 0
+    readability_poor: int = 0
+    font_size_compliant: int = 0
+    font_size_non_compliant: int = 0
+    font_size_undeterminable: int = 0
+    listing_comparison_matched: int = 0
+    listing_comparison_mismatched: int = 0
+    listing_comparison_uncertain: int = 0
+    potential_violations_count: int = 0
+    manual_verification_count: int = 0
+    timestamp: str
+
+class UpdateDeclarationRequest(BaseModel):
+    corrected_value: Optional[str] = None
+    verification_status: Optional[str] = "VERIFIED"
+    correction_reason: Optional[str] = None
+    is_applicable: Optional[bool] = None
 
 class AdjudicateFindingRequest(BaseModel):
     action: Optional[str] = Field(None, description="Action: CONFIRMED, DISMISSED, NEEDS_MORE_EVIDENCE, NOT_APPLICABLE, CORRECTED")
@@ -360,6 +374,7 @@ class ReportResponse(BaseModel):
     product_name: Optional[str] = None
     location: Optional[str] = None
     overall_status: Optional[str] = None
+    pdf_hash: Optional[str] = None
 
 class FinalizeInspectionRequest(BaseModel):
     final_status: Optional[str] = None
@@ -603,6 +618,7 @@ class RepositoryReportItem(BaseModel):
     generated_at: datetime
     legal_safety_statement: str
     overall_status: Optional[str] = None
+    pdf_hash: Optional[str] = None
 
 
 class RepositoryReportsResponse(BaseModel):
@@ -723,6 +739,100 @@ class AdjudicateComparisonRequest(BaseModel):
         description="Adjudication outcome: VERIFIED_MATCH, CONFIRMED_DISCREPANCY, or DISMISSED_DISCREPANCY"
     )
     remarks: Optional[str] = Field(None, description="Inspector justification notes")
+
+
+# ----------------- Supervisor Role & Management Schemas -----------------
+
+class DeleteInspectionRequest(BaseModel):
+    """Payload requiring explicit confirmation of inspection number before destructive deletion."""
+    confirmation_inspection_number: str = Field(
+        ...,
+        description="Must match the exact inspection number (e.g. LM-2026-00023) to confirm deletion."
+    )
+    reason: Optional[str] = Field(None, description="Management justification or audit reason for deletion.")
+
+
+class DeleteInspectionResponse(BaseModel):
+    success: bool = True
+    message: str
+    inspection_id: str
+    inspection_number: str
+
+
+class DeleteReportResponse(BaseModel):
+    success: bool = True
+    message: str
+    inspection_id: str
+    report_id: Optional[str] = None
+
+
+class SupervisorDashboardResponse(BaseModel):
+    """Real-time management metrics aggregated strictly from Neon PostgreSQL."""
+    total_inspections: int
+    today_inspections: int
+    completed_inspections: int
+    pending_inspections: int
+    manual_verification_required: int
+    potential_non_compliance: int
+    reports_generated: int
+    active_inspectors_count: int
+    recent_submissions: List[RecentInspectionItem] = []
+    inspections_by_inspector: List[Dict[str, Any]] = []
+    inspections_by_category: Dict[str, int] = {}
+    inspections_by_status: Dict[str, int] = {}
+    inspections_by_date: List[Dict[str, Any]] = []
+    inspections_requiring_attention: List[Dict[str, Any]] = []
+
+
+class SupervisorInspectorSummary(BaseModel):
+    inspector_id: str
+    officer_id: str
+    full_name: str
+    designation: str
+    zone: str
+    email: Optional[str] = None
+    phone: Optional[str] = None
+    total_inspections: int
+    completed_inspections: int
+    pending_inspections: int
+    potential_non_compliance: int
+    manual_verification_required: int
+    reports_generated: int
+    last_active: Optional[datetime] = None
+
+
+class SupervisorInspectorsListResponse(BaseModel):
+    inspectors: List[SupervisorInspectorSummary] = []
+    total_count: int = 0
+
+
+class SupervisorInspectionSummaryItem(BaseModel):
+    """Lightweight summary model for Supervisor repository listing (omits heavy OCR/declarations)."""
+    id: str
+    inspection_number: str
+    product_name: str
+    brand_name: Optional[str] = None
+    category: str
+    location: str
+    inspector_id: Optional[str] = None
+    inspector_name: Optional[str] = None
+    status: str
+    overall_status: Optional[str] = None
+    created_at: datetime
+    finalized_at: Optional[datetime] = None
+    has_report: bool = False
+    report_id: Optional[str] = None
+    findings_count: int = 0
+    non_compliant_count: int = 0
+
+
+class SupervisorInspectionsListResponse(BaseModel):
+    """Paginated response for Supervisor All Inspections repository."""
+    items: List[SupervisorInspectionSummaryItem] = []
+    total_count: int = 0
+    page: int = 1
+    page_size: int = 20
+    total_pages: int = 1
 
 
 

@@ -28,21 +28,43 @@ def seed_database():
             # with hardcoded defaults. Existing data is preserved as-is.
             print(f"[Seed] Development officer account already exists: {settings.SEED_OFFICER_ID}")
 
-        # 1b. Seed Development Supervisor Account
-        existing_sup = db.query(User).filter(User.officer_id == "DOCA-SUP-101").first()
+        # 1b. Seed Development/Production Supervisor Account (Idempotent)
+        existing_sup = db.query(User).filter(User.officer_id == settings.SEED_SUPERVISOR_ID).first()
         if not existing_sup:
-            sup = User(
-                officer_id="DOCA-SUP-101",
-                full_name="Supervisor Anjali Sharma",
-                email="anjali.sharma@lm.gov.in",
-                phone="+91 98765 11101",
-                designation="Supervisory Officer (Legal Metrology)",
-                zone="Northern Zone - Delhi HQ",
-                password_hash=hash_password("admin123"),
-                role="SUPERVISOR"
-            )
-            db.add(sup)
-            print("[Seed] Created development supervisor account: DOCA-SUP-101")
+            if settings.SEED_SUPERVISOR_PASSWORD:
+                sup = User(
+                    officer_id=settings.SEED_SUPERVISOR_ID,
+                    full_name=settings.SEED_SUPERVISOR_NAME,
+                    email="supervisor@lm.gov.in",
+                    phone="+91 98765 11101",
+                    designation=settings.SEED_SUPERVISOR_DESIGNATION,
+                    zone=settings.SEED_SUPERVISOR_ZONE,
+                    password_hash=hash_password(settings.SEED_SUPERVISOR_PASSWORD),
+                    role="SUPERVISOR"
+                )
+                db.add(sup)
+                print(f"[Seed] Created supervisor account: {settings.SEED_SUPERVISOR_ID}")
+            else:
+                print(f"[Seed Warning] SEED_SUPERVISOR_PASSWORD not set. Cannot create {settings.SEED_SUPERVISOR_ID}.")
+        else:
+            # Ensure role, name, and usable password hash are up to date
+            needs_update = False
+            if existing_sup.role != "SUPERVISOR":
+                existing_sup.role = "SUPERVISOR"
+                needs_update = True
+            if existing_sup.full_name != settings.SEED_SUPERVISOR_NAME:
+                existing_sup.full_name = settings.SEED_SUPERVISOR_NAME
+                needs_update = True
+            if settings.SEED_SUPERVISOR_PASSWORD:
+                from backend.auth_utils import verify_password
+                if not verify_password(settings.SEED_SUPERVISOR_PASSWORD, existing_sup.password_hash):
+                    existing_sup.password_hash = hash_password(settings.SEED_SUPERVISOR_PASSWORD)
+                    needs_update = True
+            if needs_update:
+                db.commit()
+                print(f"[Seed] Verified and synchronized supervisor account: {settings.SEED_SUPERVISOR_ID}")
+            else:
+                print(f"[Seed] Supervisor account verified and usable: {settings.SEED_SUPERVISOR_ID}")
 
         # 1c. Seed Development Admin Account
         existing_admin = db.query(User).filter(User.officer_id == "DOCA-ADMIN-001").first()

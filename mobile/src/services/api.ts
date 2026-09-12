@@ -328,14 +328,15 @@ export const api = {
 
   // OCR & Declarations
   /**
-   * FIX-RC-5: OCR uses 180s timeout (3 minutes).
-   * PaddleOCR is CPU-heavy. A slow response is NOT a connectivity failure.
-   * This prevents the "Failed to fetch" / false OFFLINE classification during OCR.
+   * OCR uses 600s timeout (10 minutes).
+   * Sequential CPU inference on multiple package sides (e.g. 78 text boxes across Front + Back)
+   * can take ~470-500s. A generous 10-minute window prevents false client-side aborts while
+   * the backend is actively performing inference.
    */
   runOCR: (inspectionId: string) =>
     apiRequest(`/api/inspections/${inspectionId}/ocr`, {
       method: 'POST',
-      timeoutMs: 180000,
+      timeoutMs: 600000,
     }),
   getDeclarations: (inspectionId: string) =>
     apiRequest(`/api/inspections/${inspectionId}/declarations`),
@@ -468,4 +469,47 @@ export const api = {
     }
     return apiRequest(`/api/products/${encodeURIComponent(productKey)}/history${query}`);
   },
+
+  // Supervisor Management Endpoints
+  getSupervisorDashboard: () => apiRequest('/api/supervisor/dashboard'),
+  getSupervisorInspectors: () => apiRequest('/api/supervisor/inspectors'),
+  getSupervisorInspections: (params?: {
+    page?: number;
+    page_size?: number;
+    search?: string;
+    inspector_id?: string;
+    status?: string;
+    overall_status?: string;
+    category?: string;
+    has_report?: boolean;
+    date_from?: string;
+    date_to?: string;
+    sort_by?: string;
+    sort_order?: string;
+  }) => {
+    let query = '';
+    if (params) {
+      const cleanParams: Record<string, string> = {};
+      Object.entries(params).forEach(([k, v]) => {
+        if (v !== undefined && v !== null && String(v).trim() !== '') {
+          cleanParams[k] = String(v);
+        }
+      });
+      const q = new URLSearchParams(cleanParams).toString();
+      if (q) query = '?' + q;
+    }
+    return apiRequest(`/api/supervisor/inspections${query}`);
+  },
+  deleteInspection: (inspectionId: string, confirmationInspectionNumber: string, reason?: string) =>
+    apiRequest(`/api/inspections/${inspectionId}`, {
+      method: 'DELETE',
+      body: {
+        confirmation_inspection_number: confirmationInspectionNumber,
+        reason: reason || 'Supervisor administrative deletion',
+      },
+    }),
+  deleteReport: (inspectionId: string) =>
+    apiRequest(`/api/inspections/${inspectionId}/report`, {
+      method: 'DELETE',
+    }),
 };

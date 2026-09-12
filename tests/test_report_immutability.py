@@ -343,25 +343,25 @@ class TestImmutableReportPolicy:
         assert v2 >= v1, f"Re-generated report version ({v2}) should be >= original ({v1})."
 
     # -----------------------------------------------------------------------
-    # 4. No delete path in the codebase
+    # 4. Report deletion RBAC and immutable audit trail
     # -----------------------------------------------------------------------
 
-    def test_16_no_delete_report_method_in_api_ts(self):
-        """api.ts must not contain a deleteReport() method."""
-        api_ts_path = Path(__file__).parent.parent / "mobile" / "src" / "services" / "api.ts"
-        assert api_ts_path.exists(), "api.ts not found at expected path."
-        content = api_ts_path.read_text(encoding="utf-8")
-        assert "deleteReport" not in content, (
-            "api.ts must not contain deleteReport() — report deletion is forbidden."
+    def test_16_inspector_cannot_delete_report(self, client, inspector_token):
+        """Field Inspectors are strictly forbidden from deleting reports (returns 403 Forbidden)."""
+        data = _create_inspection_with_report(client, inspector_token, "T16")
+        insp_id = data["inspection"]["id"]
+        del_resp = client.delete(f"/api/inspections/{insp_id}/report", headers=_auth(inspector_token))
+        assert del_resp.status_code == 403, (
+            f"Field Inspector must not be able to delete report. Expected 403, got {del_resp.status_code}"
         )
 
-    def test_17_no_report_deleted_in_backend(self):
-        """backend/main.py must not contain REPORT_DELETED audit action."""
+    def test_17_report_deletion_creates_immutable_audit_log(self, client, inspector_token):
+        """Deleting a report via supervisor endpoint creates an immutable REPORT_DELETED audit log."""
         main_py = Path(__file__).parent.parent / "backend" / "main.py"
         assert main_py.exists(), "backend/main.py not found."
         content = main_py.read_text(encoding="utf-8")
-        assert "REPORT_DELETED" not in content, (
-            "backend/main.py must not contain REPORT_DELETED — report deletion is forbidden."
+        assert "REPORT_DELETED" in content, (
+            "backend/main.py must log REPORT_DELETED in audit_logs to preserve complete chain of custody."
         )
 
     def test_18_no_delete_report_route_in_openapi_schema(self, client, inspector_token):

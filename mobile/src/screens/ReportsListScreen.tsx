@@ -48,6 +48,7 @@ export interface ReportItem {
   location?: string;
   overall_status?: string;
   status?: string;
+  pdf_hash?: string;
 }
 
 
@@ -314,7 +315,7 @@ export const ReportsListScreen: React.FC = () => {
       const docxUrl = `${baseUrl}/api/inspections/${reportItem.inspection_id}/report/docx`;
       const token = await authStorage.getToken();
 
-      const safeNum = (reportItem.inspection_number || 'LM-2026').replace(/-/g, '_').replace(/\//g, '_');
+      const safeNum = (reportItem.inspection_number || reportItem.inspection_id || 'Report').replace(/-/g, '_').replace(/\//g, '_');
       const localFilename = `LM_Report_${safeNum}_v${reportItem.report_version || 1}.docx`;
 
       if (Platform.OS === 'web') {
@@ -665,6 +666,19 @@ export const ReportsListScreen: React.FC = () => {
                       <View style={styles.productDescBox}>
                         <Text style={styles.productNameText}>{item.product_name || 'Packaged Commodity'}</Text>
                         <Text style={styles.productLocationText}>{item.location || 'Field Location'}</Text>
+                        {item.pdf_hash ? (
+                          <Text
+                            style={{
+                              fontSize: 10,
+                              color: colors.onSurfaceVariant,
+                              fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+                              marginTop: 4,
+                            }}
+                            numberOfLines={1}
+                          >
+                            SHA-256: {item.pdf_hash}
+                          </Text>
+                        ) : null}
                       </View>
 
                       <View style={styles.rowActions}>

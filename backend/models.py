@@ -143,7 +143,7 @@ class Declaration(Base):
     verified_by = Column(String(100), nullable=True)  # Officer ID
     verified_at = Column(DateTime, nullable=True)
     correction_reason = Column(Text, nullable=True)
-    source_image_id = Column(String(36), ForeignKey("product_images.id"), nullable=True)
+    source_image_id = Column(String(36), ForeignKey("product_images.id", ondelete="SET NULL"), nullable=True)
     # PS 26034 Extended Analytical & Legal Validation Attributes
     placement_status = Column(String(50), default="NOT_DETERMINABLE")  # PLACEMENT_COMPLIANT, PLACEMENT_NON_COMPLIANT, PLACEMENT_UNCERTAIN, NOT_DETERMINABLE, NOT_APPLICABLE, MANUAL_VERIFICATION_REQUIRED
     placement_details_json = Column(Text, nullable=True)
@@ -220,7 +220,7 @@ class Evidence(Base):
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
     check_id = Column(String(36), ForeignKey("compliance_checks.id"), nullable=False)
-    image_id = Column(String(36), ForeignKey("product_images.id"), nullable=True)
+    image_id = Column(String(36), ForeignKey("product_images.id", ondelete="SET NULL"), nullable=True)
     bounding_box_json = Column(Text, nullable=True)  # [x1, y1, x2, y2]
     crop_image_path = Column(String(500), nullable=True)
     highlight_text = Column(Text, nullable=False)
@@ -253,7 +253,7 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
-    inspection_id = Column(String(36), ForeignKey("inspections.id"), nullable=True)
+    inspection_id = Column(String(36), ForeignKey("inspections.id", ondelete="SET NULL"), nullable=True)
     actor_id = Column(String(100), nullable=False)
     action = Column(String(100), nullable=False)  # e.g. OCR_RUN, DECLARATION_VERIFIED, FINDING_ADJUDICATED
     entity_type = Column(String(100), nullable=False)  # 'inspection', 'declaration', 'compliance_check'
@@ -273,6 +273,7 @@ class Report(Base):
     report_version = Column(Integer, default=1, nullable=False)
     pdf_path = Column(String(500), nullable=False)
     docx_path = Column(String(500), nullable=True)
+    pdf_hash = Column(String(64), nullable=True)
     legal_safety_statement = Column(Text, nullable=False)
     generated_at = Column(DateTime, default=datetime.utcnow)
 
@@ -335,7 +336,7 @@ class ListingComparison(Base):
     difference_explanation = Column(Text, nullable=True)
     package_ocr_evidence = Column(Text, nullable=True)
     ocr_confidence = Column(Float, default=0.0)
-    source_image_id = Column(String(36), ForeignKey("product_images.id"), nullable=True)
+    source_image_id = Column(String(36), ForeignKey("product_images.id", ondelete="SET NULL"), nullable=True)
     bounding_box_json = Column(Text, nullable=True)
     applicable_rule_code = Column(String(100), nullable=True)  # e.g. PCR_RULE_18_2A_ONLINE_PRICE_OVERCHARGING, PCR_RULE_06_10_ECOMMERCE_DECLARATION
     inspector_status = Column(String(50), default="PENDING_REVIEW", nullable=False)  # 'PENDING_REVIEW', 'VERIFIED_MATCH', 'CONFIRMED_DISCREPANCY', 'DISMISSED_DISCREPANCY'

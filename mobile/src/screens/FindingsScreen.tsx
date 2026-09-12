@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useCallback } from 'react';
 import {
   View,
   Text,
@@ -16,7 +16,7 @@ import { colors, typography, spacing, borderRadius } from '../theme/tokens';
 import { BottomNav } from '../components/BottomNav';
 import { ProfileAvatar } from '../components/ProfileAvatar';
 import { api } from '../services/api';
-import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
+import { useNavigation, useRoute, useFocusEffect, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
 
@@ -27,9 +27,14 @@ export const FindingsScreen: React.FC = () => {
   const route = useRoute<RouteProp<RootStackParamList, 'Findings'>>();
   const { inspectionId, inspectionNumber } = route.params;
 
+  const targetId = inspectionId || inspectionNumber;
+
   const [findings, setFindings] = useState<any[]>([]);
+  const [summary, setSummary] = useState<any>(null);
   const [inspection, setInspection] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
+  const [evaluating, setEvaluating] = useState(false);
 
   // Adjudication Modal state
   const [adjudicatingFinding, setAdjudicatingFinding] = useState<any | null>(null);
@@ -39,28 +44,70 @@ export const FindingsScreen: React.FC = () => {
   const [savingAction, setSavingAction] = useState(false);
 
   const loadFindings = async () => {
+    if (!targetId) {
+      setError('Unable to load inspection findings: No inspection ID provided.');
+      setLoading(false);
+      return;
+    }
+
     try {
-      const [findingsData, inspData] = await Promise.all([
-        api.getFindings(inspectionId).catch(() => []),
-        api.getInspection(inspectionId).catch(() => null),
+      setLoading(true);
+      setError(null);
+
+      // Fetch live compliance summary and inspection details concurrently
+      const [summaryRes, inspRes] = await Promise.allSettled([
+        api.getComplianceSummary(targetId),
+        api.getInspection(targetId),
       ]);
-      if (inspData) setInspection(inspData);
-      let data = findingsData;
-      if (!data || data.length === 0) {
-        const evalRes = await api.evaluateRules(inspectionId);
-        data = evalRes.findings || [];
+
+      if (inspRes.status === 'fulfilled' && inspRes.value) {
+        setInspection(inspRes.value);
       }
-      setFindings(data || []);
-    } catch (err) {
-      console.error('Failed to load findings:', err);
+
+      if (summaryRes.status === 'fulfilled' && summaryRes.value) {
+        const sumData = summaryRes.value;
+        setSummary(sumData);
+        if (Array.isArray(sumData.findings) && sumData.findings.length > 0) {
+          setFindings(sumData.findings);
+        } else {
+          // If summary doesn't contain findings array, fetch via dedicated findings endpoint
+          const findingsList = await api.getFindings(targetId);
+          setFindings(Array.isArray(findingsList) ? findingsList : []);
+        }
+      } else {
+        // If compliance-summary endpoint failed, attempt fallback to findings endpoint
+        const findingsList = await api.getFindings(targetId);
+        setFindings(Array.isArray(findingsList) ? findingsList : []);
+      }
+    } catch (err: any) {
+      console.error('Failed to load live findings for inspection', targetId, err);
+      setError('Unable to load inspection findings');
+      setFindings([]);
+      setSummary(null);
     } finally {
       setLoading(false);
     }
   };
 
-  useEffect(() => {
-    loadFindings();
-  }, [inspectionId]);
+  // Refetch live database state whenever screen is focused
+  useFocusEffect(
+    useCallback(() => {
+      loadFindings();
+    }, [targetId])
+  );
+
+  const handleRunEvaluation = async () => {
+    if (!targetId) return;
+    try {
+      setEvaluating(true);
+      await api.evaluateRules(targetId);
+      await loadFindings();
+    } catch (err: any) {
+      Alert.alert('Evaluation Error', err.message || 'Failed to run statutory rule evaluation.');
+    } finally {
+      setEvaluating(false);
+    }
+  };
 
   const openModal = (finding: any, action: AdjudicationAction) => {
     setAdjudicatingFinding(finding);
@@ -86,7 +133,7 @@ export const FindingsScreen: React.FC = () => {
           onPress: async () => {
             try {
               await api.requestNewImage(finding.id);
-              navigation.navigate('CaptureImages', { inspectionId, inspectionNumber });
+              navigation.navigate('CaptureImages', { inspectionId: targetId || '', inspectionNumber });
             } catch (err: any) {
               Alert.alert('Error', err.message || 'Could not initiate new image request.');
             }
@@ -124,21 +171,70 @@ export const FindingsScreen: React.FC = () => {
     }
   };
 
-  // Counts for 4 Summary Cards (Real Database Calculated Values)
-  const passedCount = findings.filter((f) => f.status === 'PASS' || f.adjudication === 'DISMISSED').length;
-  const potentialCount = findings.filter((f) => f.status === 'FAIL' || f.adjudication === 'CONFIRMED').length;
-  const needsVerificationCount =
-    findings.filter((f) => f.status === 'WARNING' || f.adjudication === 'NEEDS_MORE_EVIDENCE' || f.status === 'NEEDS_MANUAL_VERIFICATION').length;
-  const warningsCount = findings.filter((f) => f.category === 'DATA_QUALITY' || f.status === 'WARNING').length;
+  // ── Card 1: compliant_checks ──────────────────────────────────────────────
+  // Prefer semantically-named field, fall back to backward-compat alias, then
+  // compute locally from findings (PASS + NOT_APPLICABLE + DISMISSED/CORRECTED).
+  const passedCount = summary?.compliant_checks ?? summary?.no_potential_violations ?? (findings ? findings.filter((f) =>
+    ((['PASS', 'NOT_APPLICABLE'].includes(f.result_state)) &&
+      f.adjudication_status !== 'CONFIRMED' &&
+      f.adjudication_status !== 'NEEDS_MORE_EVIDENCE') ||
+    f.adjudication_status === 'DISMISSED' ||
+    f.adjudication_status === 'CORRECTED'
+  ).length : 0);
 
-  const legalFindings = findings.filter((f) => f.category !== 'DATA_QUALITY');
-  const qualityFindings = findings.filter((f) => f.category === 'DATA_QUALITY');
+  // ── Card 2: potential_non_compliance ──────────────────────────────────────
+  const potentialCount = summary?.potential_non_compliance ?? (findings ? findings.filter((f) =>
+    (f.result_state === 'POTENTIAL_NON_COMPLIANCE' &&
+      f.adjudication_status !== 'DISMISSED' &&
+      f.adjudication_status !== 'NOT_APPLICABLE' &&
+      f.adjudication_status !== 'CORRECTED') ||
+    (f.adjudication_status === 'CONFIRMED' && f.result_state !== 'POTENTIAL_NON_COMPLIANCE')
+  ).length : 0);
 
-  const todayStr = new Date().toLocaleDateString('en-GB', {
-    day: 'numeric',
-    month: 'short',
-    year: 'numeric',
-  });
+  // ── Card 3: needs_manual_verification ────────────────────────────────────
+  // Excludes checks that are already in the potential_nc bucket.
+  const needsVerificationCount = summary?.needs_manual_verification ?? (findings ? findings.filter((f) =>
+    (['NEEDS_MANUAL_VERIFICATION', 'INSUFFICIENT_EVIDENCE'].includes(f.result_state) &&
+      f.adjudication_status !== 'CONFIRMED' &&
+      f.adjudication_status !== 'DISMISSED' &&
+      f.adjudication_status !== 'NOT_APPLICABLE' &&
+      f.adjudication_status !== 'CORRECTED') ||
+    f.adjudication_status === 'NEEDS_MORE_EVIDENCE'
+  ).length : 0);
+
+  // ── Card 4: warnings — data quality only ─────────────────────────────────
+  // Only CATEGORY_B_DATA_QUALITY checks that are NOT already in compliant or
+  // manual_verification buckets (avoids double-counting with both buckets).
+  const warningsCount = summary?.warnings ?? (findings ? findings.filter((f) =>
+    (f.rule_code?.includes('DATA_QUAL') || f.category === 'DATA_QUALITY' || f.category === 'CATEGORY_B_DATA_QUALITY') &&
+    f.result_state !== 'PASS' &&
+    f.result_state !== 'NOT_APPLICABLE' &&
+    f.adjudication_status !== 'DISMISSED' &&
+    f.adjudication_status !== 'CORRECTED'
+  ).length : 0);
+
+  const legalFindings = findings.filter(
+    (f) => !f.rule_code?.includes('DATA_QUAL') && f.category !== 'DATA_QUALITY' && f.category !== 'CATEGORY_B_DATA_QUALITY'
+  );
+  const qualityFindings = findings.filter(
+    (f) => f.rule_code?.includes('DATA_QUAL') || f.category === 'DATA_QUALITY' || f.category === 'CATEGORY_B_DATA_QUALITY'
+  );
+
+  const isEvaluationPending = summary && !summary.evaluation_completed && findings.length === 0;
+
+  const displayInspectionNumber = inspection?.inspection_number || inspectionNumber || (inspectionId ? `ID: ${inspectionId.substring(0, 8).toUpperCase()}` : '—');
+
+  const formattedDate = inspection?.created_at
+    ? new Date(inspection.created_at).toLocaleDateString('en-GB', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      })
+    : new Date().toLocaleDateString('en-GB', {
+        day: 'numeric',
+        month: 'short',
+        year: 'numeric',
+      });
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -163,19 +259,19 @@ export const FindingsScreen: React.FC = () => {
           <View style={styles.sectionHeaderBox}>
             <Text style={styles.sectionHeaderTitle}>Inspection Findings</Text>
             <Text style={styles.sectionHeaderSubtitle}>
-              Inspection: {inspectionNumber || (inspectionId ? `ID: ${inspectionId.substring(0, 8).toUpperCase()}` : 'In Progress')}
+              Inspection: {displayInspectionNumber}
             </Text>
           </View>
 
           {/* 4 Metric Summary Banners */}
           <View style={styles.metricsGrid}>
-            {/* Card 1: Passed */}
+            {/* Card 1: Compliant Checks (Pass / Not Applicable / Dismissed) */}
             <View style={[styles.metricCard, styles.cardGreen]}>
               <MaterialIcons name="check-circle" size={22} color={colors.statusGreenText} />
               <View style={{ flex: 1 }}>
                 <Text style={[styles.metricValue, { color: colors.statusGreenText }]}>{passedCount}</Text>
                 <Text style={[styles.metricLabel, { color: colors.statusGreenText }]}>
-                  No Potential Violations Detected
+                  Compliant Checks — No Violations Detected
                 </Text>
               </View>
             </View>
@@ -204,18 +300,55 @@ export const FindingsScreen: React.FC = () => {
               </View>
             </View>
 
-            {/* Card 4: Warnings */}
+            {/* Card 4: Data Quality Warnings */}
             <View style={[styles.metricCard, styles.cardGray]}>
               <MaterialIcons name="info" size={22} color={colors.secondary} />
               <View style={{ flex: 1 }}>
                 <Text style={[styles.metricValue, { color: colors.secondary }]}>{warningsCount}</Text>
-                <Text style={[styles.metricLabel, { color: colors.secondary }]}>Warnings</Text>
+                <Text style={[styles.metricLabel, { color: colors.secondary }]}>Data Quality Warnings</Text>
               </View>
             </View>
           </View>
 
           {loading ? (
             <ActivityIndicator size="large" color={colors.primary} style={{ marginVertical: 30 }} />
+          ) : error ? (
+            /* Explicit Error State with Retry button */
+            <View style={styles.errorCard}>
+              <MaterialIcons name="error-outline" size={36} color={colors.statusRedText} />
+              <Text style={styles.errorTitle}>Unable to load inspection findings</Text>
+              <Text style={styles.errorSubtitle}>{error}</Text>
+              <TouchableOpacity style={styles.retryBtn} onPress={loadFindings} activeOpacity={0.8}>
+                <MaterialIcons name="refresh" size={18} color="#ffffff" />
+                <Text style={styles.retryBtnText}>Retry</Text>
+              </TouchableOpacity>
+            </View>
+          ) : isEvaluationPending ? (
+            /* Explicit Pending Evaluation State */
+            <View style={styles.pendingCard}>
+              <MaterialIcons name="hourglass-empty" size={32} color={colors.statusAmberText} />
+              <View style={{ flex: 1 }}>
+                <Text style={styles.pendingTitle}>Compliance evaluation pending</Text>
+                <Text style={styles.pendingSubtitle}>
+                  Declarations have been extracted, but statutory compliance rules have not yet been evaluated for this inspection.
+                </Text>
+              </View>
+              <TouchableOpacity
+                style={styles.evaluateBtn}
+                onPress={handleRunEvaluation}
+                disabled={evaluating}
+                activeOpacity={0.8}
+              >
+                {evaluating ? (
+                  <ActivityIndicator size="small" color="#ffffff" />
+                ) : (
+                  <>
+                    <MaterialIcons name="play-arrow" size={18} color="#ffffff" />
+                    <Text style={styles.evaluateBtnText}>Evaluate Rules</Text>
+                  </>
+                )}
+              </TouchableOpacity>
+            </View>
           ) : (
             <>
               {/* Category A: Legal Compliance Checks */}
@@ -225,18 +358,30 @@ export const FindingsScreen: React.FC = () => {
                     <MaterialIcons name="balance" size={18} color={colors.primary} />
                     <Text style={styles.sectionBannerTitle}>LEGAL COMPLIANCE CHECKS</Text>
                   </View>
-                  <Text style={styles.sectionBannerSub}>Category A — Legal / Compliance</Text>
+                  <Text style={styles.sectionBannerSub}>Category A — Legal / Statutory Compliance</Text>
                 </View>
 
                 {legalFindings.length === 0 ? (
                   <View style={styles.emptyFindingRow}>
-                    <Text style={styles.emptyFindingText}>No legal compliance issues found.</Text>
+                    <MaterialIcons name="check-circle-outline" size={28} color={colors.statusGreenText} />
+                    <Text style={styles.emptyFindingText}>No legal non-compliance findings detected.</Text>
                   </View>
                 ) : (
                   legalFindings.map((finding, idx) => {
                     const isLast = idx === legalFindings.length - 1;
-                    const isFail = finding.status === 'FAIL' || finding.adjudication === 'CONFIRMED';
-                    const isWarn = finding.status === 'WARNING';
+                    const isFail =
+                      (finding.result_state === 'POTENTIAL_NON_COMPLIANCE' &&
+                        finding.adjudication_status !== 'DISMISSED' &&
+                        finding.adjudication_status !== 'NOT_APPLICABLE') ||
+                      finding.adjudication_status === 'CONFIRMED';
+                    const isWarn =
+                      finding.result_state === 'NEEDS_MANUAL_VERIFICATION' ||
+                      finding.result_state === 'INSUFFICIENT_EVIDENCE' ||
+                      finding.adjudication_status === 'NEEDS_MORE_EVIDENCE';
+
+                    const hasAdjudication = finding.adjudication_status && finding.adjudication_status !== 'PENDING';
+                    const evidenceList = finding.evidence || [];
+                    const firstEvidence = evidenceList.length > 0 ? evidenceList[0] : null;
 
                     return (
                       <View key={finding.id || idx} style={[styles.findingRow, !isLast && styles.rowBorder]}>
@@ -248,6 +393,20 @@ export const FindingsScreen: React.FC = () => {
                             style={{ marginTop: 2 }}
                           />
                           <View style={{ flex: 1 }}>
+                            {/* Rule Code & Category Badges */}
+                            <View style={styles.ruleCodeRow}>
+                              {finding.rule_code && (
+                                <View style={styles.ruleCodeBadge}>
+                                  <Text style={styles.ruleCodeText}>{finding.rule_code}</Text>
+                                </View>
+                              )}
+                              {finding.statutory_reference && (
+                                <Text style={styles.statutoryRefText} numberOfLines={1}>
+                                  {finding.statutory_reference}
+                                </Text>
+                              )}
+                            </View>
+
                             <View style={styles.findingTitleRow}>
                               <Text style={styles.findingTitleText}>{finding.title}</Text>
                               <View
@@ -262,10 +421,10 @@ export const FindingsScreen: React.FC = () => {
                                     isFail ? styles.badgeTextRed : isWarn ? styles.badgeTextAmber : styles.badgeTextGreen,
                                   ]}
                                 >
-                                  {finding.adjudication
-                                    ? `Decision: ${finding.adjudication}`
+                                  {hasAdjudication
+                                    ? `Decision: ${finding.adjudication_status}`
                                     : isFail
-                                    ? 'Potential Non-Compliance — Pending Inspector Confirmation'
+                                    ? 'Potential Non-Compliance'
                                     : isWarn
                                     ? 'Needs Manual Verification'
                                     : 'Compliant'}
@@ -273,7 +432,18 @@ export const FindingsScreen: React.FC = () => {
                               </View>
                             </View>
 
-                            <Text style={styles.findingDescText}>{finding.description}</Text>
+                            {/* Extracted Value Display if present */}
+                            {finding.extracted_value ? (
+                              <View style={styles.extractedValueBox}>
+                                <Text style={styles.extractedValueLabel}>Detected Value:</Text>
+                                <Text style={styles.extractedValueContent}>{finding.extracted_value}</Text>
+                              </View>
+                            ) : null}
+
+                            {/* Statutory Explanation */}
+                            <Text style={styles.findingDescText}>
+                              {finding.explanation || finding.description || 'Statutory rule verification executed.'}
+                            </Text>
 
                             {/* Physical Net Quantity Limitation Notice */}
                             {(finding.rule_code === 'PCR_RULE_06_1_C' || (finding.title && finding.title.toLowerCase().includes('net quantity'))) && (
@@ -285,33 +455,29 @@ export const FindingsScreen: React.FC = () => {
                               </View>
                             )}
 
-                            {/* AI Detection Basis */}
-                            <View style={styles.aiBasisBox}>
-                              <Text style={styles.aiBasisLabel}>AI Detection Basis</Text>
-                              <Text style={styles.aiBasisText}>
-                                {finding.ai_reasoning || finding.description}
-                              </Text>
-                            </View>
-
-                            {/* Evidence Attachment */}
-                            <View style={styles.evidenceRow}>
-                              <View style={styles.evidenceLeft}>
-                                <MaterialIcons name="image" size={16} color={colors.onSurfaceVariant} />
-                                <Text style={styles.evidenceFilename}>evidence_package_panel.jpg</Text>
+                            {/* Attached Evidence Link */}
+                            {firstEvidence && (
+                              <View style={styles.evidenceRow}>
+                                <View style={styles.evidenceLeft}>
+                                  <MaterialIcons name="image" size={16} color={colors.primary} />
+                                  <Text style={styles.evidenceFilename} numberOfLines={1}>
+                                    {firstEvidence.highlight_text || firstEvidence.reason || 'Attached Photographic Evidence'}
+                                  </Text>
+                                </View>
+                                <TouchableOpacity
+                                  onPress={() =>
+                                    navigation.navigate('EvidenceReview', {
+                                      inspectionId: targetId || '',
+                                      findingId: finding.id,
+                                    })
+                                  }
+                                >
+                                  <Text style={styles.viewEvidenceLink}>View Evidence</Text>
+                                </TouchableOpacity>
                               </View>
-                              <TouchableOpacity
-                                onPress={() =>
-                                  navigation.navigate('EvidenceReview', {
-                                    inspectionId,
-                                    findingId: finding.id,
-                                  })
-                                }
-                              >
-                                <Text style={styles.viewEvidenceLink}>View</Text>
-                              </TouchableOpacity>
-                            </View>
+                            )}
 
-                            {/* Action Buttons */}
+                            {/* Inspector Adjudication Actions */}
                             <View style={styles.actionsContainer}>
                               <TouchableOpacity
                                 style={styles.confirmBtn}
@@ -374,13 +540,15 @@ export const FindingsScreen: React.FC = () => {
                       <MaterialIcons name="warning" size={18} color={colors.statusAmberText} />
                       <Text style={styles.sectionBannerTitle}>DATA QUALITY WARNINGS</Text>
                     </View>
-                    <Text style={styles.sectionBannerSub}>Category B — Data Quality</Text>
+                    <Text style={styles.sectionBannerSub}>Category B — Data Quality & Syntax Validation</Text>
                   </View>
 
                   {qualityFindings.map((finding, idx) => (
                     <View key={finding.id || idx} style={styles.findingRow}>
                       <Text style={styles.findingTitleText}>{finding.title}</Text>
-                      <Text style={styles.findingDescText}>{finding.description}</Text>
+                      <Text style={styles.findingDescText}>
+                        {finding.explanation || finding.description || 'Data syntax warning.'}
+                      </Text>
                     </View>
                   ))}
                 </View>
@@ -401,7 +569,7 @@ export const FindingsScreen: React.FC = () => {
                 </View>
                 <View style={styles.contextItemRow}>
                   <Text style={styles.contextLabel}>Date:</Text>
-                  <Text style={styles.contextValue}>{todayStr}</Text>
+                  <Text style={styles.contextValue}>{formattedDate}</Text>
                 </View>
               </View>
 
@@ -410,8 +578,8 @@ export const FindingsScreen: React.FC = () => {
                 style={styles.proceedButton}
                 onPress={() =>
                   navigation.navigate('ReviewAndSubmit', {
-                    inspectionId,
-                    inspectionNumber,
+                    inspectionId: targetId || '',
+                    inspectionNumber: displayInspectionNumber,
                   })
                 }
                 activeOpacity={0.85}
@@ -423,7 +591,7 @@ export const FindingsScreen: React.FC = () => {
           )}
 
           <View style={styles.footerNote}>
-            <Text style={styles.footerNoteText}>Smart India Hackathon 2026 Prototype</Text>
+            <Text style={styles.footerNoteText}>Smart India Hackathon 2026 Prototype • Live Neon DB</Text>
           </View>
         </ScrollView>
 
@@ -540,16 +708,6 @@ const styles = StyleSheet.create({
     fontWeight: '700',
     color: colors.primary,
   },
-  avatarCircle: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
-    backgroundColor: colors.surfaceContainerLow,
-    borderWidth: 1,
-    borderColor: colors.borderSubtle,
-    alignItems: 'center',
-    justifyContent: 'center',
-  },
   scrollContent: {
     paddingHorizontal: spacing.gutter,
     paddingTop: spacing.stackMd,
@@ -608,6 +766,85 @@ const styles = StyleSheet.create({
     lineHeight: 15,
     marginTop: 2,
   },
+  errorCard: {
+    backgroundColor: colors.statusRedBg,
+    borderRadius: borderRadius.DEFAULT,
+    borderWidth: 1,
+    borderColor: colors.statusRedText,
+    padding: 20,
+    alignItems: 'center',
+    gap: 8,
+    marginVertical: 12,
+  },
+  errorTitle: {
+    ...typography.headlineLg,
+    fontSize: 15,
+    fontWeight: '700',
+    color: colors.statusRedText,
+    textAlign: 'center',
+  },
+  errorSubtitle: {
+    ...typography.bodySm,
+    fontSize: 12,
+    color: colors.statusRedText,
+    textAlign: 'center',
+    opacity: 0.9,
+  },
+  retryBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.statusRedText,
+    paddingVertical: 8,
+    paddingHorizontal: 16,
+    borderRadius: borderRadius.DEFAULT,
+    marginTop: 6,
+  },
+  retryBtnText: {
+    ...typography.labelCaps,
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
+  pendingCard: {
+    backgroundColor: colors.statusAmberBg,
+    borderRadius: borderRadius.DEFAULT,
+    borderWidth: 1,
+    borderColor: colors.statusAmberText,
+    padding: 16,
+    flexDirection: 'column',
+    gap: 12,
+    marginVertical: 12,
+  },
+  pendingTitle: {
+    ...typography.sectionHeader,
+    fontSize: 14,
+    fontWeight: '700',
+    color: colors.statusAmberText,
+  },
+  pendingSubtitle: {
+    ...typography.bodySm,
+    fontSize: 12,
+    color: colors.onSurface,
+    marginTop: 2,
+  },
+  evaluateBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    backgroundColor: colors.statusAmberText,
+    paddingVertical: 10,
+    paddingHorizontal: 14,
+    borderRadius: borderRadius.DEFAULT,
+    alignSelf: 'flex-start',
+  },
+  evaluateBtnText: {
+    ...typography.labelCaps,
+    color: '#ffffff',
+    fontSize: 12,
+    fontWeight: '700',
+  },
   findingSectionCard: {
     backgroundColor: colors.surfaceContainerLowest,
     borderWidth: 1,
@@ -648,11 +885,13 @@ const styles = StyleSheet.create({
     opacity: 0.7,
   },
   emptyFindingRow: {
-    padding: 16,
+    padding: 24,
     alignItems: 'center',
+    gap: 8,
   },
   emptyFindingText: {
     ...typography.bodySm,
+    fontSize: 13,
     color: colors.onSurfaceVariant,
   },
   findingRow: {
@@ -665,6 +904,32 @@ const styles = StyleSheet.create({
   findingRowTop: {
     flexDirection: 'row',
     gap: 10,
+  },
+  ruleCodeRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 8,
+    marginBottom: 4,
+  },
+  ruleCodeBadge: {
+    backgroundColor: colors.surfaceContainerLow,
+    paddingHorizontal: 6,
+    paddingVertical: 2,
+    borderRadius: borderRadius.sm,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+  },
+  ruleCodeText: {
+    ...typography.caption,
+    fontSize: 10,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  statutoryRefText: {
+    ...typography.caption,
+    fontSize: 10,
+    color: colors.onSurfaceVariant,
+    flex: 1,
   },
   findingTitleRow: {
     flexDirection: 'row',
@@ -710,31 +975,34 @@ const styles = StyleSheet.create({
   badgeTextGreen: {
     color: colors.statusGreenText,
   },
+  extractedValueBox: {
+    flexDirection: 'row',
+    gap: 6,
+    backgroundColor: colors.surfaceContainerLow,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: borderRadius.sm,
+    marginBottom: 6,
+    alignItems: 'center',
+  },
+  extractedValueLabel: {
+    ...typography.caption,
+    fontSize: 11,
+    fontWeight: '600',
+    color: colors.onSurfaceVariant,
+  },
+  extractedValueContent: {
+    ...typography.caption,
+    fontSize: 11,
+    fontWeight: '700',
+    color: colors.onSurface,
+  },
   findingDescText: {
     ...typography.bodySm,
     fontSize: 13,
     lineHeight: 18,
     color: colors.onSurfaceVariant,
     marginBottom: 8,
-  },
-  aiBasisBox: {
-    backgroundColor: colors.surfaceContainerLow,
-    padding: spacing.stackSm,
-    borderRadius: borderRadius.DEFAULT,
-    gap: 2,
-    marginBottom: 8,
-  },
-  aiBasisLabel: {
-    ...typography.labelCaps,
-    fontSize: 11,
-    fontWeight: '600',
-    color: colors.onSurface,
-  },
-  aiBasisText: {
-    ...typography.bodySm,
-    fontSize: 12,
-    lineHeight: 16,
-    color: colors.onSurfaceVariant,
   },
   evidenceRow: {
     flexDirection: 'row',
@@ -751,11 +1019,14 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     gap: 6,
+    flex: 1,
+    marginRight: 8,
   },
   evidenceFilename: {
     ...typography.caption,
     fontSize: 12,
     color: colors.onSurfaceVariant,
+    flex: 1,
   },
   viewEvidenceLink: {
     ...typography.labelCaps,
@@ -969,4 +1240,3 @@ const styles = StyleSheet.create({
     fontStyle: 'italic',
   },
 });
-

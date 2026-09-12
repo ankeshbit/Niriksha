@@ -18,6 +18,7 @@ Satisfies PS 26034 requirements:
 import os
 import json
 import pytest
+import uuid
 from datetime import datetime, timedelta
 from fastapi.testclient import TestClient
 from sqlalchemy.orm import Session
@@ -259,8 +260,9 @@ def test_inspector_cross_resource_access_denied(db_session: Session, inspector_a
     h_b, user_b = inspector_b_headers
 
     # Create Inspection for Officer A
+    test_num = f"INSP-RBAC-ISO-{uuid.uuid4().hex[:6].upper()}"
     insp_a = Inspection(
-        inspection_number="INSP-RBAC-ISO-01",
+        inspection_number=test_num,
         inspector_id=user_a.id,
         location="Connaught Place, New Delhi",
         status="DRAFT"
@@ -291,58 +293,65 @@ def test_inspector_cross_resource_access_denied(db_session: Session, inspector_a
     db_session.add_all([ev_a, rep_a])
     db_session.commit()
 
-    # --- Inspector B attempts READ operations on Inspector A's resources ---
+    try:
+        # --- Inspector B attempts READ operations on Inspector A's resources ---
 
-    # 1. Get inspection details
-    r1 = client.get(f"/api/inspections/{insp_a.id}", headers=h_b)
-    assert r1.status_code == 403
-    assert "Access forbidden" in r1.json()["detail"]
+        # 1. Get inspection details
+        r1 = client.get(f"/api/inspections/{insp_a.id}", headers=h_b)
+        assert r1.status_code == 403
+        assert "Access forbidden" in r1.json()["detail"]
 
-    # 2. Get inspection images
-    r2 = client.get(f"/api/inspections/{insp_a.id}/images", headers=h_b)
-    assert r2.status_code == 403
+        # 2. Get inspection images
+        r2 = client.get(f"/api/inspections/{insp_a.id}/images", headers=h_b)
+        assert r2.status_code == 403
 
-    # 3. Get single image metadata
-    r3 = client.get(f"/api/images/{img_a.id}", headers=h_b)
-    assert r3.status_code == 403
+        # 3. Get single image metadata
+        r3 = client.get(f"/api/images/{img_a.id}", headers=h_b)
+        assert r3.status_code == 403
 
-    # 4. Get inspection declarations
-    r4 = client.get(f"/api/inspections/{insp_a.id}/declarations", headers=h_b)
-    assert r4.status_code == 403
+        # 4. Get inspection declarations
+        r4 = client.get(f"/api/inspections/{insp_a.id}/declarations", headers=h_b)
+        assert r4.status_code == 403
 
-    # 5. Get findings
-    r5 = client.get(f"/api/inspections/{insp_a.id}/findings", headers=h_b)
-    assert r5.status_code == 403
+        # 5. Get findings
+        r5 = client.get(f"/api/inspections/{insp_a.id}/findings", headers=h_b)
+        assert r5.status_code == 403
 
-    # 6. Get finding evidence
-    r6 = client.get(f"/api/findings/{chk_a.id}/evidence", headers=h_b)
-    assert r6.status_code == 403
+        # 6. Get finding evidence
+        r6 = client.get(f"/api/findings/{chk_a.id}/evidence", headers=h_b)
+        assert r6.status_code == 403
 
-    # 7. Get report by report ID
-    r7 = client.get(f"/api/reports/{rep_a.id}", headers=h_b)
-    assert r7.status_code == 403
+        # 7. Get report by report ID
+        r7 = client.get(f"/api/reports/{rep_a.id}", headers=h_b)
+        assert r7.status_code == 403
 
-    # 8. Get inspection audit logs
-    r8 = client.get(f"/api/inspections/{insp_a.id}/audit-logs", headers=h_b)
-    assert r8.status_code == 403
+        # 8. Get inspection audit logs
+        r8 = client.get(f"/api/inspections/{insp_a.id}/audit-logs", headers=h_b)
+        assert r8.status_code == 403
 
-    # --- Inspector B attempts MUTATION operations on Inspector A's resources ---
+        # --- Inspector B attempts MUTATION operations on Inspector A's resources ---
 
-    # 9. Update Inspector A's declaration
-    r9 = client.patch(f"/api/declarations/{decl_a.id}", headers=h_b, json={"corrected_value": "99.00"})
-    assert r9.status_code == 403
+        # 9. Update Inspector A's declaration
+        r9 = client.patch(f"/api/declarations/{decl_a.id}", headers=h_b, json={"corrected_value": "99.00"})
+        assert r9.status_code == 403
 
-    # 10. Adjudicate Inspector A's finding
-    r10 = client.post(f"/api/findings/{chk_a.id}/adjudicate", headers=h_b, json={"action": "DISMISSED", "notes": "Hacked"})
-    assert r10.status_code == 403
+        # 10. Adjudicate Inspector A's finding
+        r10 = client.post(f"/api/findings/{chk_a.id}/adjudicate", headers=h_b, json={"action": "DISMISSED", "notes": "Hacked"})
+        assert r10.status_code == 403
 
-    # 11. Request new image for Inspector A's finding
-    r11 = client.post(f"/api/findings/{chk_a.id}/request-new-image", headers=h_b)
-    assert r11.status_code == 403
+        # 11. Request new image for Inspector A's finding
+        r11 = client.post(f"/api/findings/{chk_a.id}/request-new-image", headers=h_b)
+        assert r11.status_code == 403
 
-    # 12. Finalize Inspector A's inspection
-    r12 = client.post(f"/api/inspections/{insp_a.id}/finalize", headers=h_b)
-    assert r12.status_code == 403
+        # 12. Finalize Inspector A's inspection
+        r12 = client.post(f"/api/inspections/{insp_a.id}/finalize", headers=h_b)
+        assert r12.status_code == 403
+    finally:
+        insp_del = db_session.query(Inspection).filter(Inspection.id == insp_a.id).first()
+        if insp_del:
+            db_session.query(AuditLog).filter(AuditLog.inspection_id == insp_a.id).update({"inspection_id": None})
+            db_session.delete(insp_del)
+            db_session.commit()
 
 
 def test_inspector_cannot_query_another_officer_via_filter(db_session: Session, inspector_a_headers, inspector_b_headers):
@@ -373,8 +382,9 @@ def test_supervisor_read_and_oversight_access(db_session: Session, inspector_a_h
     h_a, user_a = inspector_a_headers
     h_sup, user_sup = supervisor_headers
 
+    insp_num = f"INSP-RBAC-SUP-{uuid.uuid4().hex[:6].upper()}"
     insp = Inspection(
-        inspection_number="INSP-RBAC-SUP-01",
+        inspection_number=insp_num,
         inspector_id=user_a.id,
         location="Jaipur Central Market",
         status="COMPLETED",
@@ -385,28 +395,33 @@ def test_supervisor_read_and_oversight_access(db_session: Session, inspector_a_h
     db_session.add(Product(inspection_id=insp.id, product_name="Spice Powder 100g", category="Packaged Food"))
     db_session.commit()
 
-    # 1. Supervisor views cross-officer inspection details
-    r_insp = client.get(f"/api/inspections/{insp.id}", headers=h_sup)
-    assert r_insp.status_code == 200
-    assert r_insp.json()["inspection_number"] == "INSP-RBAC-SUP-01"
+    try:
+        # 1. Supervisor views cross-officer inspection details
+        r_insp = client.get(f"/api/inspections/{insp.id}", headers=h_sup)
+        assert r_insp.status_code == 200
+        assert r_insp.json()["inspection_number"] == insp_num
 
-    # 2. Supervisor views cross-officer dashboard inspections
-    r_dash = client.get(f"/api/dashboard/inspections?inspector_id={user_a.id}", headers=h_sup)
-    assert r_dash.status_code == 200
-    assert any(i["id"] == insp.id for i in r_dash.json()["items"])
+        # 2. Supervisor views cross-officer dashboard inspections
+        r_dash = client.get(f"/api/dashboard/inspections?inspector_id={user_a.id}", headers=h_sup)
+        assert r_dash.status_code == 200
+        assert any(i["id"] == insp.id for i in r_dash.json()["items"])
 
-    # 3. Supervisor accesses executive analytics
-    r_analytics = client.get("/api/dashboard/analytics", headers=h_sup)
-    assert r_analytics.status_code == 200
+        # 3. Supervisor accesses executive analytics
+        r_analytics = client.get("/api/dashboard/analytics", headers=h_sup)
+        assert r_analytics.status_code == 200
 
-    # 4. Supervisor accesses regional enforcement activity
-    r_enforce = client.get("/api/dashboard/enforcement", headers=h_sup)
-    assert r_enforce.status_code == 200
+        # 4. Supervisor accesses regional enforcement activity
+        r_enforce = client.get("/api/dashboard/enforcement", headers=h_sup)
+        assert r_enforce.status_code == 200
 
-    # 5. Supervisor accesses repository search across inspectors
-    r_repo = client.get(f"/api/repository/inspections?inspector_id={user_a.id}", headers=h_sup)
-    assert r_repo.status_code == 200
-    assert any(i["id"] == insp.id for i in r_repo.json()["items"])
+        # 5. Supervisor accesses repository search across inspectors
+        r_repo = client.get(f"/api/repository/inspections?inspector_id={user_a.id}", headers=h_sup)
+        assert r_repo.status_code == 200
+        assert any(i["id"] == insp.id for i in r_repo.json()["items"])
+    finally:
+        db_session.query(Product).filter(Product.inspection_id == insp.id).delete()
+        db_session.query(Inspection).filter(Inspection.id == insp.id).delete()
+        db_session.commit()
 
 
 def test_supervisor_field_mutation_denied(db_session: Session, inspector_a_headers, supervisor_headers):
@@ -414,8 +429,9 @@ def test_supervisor_field_mutation_denied(db_session: Session, inspector_a_heade
     h_a, user_a = inspector_a_headers
     h_sup, _ = supervisor_headers
 
+    insp_num = f"INSP-RBAC-MUT-{uuid.uuid4().hex[:6].upper()}"
     insp = Inspection(
-        inspection_number="INSP-RBAC-SUP-MUT",
+        inspection_number=insp_num,
         inspector_id=user_a.id,
         location="Chandigarh Sector 17",
         status="DRAFT"
@@ -427,29 +443,35 @@ def test_supervisor_field_mutation_denied(db_session: Session, inspector_a_heade
     db_session.add(decl)
     db_session.commit()
 
-    # 1. Supervisor cannot create field inspections (restricted to INSPECTOR and ADMIN)
-    r_create = client.post(
-        "/api/inspections",
-        headers=h_sup,
-        json={"product_name": "Supervisor Created", "category": "Packaged Food", "location": "HQ"}
-    )
-    assert r_create.status_code == 403
+    try:
+        # 1. Supervisor cannot create field inspections (restricted to INSPECTOR and ADMIN)
+        r_create = client.post(
+            "/api/inspections",
+            headers=h_sup,
+            json={"product_name": "Supervisor Created", "category": "Packaged Food", "location": "HQ"}
+        )
+        assert r_create.status_code == 403
 
-    # 2. Supervisor cannot modify field declarations
-    r_patch_decl = client.patch(
-        f"/api/declarations/{decl.id}",
-        headers=h_sup,
-        json={"corrected_value": "55.00"}
-    )
-    assert r_patch_decl.status_code == 403
+        # 2. Supervisor cannot modify field declarations
+        r_patch_decl = client.patch(
+            f"/api/declarations/{decl.id}",
+            headers=h_sup,
+            json={"corrected_value": "55.00"}
+        )
+        assert r_patch_decl.status_code == 403
 
-    # 3. Supervisor cannot run rule evaluation on inspector's draft
-    r_eval = client.post(f"/api/inspections/{insp.id}/evaluate", headers=h_sup)
-    assert r_eval.status_code == 403
+        # 3. Supervisor cannot run rule evaluation on inspector's draft
+        r_eval = client.post(f"/api/inspections/{insp.id}/evaluate", headers=h_sup)
+        assert r_eval.status_code == 403
 
-    # 4. Supervisor cannot finalize inspector's inspection
-    r_finalize = client.post(f"/api/inspections/{insp.id}/finalize", headers=h_sup)
-    assert r_finalize.status_code == 403
+        # 4. Supervisor cannot finalize inspector's inspection
+        r_finalize = client.post(f"/api/inspections/{insp.id}/finalize", headers=h_sup)
+        assert r_finalize.status_code == 403
+    finally:
+        db_session.query(Declaration).filter(Declaration.inspection_id == insp.id).delete()
+        db_session.query(Product).filter(Product.inspection_id == insp.id).delete()
+        db_session.query(Inspection).filter(Inspection.id == insp.id).delete()
+        db_session.commit()
 
 
 # ===========================================================================

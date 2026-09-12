@@ -4,7 +4,7 @@ import {
   StyleSheet,
   StatusBar,
   Platform,
-  Dimensions,
+  useWindowDimensions,
 } from 'react-native';
 import { Video, ResizeMode, AVPlaybackStatus } from 'expo-av';
 import * as SplashScreen from 'expo-splash-screen';
@@ -16,11 +16,12 @@ import { authStorage } from '../services/authStorage';
 // Static bundled intro video asset
 const INTRO_VIDEO_ASSET = require('../../assets/videos/niriksha_intro.mp4');
 
-// Fallback safety timeout in ms (video is ~4.77s; fallback guarantees app never hangs)
-const SAFETY_TIMEOUT_MS = 6500;
+// Fallback safety timeout in ms (video is ~5.40s; 7000ms guarantees app never hangs)
+const SAFETY_TIMEOUT_MS = 7000;
 
 export const IntroScreen: React.FC = () => {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
+  const { width, height } = useWindowDimensions();
   const hasNavigatedRef = useRef(false);
   const targetRouteRef = useRef<'Login' | 'Dashboard'>('Login');
   const videoRef = useRef<Video | null>(null);
@@ -114,27 +115,41 @@ export const IntroScreen: React.FC = () => {
     SplashScreen.hideAsync().catch(() => {});
   }, []);
 
+  // If on desktop web with landscape orientation, frame as a mobile phone screen
+  const isLandscapeWeb = Platform.OS === 'web' && width > height;
+
   return (
     <View style={styles.container} pointerEvents="none">
-      <StatusBar hidden={false} barStyle="light-content" backgroundColor="#031635" />
-      <Video
-        ref={videoRef}
-        source={INTRO_VIDEO_ASSET}
-        style={styles.video}
-        resizeMode={ResizeMode.CONTAIN}
-        shouldPlay={true}
-        isLooping={false}
-        useNativeControls={false}
-        isMuted={Platform.OS === 'web'}
-        onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
-        onError={handleVideoError}
-        onReadyForDisplay={handleReadyForDisplay}
-      />
+      <StatusBar hidden={true} translucent={true} barStyle="light-content" backgroundColor="#031635" />
+      <View
+        style={[
+          styles.videoWrapper,
+          isLandscapeWeb && {
+            width: Math.min(480, height * (9 / 16)),
+            height: '100%',
+            maxHeight: height,
+            borderRadius: 20,
+            overflow: 'hidden',
+          },
+        ]}
+      >
+        <Video
+          ref={videoRef}
+          source={INTRO_VIDEO_ASSET}
+          style={styles.video}
+          resizeMode={ResizeMode.COVER}
+          shouldPlay={true}
+          isLooping={false}
+          useNativeControls={false}
+          isMuted={Platform.OS === 'web'}
+          onPlaybackStatusUpdate={handlePlaybackStatusUpdate}
+          onError={handleVideoError}
+          onReadyForDisplay={handleReadyForDisplay}
+        />
+      </View>
     </View>
   );
 };
-
-const { width, height } = Dimensions.get('window');
 
 const styles = StyleSheet.create({
   container: {
@@ -144,10 +159,25 @@ const styles = StyleSheet.create({
     alignItems: 'center',
     width: '100%',
     height: '100%',
+    overflow: 'hidden',
+  },
+  videoWrapper: {
+    flex: 1,
+    width: '100%',
+    height: '100%',
+    justifyContent: 'center',
+    alignItems: 'center',
+    overflow: 'hidden',
+    backgroundColor: '#031635',
   },
   video: {
-    width: width || '100%',
-    height: height || '100%',
+    position: 'absolute',
+    top: 0,
+    left: 0,
+    bottom: 0,
+    right: 0,
+    width: '100%',
+    height: '100%',
     backgroundColor: '#031635',
   },
 });

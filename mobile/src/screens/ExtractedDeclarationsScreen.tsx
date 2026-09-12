@@ -9,6 +9,7 @@ import {
   Modal,
   TextInput,
   Alert,
+  useWindowDimensions,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { MaterialIcons } from '@expo/vector-icons';
@@ -35,6 +36,8 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute<RouteProp<RootStackParamList, 'ExtractedDeclarations'>>();
   const { inspectionId, inspectionNumber } = route.params;
+  const { width: windowWidth } = useWindowDimensions();
+  const isNarrowScreen = windowWidth < 350;
 
   const [declarations, setDeclarations] = useState<any[]>([]);
   const [barcodesSummary, setBarcodesSummary] = useState<any | null>(null);
@@ -506,13 +509,14 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
           {barcodesSummary && (
             <View style={styles.barcodeCard}>
               <View style={styles.barcodeCardHeader}>
-                <View style={styles.barcodeHeaderLeft}>
-                  <MaterialIcons name="qr-code-2" size={22} color={colors.primary} />
+                <View style={[styles.barcodeHeaderLeft, isNarrowScreen && styles.barcodeHeaderLeftNarrow]}>
+                  <MaterialIcons name="qr-code-2" size={22} color={colors.primary} style={styles.barcodeIcon} />
                   <Text style={styles.barcodeCardTitle}>Auxiliary Evidence: Barcode / QR</Text>
                 </View>
                 {barcodesSummary.detected ? (
                   <View style={[
                     styles.barcodeStatusBadge,
+                    isNarrowScreen && styles.barcodeStatusBadgeNarrow,
                     barcodesSummary.has_conflict
                       ? styles.badgeRed
                       : barcodesSummary.items.some((i: any) => i.ocr_corroboration === 'CORROBORATING')
@@ -541,7 +545,11 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
                     </Text>
                   </View>
                 ) : (
-                  <View style={[styles.barcodeStatusBadge, styles.badgeNeutral]}>
+                  <View style={[
+                    styles.barcodeStatusBadge,
+                    isNarrowScreen && styles.barcodeStatusBadgeNarrow,
+                    styles.badgeNeutral
+                  ]}>
                     <Text style={[styles.barcodeStatusText, styles.textNeutral]}>Not Detected</Text>
                   </View>
                 )}
@@ -555,12 +563,16 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
                   </View>
                   <View style={styles.barcodeDataRow}>
                     <Text style={styles.barcodeDataLabel}>Decoded Value:</Text>
-                    <Text style={styles.barcodeDataValueCode}>{barcodesSummary.consolidated_value || '—'}</Text>
+                    <Text style={styles.barcodeDataValueCode} numberOfLines={3} ellipsizeMode="middle">
+                      {barcodesSummary.consolidated_value || '—'}
+                    </Text>
                   </View>
                   {barcodesSummary.items.length > 0 && barcodesSummary.items[0].bbox && (
                     <View style={styles.barcodeDataRow}>
                       <Text style={styles.barcodeDataLabel}>Coordinates:</Text>
-                      <Text style={styles.barcodeDataSubtext}>[{barcodesSummary.items[0].bbox.join(', ')}]</Text>
+                      <Text style={styles.barcodeDataSubtext} numberOfLines={2}>
+                        [{barcodesSummary.items[0].bbox.join(', ')}]
+                      </Text>
                     </View>
                   )}
                   {barcodesSummary.has_conflict && barcodesSummary.conflict_description && (
@@ -574,7 +586,7 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
               )}
 
               <View style={styles.barcodeDisclaimer}>
-                <MaterialIcons name="info-outline" size={14} color={colors.onSurfaceVariant} />
+                <MaterialIcons name="info-outline" size={14} color={colors.onSurfaceVariant} style={styles.disclaimerIcon} />
                 <Text style={styles.barcodeDisclaimerText}>
                   PCR 2011 Notice: Barcode presence serves as auxiliary identity evidence and does not substitute mandatory human-readable declarations.
                 </Text>
@@ -590,7 +602,7 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
           >
             <View style={styles.btnInner}>
               <MaterialIcons name="language" size={18} color={colors.primary} />
-              <Text style={styles.compareListingButtonText}>Compare with Online Listing</Text>
+              <Text style={styles.compareListingButtonText} numberOfLines={2}>Compare with Online Listing</Text>
             </View>
           </TouchableOpacity>
 
@@ -606,7 +618,7 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
             ) : (
               <View style={styles.btnInner}>
                 <MaterialIcons name="rule" size={20} color={colors.onPrimary} />
-                <Text style={styles.evaluateButtonText}>Check for Potential Violations</Text>
+                <Text style={styles.evaluateButtonText} numberOfLines={2}>Check for Potential Violations</Text>
               </View>
             )}
           </TouchableOpacity>
@@ -944,6 +956,7 @@ const styles = StyleSheet.create({
     borderWidth: 1.5,
     borderColor: colors.primary,
     paddingVertical: 12,
+    paddingHorizontal: 16,
     borderRadius: borderRadius.xl,
     alignItems: 'center',
     justifyContent: 'center',
@@ -953,10 +966,13 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.primary,
     fontWeight: '600',
+    textAlign: 'center',
+    flexShrink: 1,
   },
   evaluateButton: {
     backgroundColor: colors.primary,
     paddingVertical: 14,
+    paddingHorizontal: 16,
     borderRadius: borderRadius.xl,
     alignItems: 'center',
     justifyContent: 'center',
@@ -965,7 +981,9 @@ const styles = StyleSheet.create({
   btnInner: {
     flexDirection: 'row',
     alignItems: 'center',
+    justifyContent: 'center',
     gap: 8,
+    flexShrink: 1,
   },
   evaluateButtonText: {
     ...typography.sectionHeader,
@@ -973,6 +991,8 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     color: colors.onPrimary,
     fontWeight: '600',
+    textAlign: 'center',
+    flexShrink: 1,
   },
   footerNote: {
     alignItems: 'center',
@@ -1063,30 +1083,52 @@ const styles = StyleSheet.create({
   },
   barcodeCardHeader: {
     flexDirection: 'row',
+    flexWrap: 'wrap',
     justifyContent: 'space-between',
-    alignItems: 'center',
+    alignItems: 'flex-start',
+    gap: 8,
     marginBottom: spacing.tight,
   },
   barcodeHeaderLeft: {
+    flex: 1,
+    minWidth: 0,
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 8,
+  },
+  barcodeHeaderLeftNarrow: {
+    minWidth: '100%',
+  },
+  barcodeIcon: {
+    marginTop: 1,
+    flexShrink: 0,
   },
   barcodeCardTitle: {
     ...typography.bodyMd,
     fontWeight: '700',
     color: colors.primary,
+    flex: 1,
+    flexShrink: 1,
+    lineHeight: 20,
   },
   barcodeStatusBadge: {
     paddingHorizontal: 8,
     paddingVertical: 3,
     borderRadius: borderRadius.DEFAULT,
     borderWidth: 1,
+    alignSelf: 'flex-start',
+    maxWidth: '100%',
+    flexShrink: 1,
+  },
+  barcodeStatusBadgeNarrow: {
+    marginTop: 2,
   },
   barcodeStatusText: {
     ...typography.caption,
     fontWeight: '700',
     fontSize: 11,
+    textAlign: 'center',
+    flexShrink: 1,
   },
   badgeGreen: {
     backgroundColor: colors.statusGreenBg,
@@ -1116,7 +1158,7 @@ const styles = StyleSheet.create({
   },
   barcodeDataRow: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 8,
   },
   barcodeDataLabel: {
@@ -1124,11 +1166,16 @@ const styles = StyleSheet.create({
     fontWeight: '600',
     color: colors.onSurfaceVariant,
     width: 95,
+    flexShrink: 0,
+    lineHeight: 18,
   },
   barcodeDataValue: {
     ...typography.bodySm,
     fontWeight: '600',
     color: colors.onSurface,
+    flex: 1,
+    flexShrink: 1,
+    minWidth: 0,
   },
   barcodeDataValueCode: {
     ...typography.bodySm,
@@ -1136,17 +1183,25 @@ const styles = StyleSheet.create({
     fontFamily: 'monospace',
     color: colors.primary,
     letterSpacing: 0.5,
+    flex: 1,
+    flexShrink: 1,
+    minWidth: 0,
   },
   barcodeDataSubtext: {
     ...typography.caption,
     color: colors.onSurfaceVariant,
     fontSize: 11,
+    flex: 1,
+    flexShrink: 1,
+    minWidth: 0,
+    lineHeight: 16,
   },
   barcodeConflictText: {
     ...typography.caption,
     color: colors.statusRedText,
     fontWeight: '600',
     marginTop: 4,
+    flexShrink: 1,
   },
   barcodeEmptyText: {
     ...typography.bodySm,
@@ -1156,19 +1211,25 @@ const styles = StyleSheet.create({
   },
   barcodeDisclaimer: {
     flexDirection: 'row',
-    alignItems: 'center',
+    alignItems: 'flex-start',
     gap: 6,
     marginTop: spacing.base,
     paddingTop: spacing.tight,
     borderTopWidth: 1,
     borderTopColor: colors.borderSubtle,
   },
+  disclaimerIcon: {
+    marginTop: 1,
+    flexShrink: 0,
+  },
   barcodeDisclaimerText: {
     ...typography.caption,
     fontSize: 10.5,
     color: colors.onSurfaceVariant,
     flex: 1,
-    lineHeight: 14,
+    flexShrink: 1,
+    minWidth: 0,
+    lineHeight: 15,
   },
   // Dimension Chips (PCR 2011 Multi-Dimensional Compliance)
   dimensionChipsRow: {

@@ -117,77 +117,193 @@ export const AnalyzingScreen: React.FC = () => {
     const executeAnalysis = async () => {
       if (!isMountedRef.current) return;
 
-      // Stage 1: STARTING — images were already uploaded before this screen
+      // Stage 1: STARTING — Check existing inspection state & prepare pipeline
       setStage('STARTING');
       setProgressPercent(20);
       console.log('[ANALYZING_SCREEN] Starting analysis pipeline', { inspectionId, stage: 'STARTING' });
 
-      await new Promise<void>((r) => setTimeout(r, 400));
+      // Pre-check if OCR is already complete or in-flight on server
+      let alreadyExtracted = false;
+      let inProgressOnBackend = false;
+      try {
+        const initialCheck = await api.getInspection(inspectionId);
+        const st = initialCheck?.status;
+        if (
+          st === 'EXTRACTION_COMPLETE' ||
+          st === 'COMPLETED' ||
+          st === 'UNDER_REVIEW' ||
+          st === 'EVALUATION_COMPLETE'
+        ) {
+          alreadyExtracted = true;
+          console.log('[ANALYZING_SCREEN] OCR already completed on backend. Reusing results.', { inspectionId, status: st });
+        } else if (st === 'OCR_PROCESSING') {
+          inProgressOnBackend = true;
+          console.log('[ANALYZING_SCREEN] OCR already in progress on backend. Will await server completion.', { inspectionId });
+        }
+      } catch (initialErr) {
+        console.warn('[ANALYZING_SCREEN] Status pre-check warning:', initialErr);
+      }
+
       if (!isMountedRef.current) return;
 
-      // Stage 2: OCR — run PaddleOCR on server
+      // Stage 2: OCR — run PaddleOCR or wait for in-progress OCR
       setStage('OCR');
       setProgressPercent(40);
-      console.log('[ANALYZING_SCREEN] Step 3: Running OCR and text recognition', { inspectionId, stage: 'OCR' });
 
       const ocrStart = Date.now();
       let ocrRes: any = null;
 
-      try {
-        ocrRes = await api.runOCR(inspectionId);
-        const ocrDuration = Date.now() - ocrStart;
-        console.log('[ANALYZING_SCREEN] Step 3 OCR complete', {
-          inspectionId,
-          durationMs: ocrDuration,
-          declarationsCount: ocrRes?.declarations_count,
-        });
-      } catch (err: any) {
-        if (!isMountedRef.current) return;
-        const ocrDuration = Date.now() - ocrStart;
-        const classified = classifyFetchError(err);
-
-        console.error('[ANALYZING_SCREEN_ERROR] OCR failed', {
-          inspectionId,
-          stage: 'OCR',
-          durationMs: ocrDuration,
-          errorType: classified.type,
-          message: classified.message,
-        });
-
-        let title = 'Analysis Error';
-        let message = classified.userMessage || err.message || 'Failed to complete OCR extraction.';
-
-        if (classified.type === 'REQUEST_TIMEOUT') {
-          title = 'Analysis Taking Longer Than Expected';
-          message =
-            'OCR processing is taking longer than expected. ' +
-            'Your inspection and images are safely saved — please go back and retry.';
-        } else if (classified.type === 'NETWORK_UNREACHABLE') {
-          title = 'Connection Lost During Analysis';
-          message =
-            'Connection to the server was lost during OCR. ' +
-            'Your inspection and images are safely saved. Please retry when connected.';
+      if (alreadyExtracted) {
+        console.log('[ANALYZING_SCREEN] Step 3 OCR fast-path hit. Reusing extracted declarations.');
+      } else if (inProgressOnBackend) {
+        console.log('[ANALYZING_SCREEN] Step 3: Awaiting in-flight server OCR completion...');
+        let finished = false;
+        const pollStart = Date.now();
+        // Poll for up to 600s (10 minutes)
+        while (!finished && Date.now() - pollStart < 600000) {
+          if (!isMountedRef.current) return;
+          await new Promise<void>((r) => setTimeout(r, 3000));
+          try {
+            const inspStatus = await api.getInspection(inspectionId);
+            const curSt = inspStatus?.status;
+            if (
+              curSt === 'EXTRACTION_COMPLETE' ||
+              curSt === 'COMPLETED' ||
+              curSt === 'UNDER_REVIEW' ||
+              curSt === 'EVALUATION_COMPLETE'
+            ) {
+              finished = true;
+              break;
+            } else if (curSt === 'OCR_FAILED') {
+              throw new Error('OCR text recognition failed on server.');
+            }
+          } catch (pollErr: any) {
+            if (pollErr?.message?.includes('failed on server')) throw pollErr;
+          }
         }
+        if (!finished) {
+          throw new Error('OCR processing timed out on server.');
+        }
+      } else {
+        console.log('[ANALYZING_SCREEN] Step 3: Running OCR and text recognition', { inspectionId, stage: 'OCR' });
+        try {
+          ocrRes = await api.runOCR(inspectionId);
+          const ocrDuration = Date.now() - ocrStart;
+          console.log('[ANALYZING_SCREEN] Step 3 OCR complete', {
+            inspectionId,
+            durationMs: ocrDuration,
+            declarationsCount: ocrRes?.declarations_count,
+          });
+        } catch (err: any) {
+          if (!isMountedRef.current) return;
+          const ocrDuration = Date.now() - ocrStart;
+          const classified = classifyFetchError(err);
 
-        setStage('ERROR');
-        setErrorTitle(title);
-        setErrorMessage(message);
-        return;
+          // Check if backend is still actively processing before showing error
+          let backendStillProcessing = false;
+          try {
+            const statusCheck = await api.getInspection(inspectionId);
+            const bStatus = statusCheck?.status;
+            if (
+              bStatus === 'EXTRACTION_COMPLETE' ||
+              bStatus === 'COMPLETED' ||
+              bStatus === 'UNDER_REVIEW' ||
+              bStatus === 'EVALUATION_COMPLETE'
+            ) {
+              alreadyExtracted = true;
+              console.log('[ANALYZING_SCREEN] Backend completed at timeout boundary. Proceeding.');
+            } else if (bStatus === 'OCR_PROCESSING') {
+              backendStillProcessing = true;
+            }
+          } catch {
+            // Cannot reach backend to check status
+          }
+
+          if (backendStillProcessing) {
+            console.log('[ANALYZING_SCREEN] Backend is still actively processing OCR. Switching to polling mode.');
+            let pollFinished = false;
+            const pollStart = Date.now();
+            while (!pollFinished && Date.now() - pollStart < 600000) {
+              if (!isMountedRef.current) return;
+              await new Promise<void>((r) => setTimeout(r, 3000));
+              try {
+                const s = await api.getInspection(inspectionId);
+                const curSt = s?.status;
+                if (
+                  curSt === 'EXTRACTION_COMPLETE' ||
+                  curSt === 'COMPLETED' ||
+                  curSt === 'UNDER_REVIEW' ||
+                  curSt === 'EVALUATION_COMPLETE'
+                ) {
+                  pollFinished = true;
+                  break;
+                } else if (curSt === 'OCR_FAILED') {
+                  throw new Error('OCR text recognition failed on server.');
+                }
+              } catch (pe: any) {
+                if (pe?.message?.includes('failed on server')) throw pe;
+              }
+            }
+            if (!pollFinished) {
+              setStage('ERROR');
+              setErrorTitle('Analysis Taking Longer Than Expected');
+              setErrorMessage(
+                'OCR processing is taking longer than expected. ' +
+                'Your inspection and images are safely saved — please go back and retry.'
+              );
+              return;
+            }
+          } else if (!alreadyExtracted) {
+            console.error('[ANALYZING_SCREEN_ERROR] OCR failed', {
+              inspectionId,
+              stage: 'OCR',
+              durationMs: ocrDuration,
+              errorType: classified.type,
+              message: classified.message,
+            });
+
+            let title = 'Analysis Error';
+            let message = classified.userMessage || err.message || 'Failed to complete OCR extraction.';
+
+            if (classified.type === 'REQUEST_TIMEOUT') {
+              title = 'Analysis Taking Longer Than Expected';
+              message =
+                'OCR processing is taking longer than expected. ' +
+                'Your inspection and images are safely saved — please go back and retry.';
+            } else if (classified.type === 'NETWORK_UNREACHABLE') {
+              title = 'Connection Lost During Analysis';
+              message =
+                'Connection to the server was lost during OCR. ' +
+                'Your inspection and images are safely saved. Please retry when connected.';
+            } else if (classified.type === 'SERVER_ERROR') {
+              title = 'Server Error During Analysis';
+              message = classified.userMessage || 'The server encountered an error while processing package images.';
+            } else if (classified.type === 'AUTH_ERROR') {
+              title = 'Session Expired';
+              message = classified.userMessage || 'Your session has expired. Please sign in again.';
+            }
+
+            setStage('ERROR');
+            setErrorTitle(title);
+            setErrorMessage(message);
+            return;
+          }
+        }
       }
 
       if (!isMountedRef.current) return;
 
       // Stage 3: EXTRACTION — statutory declaration consolidation
       setStage('EXTRACTION');
-      setProgressPercent(65);
+      setProgressPercent(70);
       console.log('[ANALYZING_SCREEN] Step 4: Extracting statutory declarations', { inspectionId, stage: 'EXTRACTION' });
 
-      await new Promise<void>((r) => setTimeout(r, 500));
+      await new Promise<void>((r) => setTimeout(r, 400));
       if (!isMountedRef.current) return;
 
       // Stage 4: COMPLIANCE — evaluate deterministic legal metrology rules
       setStage('COMPLIANCE');
-      setProgressPercent(85);
+      setProgressPercent(90);
       console.log('[ANALYZING_SCREEN] Step 5: Evaluating compliance rules', { inspectionId, stage: 'COMPLIANCE' });
 
       const evalStart = Date.now();
@@ -209,18 +325,17 @@ export const AnalyzingScreen: React.FC = () => {
           errorType: classified.type,
           message: classified.message,
         });
-        // Non-fatal: if rules evaluation fails here, inspector can still evaluate on ExtractedDeclarations screen
         console.warn('[ANALYZING_SCREEN] Continuing to declarations screen despite eval error');
       }
 
       if (!isMountedRef.current) return;
 
-      // Stage 5: COMPLETED — all 5 steps finished
+      // Stage 5: COMPLETED — all steps finished
       setStage('COMPLETED');
       setProgressPercent(100);
       console.log('[ANALYZING_SCREEN] Analysis complete (100%), navigating to ExtractedDeclarations', { inspectionId });
 
-      await new Promise<void>((r) => setTimeout(r, 600));
+      await new Promise<void>((r) => setTimeout(r, 500));
       if (!isMountedRef.current) return;
 
       navigation.replace('ExtractedDeclarations', {

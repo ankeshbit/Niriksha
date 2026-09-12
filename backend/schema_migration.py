@@ -66,6 +66,12 @@ def migrate():
             "column": "docx_path",
             "ddl": "ALTER TABLE reports ADD COLUMN docx_path VARCHAR(500)",
         },
+        # Reports: add pdf_hash for PDF cryptographic integrity verification
+        {
+            "table": "reports",
+            "column": "pdf_hash",
+            "ddl": "ALTER TABLE reports ADD COLUMN pdf_hash VARCHAR(64)",
+        },
         # Inspections: add inspection_type for Online Listing / Physical analysis modes (PS 26034)
         {
             "table": "inspections",
@@ -141,6 +147,9 @@ def migrate():
         # AUDIT-CONCUR-01: Ensure inspection_number_counters table exists and is initialized
         migrate_inspection_number_counters(conn)
 
+        # AUDIT-DEL-01: Ensure audit_logs.inspection_id foreign key has ON DELETE SET NULL
+        migrate_audit_logs_foreign_key(conn)
+
         # Create any new tables (product_listings, listing_comparisons)
         try:
             Base.metadata.create_all(bind=conn)
@@ -150,6 +159,21 @@ def migrate():
             print(f"  [WARN]  Table creation note: {e}")
 
     print("\nMigration complete.")
+
+
+def migrate_audit_logs_foreign_key(conn):
+    """AUDIT-DEL-01: Ensure audit_logs.inspection_id foreign key constraint has ON DELETE SET NULL."""
+    try:
+        conn.execute(text("ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS audit_logs_inspection_id_fkey;"))
+        conn.execute(text("""
+            ALTER TABLE audit_logs ADD CONSTRAINT audit_logs_inspection_id_fkey
+            FOREIGN KEY (inspection_id) REFERENCES inspections(id) ON DELETE SET NULL;
+        """))
+        conn.commit()
+        print("  [OK]    audit_logs_inspection_id_fkey verified with ON DELETE SET NULL.")
+    except Exception as e:
+        conn.rollback()
+        print(f"  [WARN]  audit_logs FK constraint migration note: {e}")
 
 
 def migrate_inspection_number_counters(conn):

@@ -247,7 +247,7 @@ export const DraftOfflineScreen: React.FC = () => {
 
   const isOffline = networkState === 'OFFLINE';
   const hasPendingDraft = currentDraft && isPendingSync(currentDraft.status);
-  const showOfflineUI = isOffline || Boolean(hasPendingDraft) || syncing;
+  const showOfflineUI = isOffline;
 
   const dateStr = currentDraft?.createdAt
     ? new Date(currentDraft.createdAt).toLocaleDateString('en-GB', {
@@ -498,6 +498,72 @@ export const DraftOfflineScreen: React.FC = () => {
                 </View>
               )}
             </>
+          ) : syncing || syncProgress.phase !== 'idle' ? (
+            /* Online State — Syncing in progress */
+            <View style={{ width: '100%', gap: 16 }}>
+              <View style={styles.onlineBadge}>
+                <MaterialIcons name="cloud-sync" size={20} color={colors.primary} />
+                <Text style={[styles.onlineBadgeText, { color: colors.primary }]}>Online — Synchronizing Draft</Text>
+              </View>
+              {renderSyncProgress()}
+            </View>
+          ) : hasPendingDraft ? (
+            /* Online State with Pending Draft */
+            <View style={styles.onlineContainer}>
+              <View style={styles.onlineBadge}>
+                <MaterialIcons name="cloud-done" size={20} color={colors.statusGreenText} />
+                <Text style={styles.onlineBadgeText}>Online — Central Server Connected</Text>
+              </View>
+
+              <View style={styles.centralCard}>
+                <View style={styles.centralCardHeader}>
+                  <MaterialIcons name="sync" size={20} color={colors.primary} />
+                  <Text style={styles.centralCardHeaderText}>DRAFT READY TO SYNC</Text>
+                </View>
+
+                <View style={styles.centralCardBody}>
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>ID</Text>
+                    <Text style={styles.infoValueBold}>{displayDraftId}</Text>
+                  </View>
+
+                  <View style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>Product</Text>
+                    <Text style={styles.infoValueBold}>
+                      {currentDraft?.productName || 'Unknown product'}
+                    </Text>
+                  </View>
+
+                  <View style={styles.cardFooterRow}>
+                    <View style={styles.imagesSavedBox}>
+                      <MaterialIcons name="image" size={14} color={colors.onSurfaceVariant} />
+                      <Text style={styles.imagesSavedText}>
+                        {currentDraft?.images?.length || 0} images saved · {dateStr}
+                      </Text>
+                    </View>
+                  </View>
+                </View>
+              </View>
+
+              <View style={styles.actionsContainer}>
+                <TouchableOpacity
+                  style={styles.retryButton}
+                  onPress={() => currentDraft && runSync(currentDraft)}
+                  activeOpacity={0.85}
+                >
+                  <MaterialIcons name="cloud-upload" size={18} color={colors.onPrimary} />
+                  <Text style={styles.retryButtonText}>Synchronize Draft Now</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.continueOfflineBtn}
+                  onPress={() => navigation.navigate('Inspections' as any)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.continueOfflineText}>View All Inspections</Text>
+                </TouchableOpacity>
+              </View>
+            </View>
           ) : (
             /* Online State with All Synced */
             <View style={styles.onlineContainer}>
@@ -534,10 +600,10 @@ export const DraftOfflineScreen: React.FC = () => {
 
                 <TouchableOpacity
                   style={styles.continueOfflineBtn}
-                  onPress={() => navigation.navigate('Dashboard')}
+                  onPress={() => navigation.navigate('Inspections' as any)}
                   activeOpacity={0.85}
                 >
-                  <Text style={styles.continueOfflineText}>Return to Dashboard</Text>
+                  <Text style={styles.continueOfflineText}>View All Inspections</Text>
                 </TouchableOpacity>
               </View>
             </View>

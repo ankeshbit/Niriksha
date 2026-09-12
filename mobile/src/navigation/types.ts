@@ -13,5 +13,11 @@ export type RootStackParamList = {
   ReportsList: undefined;
   Profile: undefined;
   DraftOffline: { clientDraftId?: string } | undefined;
+  Inspections: undefined;
   ListingComparison: { inspectionId: string; inspectionNumber?: string };
+  // Supervisor Management Routes
+  SupervisorDashboard: undefined;
+  SupervisorAllInspections: { inspectorIdFilter?: string } | undefined;
+  SupervisorInspectors: undefined;
+  SupervisorInspectionDetail: { inspectionId: string; inspectionNumber?: string };
 };

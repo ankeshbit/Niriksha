@@ -72,5 +72,6 @@ def require_roles(*roles: str):
 # Standard Role Dependencies for PS 26034
 require_inspector = RoleChecker(["INSPECTOR", "ADMIN"])
 require_supervisor_or_admin = RoleChecker(["SUPERVISOR", "ADMIN"])
+require_supervisor = RoleChecker(["SUPERVISOR", "ADMIN"])
 require_admin = RoleChecker(["ADMIN"])
 

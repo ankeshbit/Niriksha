@@ -56,7 +56,7 @@ export const ReportPreviewScreen: React.FC = () => {
       const pdfUrl = `${baseUrl}/api/inspections/${inspectionId}/report/pdf`;
       const token = await authStorage.getToken();
 
-      const filename = `Inspection_Report_${report?.inspection_number || inspectionNumber || 'LM-2026'}.pdf`;
+      const filename = `Inspection_Report_${report?.inspection_number || inspectionNumber || inspectionId || 'Report'}.pdf`;
 
       if (Platform.OS === 'web') {
         const response = await fetch(pdfUrl, {
@@ -113,7 +113,7 @@ export const ReportPreviewScreen: React.FC = () => {
       const docxUrl = `${baseUrl}/api/inspections/${inspectionId}/report/docx`;
       const token = await authStorage.getToken();
 
-      const safeNum = (report?.inspection_number || inspectionNumber || 'LM-2026').replace(/-/g, '_').replace(/\//g, '_');
+      const safeNum = (report?.inspection_number || inspectionNumber || inspectionId || 'Report').replace(/-/g, '_').replace(/\//g, '_');
       const filename = `LM_Report_${safeNum}.docx`;
 
       if (Platform.OS === 'web') {
@@ -351,6 +351,25 @@ export const ReportPreviewScreen: React.FC = () => {
                   <Text style={styles.detailLabel}>MANUFACTURER</Text>
                   <Text style={styles.detailValue}>{report?.manufacturer || report?.product_name || '—'}</Text>
                 </View>
+                {report?.pdf_hash ? (
+                  <View style={styles.detailItem}>
+                    <Text style={styles.detailLabel}>SHA-256 DIGITAL CHECKSUM</Text>
+                    <Text
+                      style={[
+                        styles.detailValue,
+                        {
+                          fontFamily: Platform.OS === 'ios' ? 'Courier' : 'monospace',
+                          fontSize: 11,
+                          color: colors.primary,
+                        },
+                      ]}
+                      numberOfLines={2}
+                      selectable
+                    >
+                      {report.pdf_hash}
+                    </Text>
+                  </View>
+                ) : null}
               </View>
 
               {/* Immutable record notice */}

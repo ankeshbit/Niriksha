@@ -8,6 +8,8 @@ export interface ProfileAvatarProps {
   size?: number;
   /** Size of the user silhouette icon (default: size * 0.58) */
   iconSize?: number;
+  /** Optional user name for initials/accessibility */
+  name?: string;
   /** Custom container styling */
   style?: StyleProp<ViewStyle>;
   /** Silhouette icon color (default: neutral slate/gray) */
