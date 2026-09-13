@@ -215,4 +215,70 @@ describe('NiriKsha Intro Video Launch Flow', () => {
       expect(resetCall.routes.some((r) => r.name === 'Intro')).toBe(false);
     });
   });
+
+  describe('Bundled Video Asset & Offline Raw Resource Integrity', () => {
+    const fs = require('fs');
+    const path = require('path');
+
+    it('verifies the primary video asset exists and is non-empty', () => {
+      const videoPath = path.resolve(__dirname, '../../../assets/videos/niriksha_intro.mp4');
+      expect(fs.existsSync(videoPath)).toBe(true);
+      const stat = fs.statSync(videoPath);
+      expect(stat.size).toBeGreaterThan(1024 * 1024); // > 1MB
+    });
+
+    it('verifies the compiled Android raw resource exists in res/raw for offline playback', () => {
+      const rawPath = path.resolve(__dirname, '../../../android/app/src/main/res/raw/niriksha_intro.mp4');
+      expect(fs.existsSync(rawPath)).toBe(true);
+      const stat = fs.statSync(rawPath);
+      expect(stat.size).toBe(2835493); // exact matching size
+    });
+
+    it('verifies the NiriKsha logo asset exists for fallback display', () => {
+      const logoPath = path.resolve(__dirname, '../../../assets/niriksha_logo.png');
+      expect(fs.existsSync(logoPath)).toBe(true);
+      const stat = fs.statSync(logoPath);
+      expect(stat.size).toBeGreaterThan(100 * 1024);
+    });
+
+    it('verifies the Android raw resource URI conforms to standard', () => {
+      const rawUri = 'android.resource://gov.doca.legalmetrology/raw/niriksha_intro';
+      expect(rawUri.startsWith('android.resource://')).toBe(true);
+      expect(rawUri.endsWith('/raw/niriksha_intro')).toBe(true);
+    });
+  });
+
+  describe('User Interactive Controls (Skip & Fallback Continue)', () => {
+    it('allows user to skip intro immediately via skip button', () => {
+      const navigationMock = {
+        reset: jest.fn(),
+      };
+
+      const manager = createIntroTransitionManager(navigationMock, () => 'Login');
+      const res = manager.handleFinish('user_skipped');
+
+      expect(res.status).toBe('navigated');
+      expect(res.reason).toBe('user_skipped');
+      expect(navigationMock.reset).toHaveBeenCalledWith({
+        index: 0,
+        routes: [{ name: 'Login' }],
+      });
+    });
+
+    it('allows user to advance when continue is pressed on fallback UI', () => {
+      const navigationMock = {
+        reset: jest.fn(),
+      };
+
+      const manager = createIntroTransitionManager(navigationMock, () => 'Login');
+      const res = manager.handleFinish('user_continue_pressed');
+
+      expect(res.status).toBe('navigated');
+      expect(res.reason).toBe('user_continue_pressed');
+      expect(navigationMock.reset).toHaveBeenCalledWith({
+        index: 0,
+        routes: [{ name: 'Login' }],
+      });
+    });
+  });
 });

@@ -25,6 +25,8 @@ export const ReviewAndSubmitScreen: React.FC = () => {
   const route = useRoute<RouteProp<RootStackParamList, 'ReviewAndSubmit'>>();
   const { inspectionId, inspectionNumber } = route.params;
 
+  const targetId: string = inspectionId || inspectionNumber || '';
+
   const [inspection, setInspection] = useState<any | null>(null);
   const [images, setImages] = useState<any[]>([]);
   const [declarations, setDeclarations] = useState<any[]>([]);
@@ -38,11 +40,11 @@ export const ReviewAndSubmitScreen: React.FC = () => {
   const loadAll = useCallback(async () => {
     try {
       const [insp, imgs, decls, fnds, compSummary] = await Promise.all([
-        api.getInspection(inspectionId),
-        api.getInspectionImages(inspectionId),
-        api.getDeclarations(inspectionId).catch(() => []),
-        api.getFindings(inspectionId).catch(() => []),
-        api.getComplianceSummary(inspectionId).catch(() => null),
+        api.getInspection(targetId),
+        api.getInspectionImages(targetId),
+        api.getDeclarations(targetId).catch(() => []),
+        api.getFindings(targetId).catch(() => []),
+        api.getComplianceSummary(targetId).catch(() => null),
       ]);
       setInspection(insp);
       setImages(imgs || []);
@@ -64,7 +66,7 @@ export const ReviewAndSubmitScreen: React.FC = () => {
     } finally {
       setLoading(false);
     }
-  }, [inspectionId]);
+  }, [targetId]);
 
   // Re-fetch on focus to guarantee fresh adjudication status after returning from FindingsScreen
   useFocusEffect(
@@ -73,7 +75,7 @@ export const ReviewAndSubmitScreen: React.FC = () => {
     }, [loadAll])
   );
 
-  const unadjudicatedFindings = findings.filter((f) => {
+  const isFindingPendingAdjudication = (f: any): boolean => {
     if (typeof f.is_pending_adjudication === 'boolean') {
       return f.is_pending_adjudication;
     }
@@ -84,18 +86,26 @@ export const ReviewAndSubmitScreen: React.FC = () => {
     const resolvedActions = ['CONFIRMED', 'DISMISSED', 'NOT_APPLICABLE', 'CORRECTED'];
     const isResolved = resolvedActions.includes(adjStatus);
     return isNonPass && !isResolved;
-  });
+  };
+
+  const unadjudicatedFindings = findings.filter(isFindingPendingAdjudication);
+
+  // Authoritative pending count: Backend compliance-summary is the single source of truth
+  const pendingCount =
+    typeof complianceSummary?.pending_adjudication_count === 'number'
+      ? complianceSummary.pending_adjudication_count
+      : unadjudicatedFindings.length;
 
   const handleFinalize = async () => {
-    if (unadjudicatedFindings.length > 0) {
-      const msg = `Cannot finalize inspection: ${unadjudicatedFindings.length} finding(s) require inspector adjudication. Navigating to adjudication screen...`;
+    if (pendingCount > 0) {
+      const msg = `Cannot finalize inspection: ${pendingCount} finding(s) require inspector adjudication. Navigating to adjudication screen...`;
       if (Platform.OS === 'web' && typeof window !== 'undefined') {
         const proceed = window.confirm(
-          `Action Required: Pending Adjudication\n\n${unadjudicatedFindings.length} finding(s) require inspector adjudication before generating the official report.\n\nClick OK to Review & Adjudicate Findings now.`
+          `Action Required: Pending Adjudication\n\n${pendingCount} finding(s) require inspector adjudication before generating the official report.\n\nClick OK to Review & Adjudicate Findings now.`
         );
         if (proceed) {
           navigation.navigate('Findings', {
-            inspectionId,
+            inspectionId: targetId,
             inspectionNumber: inspection?.inspection_number || inspectionNumber,
             filter: 'pending_adjudication',
           });
@@ -103,13 +113,13 @@ export const ReviewAndSubmitScreen: React.FC = () => {
       } else {
         Alert.alert(
           'Action Required: Pending Adjudication',
-          `Cannot finalize inspection: ${unadjudicatedFindings.length} finding(s) require inspector adjudication. Please review and adjudicate before submitting.`,
+          `Cannot finalize inspection: ${pendingCount} finding(s) require inspector adjudication. Please review and adjudicate before submitting.`,
           [
             {
               text: 'Review Findings',
               onPress: () =>
                 navigation.navigate('Findings', {
-                  inspectionId,
+                  inspectionId: targetId,
                   inspectionNumber: inspection?.inspection_number || inspectionNumber,
                   filter: 'pending_adjudication',
                 }),
@@ -509,12 +519,12 @@ export const ReviewAndSubmitScreen: React.FC = () => {
               </View>
 
               {/* Unadjudicated Findings Gate Banner */}
-              {unadjudicatedFindings.length > 0 && (
+              {pendingCount > 0 && (
                 <View style={styles.adjudicationAlertBox}>
                   <View style={styles.adjudicationAlertHeader}>
                     <MaterialIcons name="gavel" size={20} color={colors.statusRedText} />
                     <Text style={styles.adjudicationAlertTitle}>
-                      {unadjudicatedFindings.length} Finding{unadjudicatedFindings.length > 1 ? 's' : ''} Pending Adjudication
+                      {pendingCount} Finding{pendingCount > 1 ? 's' : ''} Pending Adjudication
                     </Text>
                   </View>
                   <Text style={styles.adjudicationAlertText}>
@@ -524,7 +534,7 @@ export const ReviewAndSubmitScreen: React.FC = () => {
                     style={styles.adjudicateLink}
                     onPress={() =>
                       navigation.navigate('Findings', {
-                        inspectionId,
+                        inspectionId: targetId,
                         inspectionNumber: inspection?.inspection_number || inspectionNumber,
                         filter: 'pending_adjudication',
                       })
@@ -549,7 +559,7 @@ export const ReviewAndSubmitScreen: React.FC = () => {
                 <TouchableOpacity
                   style={[
                     styles.submitBtn,
-                    unadjudicatedFindings.length > 0 && styles.submitBtnPending,
+                    pendingCount > 0 && styles.submitBtnPending,
                   ]}
                   onPress={handleFinalize}
                   disabled={finalizing}
@@ -560,13 +570,13 @@ export const ReviewAndSubmitScreen: React.FC = () => {
                   ) : (
                     <View style={styles.submitBtnContent}>
                       <MaterialIcons
-                        name={unadjudicatedFindings.length > 0 ? "gavel" : "assignment-turned-in"}
+                        name={pendingCount > 0 ? "gavel" : "assignment-turned-in"}
                         size={18}
                         color={colors.onPrimary}
                       />
                       <Text style={styles.submitBtnText}>
-                        {unadjudicatedFindings.length > 0
-                          ? `Review & Adjudicate (${unadjudicatedFindings.length} Pending)`
+                        {pendingCount > 0
+                          ? `Review & Adjudicate (${pendingCount} Pending)`
                           : 'Submit Inspection & Generate Report'}
                       </Text>
                     </View>

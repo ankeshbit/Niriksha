@@ -7,6 +7,7 @@ import {
   Animated,
   Easing,
   Platform,
+  AccessibilityInfo,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
@@ -30,25 +31,90 @@ type AnalysisStage =
 
 // ─── SpinningIcon — animated rotating sync icon ────────────────────────────────
 
-const SpinningIcon: React.FC<{ size?: number; color?: string }> = ({
+export interface SpinningIconProps {
+  size?: number;
+  color?: string;
+  active?: boolean;
+  accessibilityLabel?: string;
+  testID?: string;
+}
+
+export const SpinningIcon: React.FC<SpinningIconProps> = ({
   size = 20,
   color,
+  active = true,
+  accessibilityLabel = 'Processing',
+  testID = 'spinning-icon',
 }) => {
   const isWeb = Platform.OS === 'web';
   const spinAnim = useRef(new Animated.Value(0)).current;
+  const animLoopRef = useRef<Animated.CompositeAnimation | null>(null);
+  const [reduceMotion, setReduceMotion] = useState(false);
 
   useEffect(() => {
+    let isMounted = true;
+
+    // Respect accessibility settings for reduced motion
+    AccessibilityInfo.isReduceMotionEnabled()
+      .then((enabled) => {
+        if (isMounted) setReduceMotion(Boolean(enabled));
+      })
+      .catch(() => {});
+
+    let subscription: any = null;
+    try {
+      subscription = AccessibilityInfo.addEventListener(
+        'reduceMotionChanged',
+        (enabled: boolean) => {
+          if (isMounted) setReduceMotion(Boolean(enabled));
+        }
+      );
+    } catch {
+      // Platform / version fallback
+    }
+
+    return () => {
+      isMounted = false;
+      if (subscription && typeof subscription.remove === 'function') {
+        subscription.remove();
+      }
+    };
+  }, []);
+
+  useEffect(() => {
+    // Stop any existing animation loop immediately
+    if (animLoopRef.current) {
+      animLoopRef.current.stop();
+      animLoopRef.current = null;
+    }
+    spinAnim.stopAnimation();
+
+    if (!active || reduceMotion) {
+      spinAnim.setValue(0);
+      return;
+    }
+
+    spinAnim.setValue(0);
     const loop = Animated.loop(
       Animated.timing(spinAnim, {
         toValue: 1,
         duration: 900,
         easing: Easing.linear,
         useNativeDriver: !isWeb,
-      })
+      }),
+      { iterations: -1, resetBeforeIteration: true }
     );
+    animLoopRef.current = loop;
     loop.start();
-    return () => loop.stop();
-  }, []);
+
+    return () => {
+      if (animLoopRef.current) {
+        animLoopRef.current.stop();
+        animLoopRef.current = null;
+      }
+      spinAnim.stopAnimation();
+    };
+  }, [active, reduceMotion, isWeb]);
 
   const rotate = spinAnim.interpolate({
     inputRange: [0, 1],
@@ -56,7 +122,20 @@ const SpinningIcon: React.FC<{ size?: number; color?: string }> = ({
   });
 
   return (
-    <Animated.View style={{ transform: [{ rotate }] }}>
+    <Animated.View
+      collapsable={false}
+      testID={testID}
+      accessibilityRole="progressbar"
+      accessibilityLabel={accessibilityLabel}
+      accessibilityState={{ busy: active }}
+      style={{
+        width: size,
+        height: size,
+        justifyContent: 'center',
+        alignItems: 'center',
+        transform: [{ rotate }],
+      }}
+    >
       <MaterialIcons name="sync" size={size} color={color || colors.primary} />
     </Animated.View>
   );
@@ -298,7 +377,30 @@ export const AnalyzingScreen: React.FC = () => {
       setProgressPercent(70);
       console.log('[ANALYZING_SCREEN] Step 4: Extracting statutory declarations', { inspectionId, stage: 'EXTRACTION' });
 
-      await new Promise<void>((r) => setTimeout(r, 400));
+      try {
+        const declsRes = await api.getDeclarations(inspectionId);
+        console.log('[ANALYZING_SCREEN] Step 4 Declarations confirmed on backend', {
+          inspectionId,
+          count: Array.isArray(declsRes) ? declsRes.length : 0,
+        });
+      } catch (declErr: any) {
+        if (!isMountedRef.current) return;
+        const classified = classifyFetchError(declErr);
+        console.error('[ANALYZING_SCREEN_ERROR] Declarations retrieval failed', {
+          inspectionId,
+          stage: 'EXTRACTION',
+          errorType: classified.type,
+          message: classified.message,
+        });
+        setStage('ERROR');
+        setErrorTitle('Declaration Extraction Failed');
+        setErrorMessage(
+          classified.userMessage ||
+          'Failed to retrieve extracted package declarations. Please go back and retry.'
+        );
+        return;
+      }
+
       if (!isMountedRef.current) return;
 
       // Stage 4: COMPLIANCE — evaluate deterministic legal metrology rules
@@ -428,7 +530,13 @@ export const AnalyzingScreen: React.FC = () => {
                   {step3Done ? (
                     <MaterialIcons name="check-circle" size={20} color={colors.statusGreenText} />
                   ) : step3Active ? (
-                    <SpinningIcon size={20} color={colors.primary} />
+                    <SpinningIcon
+                      size={20}
+                      color={colors.primary}
+                      active={step3Active}
+                      accessibilityLabel="Reading package text in progress"
+                      testID="step-ocr-spinner"
+                    />
                   ) : (
                     <MaterialIcons name="radio-button-unchecked" size={20} color={colors.secondary} />
                   )}
@@ -442,7 +550,13 @@ export const AnalyzingScreen: React.FC = () => {
                   {step4Done ? (
                     <MaterialIcons name="check-circle" size={20} color={colors.statusGreenText} />
                   ) : step4Active ? (
-                    <SpinningIcon size={20} color={colors.primary} />
+                    <SpinningIcon
+                      size={20}
+                      color={colors.primary}
+                      active={step4Active}
+                      accessibilityLabel="Extracting declarations in progress"
+                      testID="step-extraction-spinner"
+                    />
                   ) : (
                     <MaterialIcons name="radio-button-unchecked" size={20} color={colors.secondary} />
                   )}
@@ -456,7 +570,13 @@ export const AnalyzingScreen: React.FC = () => {
                   {step5Done ? (
                     <MaterialIcons name="check-circle" size={20} color={colors.statusGreenText} />
                   ) : step5Active ? (
-                    <SpinningIcon size={20} color={colors.primary} />
+                    <SpinningIcon
+                      size={20}
+                      color={colors.primary}
+                      active={step5Active}
+                      accessibilityLabel="Checking compliance rules in progress"
+                      testID="step-compliance-spinner"
+                    />
                   ) : (
                     <MaterialIcons name="radio-button-unchecked" size={20} color={colors.secondary} />
                   )}

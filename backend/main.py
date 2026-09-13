@@ -30,7 +30,8 @@ from fastapi import (
     UploadFile,
     File,
     Form,
-    Body
+    Body,
+    Response
 )
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
@@ -2742,6 +2743,7 @@ def get_inspection_declaration_validation(
 def get_inspection_compliance_summary(
     inspection_id: str,
     status: Optional[str] = Query(None, description="Filter: 'pending_adjudication' to return only findings requiring officer adjudication"),
+    response: Response = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -2750,6 +2752,11 @@ def get_inspection_compliance_summary(
     Includes mandatory detection, placement, readability, font size, listing discrepancy metrics,
     and live inspection-specific rule compliance finding metrics.
     """
+    if response:
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+
     inspection = get_inspection_by_id_or_number(db, inspection_id)
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")
@@ -3025,7 +3032,12 @@ def evaluate_inspection_rules(
             adjudicated_by=None,
             adjudicated_at=None,
             created_at=created_now,
-            evidence_items=evidence_resp_items
+            evidence_items=evidence_resp_items,
+            category=rule_ver.category if rule_ver else "CATEGORY_A_LEGAL",
+            status=res.result_state.value,
+            adjudication="PENDING",
+            description=res.explanation,
+            is_pending_adjudication=res.result_state.value not in ("PASS", "NOT_APPLICABLE", "")
         ))
 
         if res.result_state == "PASS":
@@ -3091,10 +3103,16 @@ def evaluate_inspection_rules(
 def get_inspection_findings(
     inspection_id: str,
     status: Optional[str] = Query(None, description="Optional filter: 'pending_adjudication' to return only findings requiring officer adjudication"),
+    response: Response = None,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Retrieves potential findings and compliance check results for an inspection, optionally filtered by adjudication status."""
+    if response:
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        response.headers["Pragma"] = "no-cache"
+        response.headers["Expires"] = "0"
+
     inspection = get_inspection_by_id_or_number(db, inspection_id)
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")

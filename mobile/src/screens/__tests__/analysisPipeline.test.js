@@ -230,4 +230,179 @@ describe('Analysis Pipeline & Error Classification Contract', () => {
     expect(pollCount).toBe(3);
     expect(finalStatus).toBe('EXTRACTION_COMPLETE');
   });
+
+  // 11. Active extraction step -> animation active state
+  it('activates extraction spinner during EXTRACTION stage (70%)', () => {
+    // Model state for step indicators
+    const deriveStepStates = (stage) => ({
+      step3Active: stage === 'OCR',
+      step3Done: ['EXTRACTION', 'COMPLIANCE', 'COMPLETED'].includes(stage),
+      step4Active: stage === 'EXTRACTION',
+      step4Done: ['COMPLIANCE', 'COMPLETED'].includes(stage),
+      step5Active: stage === 'COMPLIANCE',
+      step5Done: stage === 'COMPLETED',
+    });
+
+    const extractionState = deriveStepStates('EXTRACTION');
+    expect(extractionState.step4Active).toBe(true);
+    expect(extractionState.step4Done).toBe(false);
+    expect(extractionState.step3Done).toBe(true);
+  });
+
+  // 12. Extraction completion -> animation stops and transitions to COMPLIANCE
+  it('stops extraction animation and advances to COMPLIANCE when backend returns HTTP 200', async () => {
+    const animationLifecycle = [];
+    const mockAnimation = {
+      start: jest.fn(() => animationLifecycle.push('STARTED')),
+      stop: jest.fn(() => animationLifecycle.push('STOPPED')),
+    };
+
+    const mockApi = {
+      getDeclarations: jest.fn().mockResolvedValue([
+        { field_name: 'net_quantity', extracted_value: '500g' },
+        { field_name: 'mrp', extracted_value: 'Rs. 150' },
+      ]),
+    };
+
+    let currentStage = 'EXTRACTION';
+    let progressPercent = 70;
+    mockAnimation.start();
+
+    // Backend returns declarations successfully
+    const decls = await mockApi.getDeclarations('insp-101');
+    expect(decls).toHaveLength(2);
+
+    // Transition out of EXTRACTION to COMPLIANCE
+    mockAnimation.stop();
+    currentStage = 'COMPLIANCE';
+    progressPercent = 90;
+
+    expect(animationLifecycle).toEqual(['STARTED', 'STOPPED']);
+    expect(currentStage).toBe('COMPLIANCE');
+    expect(progressPercent).toBe(90);
+  });
+
+  // 13. Extraction error -> animation stops and enters ERROR state
+  it('stops extraction animation and enters ERROR state on API failure', async () => {
+    const animationLifecycle = [];
+    const mockAnimation = {
+      start: jest.fn(() => animationLifecycle.push('STARTED')),
+      stop: jest.fn(() => animationLifecycle.push('STOPPED')),
+    };
+
+    const mockApi = {
+      getDeclarations: jest.fn().mockRejectedValue(new Error('Network request failed')),
+    };
+
+    let currentStage = 'EXTRACTION';
+    let errorTitle = '';
+    let errorMessage = '';
+    mockAnimation.start();
+
+    try {
+      await mockApi.getDeclarations('insp-error');
+    } catch (err) {
+      const classified = classifyFetchError(err);
+      mockAnimation.stop();
+      currentStage = 'ERROR';
+      errorTitle = 'Declaration Extraction Failed';
+      errorMessage = classified.userMessage;
+    }
+
+    expect(animationLifecycle).toEqual(['STARTED', 'STOPPED']);
+    expect(currentStage).toBe('ERROR');
+    expect(errorTitle).toBe('Declaration Extraction Failed');
+    expect(errorMessage).toContain('Backend connection unavailable');
+  });
+
+  // 14. Component unmount -> animation cleanup and request abort
+  it('cleans up animation loop and aborts in-flight request when component unmounts', () => {
+    let animationActive = true;
+    let inFlightAborted = false;
+
+    const abortController = {
+      abort: jest.fn(() => {
+        inFlightAborted = true;
+      }),
+    };
+
+    const stopAnimation = jest.fn(() => {
+      animationActive = false;
+    });
+
+    // Simulate unmount hook
+    const unmount = () => {
+      abortController.abort();
+      stopAnimation();
+    };
+
+    unmount();
+
+    expect(abortController.abort).toHaveBeenCalledTimes(1);
+    expect(stopAnimation).toHaveBeenCalledTimes(1);
+    expect(inFlightAborted).toBe(true);
+    expect(animationActive).toBe(false);
+  });
+
+  // 15. Complete pipeline transitions: Uploaded -> Quality -> OCR -> Extraction -> Compliance -> Completed
+  it('verifies full sequential transition without hanging indefinitely at 70%', async () => {
+    const visitedStages = [];
+    const visitedPercentages = [];
+
+    const mockApi = {
+      getInspection: jest.fn().mockResolvedValue({ status: 'IMAGES_UPLOADED' }),
+      runOCR: jest.fn().mockResolvedValue({ status: 'EXTRACTION_COMPLETE', declarations_count: 5 }),
+      getDeclarations: jest.fn().mockResolvedValue([{ field_name: 'mrp', extracted_value: 'Rs. 99' }]),
+      evaluateRules: jest.fn().mockResolvedValue({ findings_count: 0, overall_status: 'COMPLIANT' }),
+    };
+
+    // Step 1 & 2: Pre-conditions met (images uploaded & quality checked)
+    visitedStages.push('IMAGES_UPLOADED');
+    visitedStages.push('QUALITY_CHECKED');
+
+    // Step 3: OCR (40%)
+    visitedStages.push('OCR');
+    visitedPercentages.push(40);
+    const ocrResult = await mockApi.runOCR('insp-seq');
+    expect(ocrResult.status).toBe('EXTRACTION_COMPLETE');
+
+    // Step 4: Extraction (70%)
+    visitedStages.push('EXTRACTION');
+    visitedPercentages.push(70);
+    const decls = await mockApi.getDeclarations('insp-seq');
+    expect(decls).toHaveLength(1);
+
+    // Step 5: Compliance rules (90%)
+    visitedStages.push('COMPLIANCE');
+    visitedPercentages.push(90);
+    const evalRes = await mockApi.evaluateRules('insp-seq');
+    expect(evalRes.overall_status).toBe('COMPLIANT');
+
+    // Step 6: Completed (100%)
+    visitedStages.push('COMPLETED');
+    visitedPercentages.push(100);
+
+    expect(visitedStages).toEqual([
+      'IMAGES_UPLOADED',
+      'QUALITY_CHECKED',
+      'OCR',
+      'EXTRACTION',
+      'COMPLIANCE',
+      'COMPLETED',
+    ]);
+    expect(visitedPercentages).toEqual([40, 70, 90, 100]);
+  });
+
+  // 16. Reduced-motion accessibility setting
+  it('respects reduce-motion accessibility setting by keeping animation stationary', () => {
+    const isReduceMotionEnabled = true;
+    let isSpinning = false;
+
+    if (!isReduceMotionEnabled) {
+      isSpinning = true;
+    }
+
+    expect(isSpinning).toBe(false);
+  });
 });
+

@@ -15,7 +15,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
 import { BottomNav } from '../components/BottomNav';
 import { ProfileAvatar } from '../components/ProfileAvatar';
-import { api } from '../services/api';
+import { api, classifyFetchError } from '../services/api';
 import { useNavigation, useRoute, useFocusEffect, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
@@ -40,6 +40,7 @@ export const FindingsScreen: React.FC = () => {
   }, [route.params?.filter]);
 
   const [findings, setFindings] = useState<any[]>([]);
+  const [pendingList, setPendingList] = useState<any[] | null>(null);
   const [summary, setSummary] = useState<any>(null);
   const [inspection, setInspection] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -52,6 +53,8 @@ export const FindingsScreen: React.FC = () => {
   const [adjudicationNotes, setAdjudicationNotes] = useState('');
   const [correctedValue, setCorrectedValue] = useState('');
   const [savingAction, setSavingAction] = useState(false);
+  const [submittingFindingId, setSubmittingFindingId] = useState<string | null>(null);
+  const [navigatingToReview, setNavigatingToReview] = useState(false);
 
   const loadFindings = async () => {
     if (!targetId) {
@@ -64,10 +67,12 @@ export const FindingsScreen: React.FC = () => {
       setLoading(true);
       setError(null);
 
-      // Fetch live compliance summary and inspection details concurrently
-      const [summaryRes, inspRes] = await Promise.allSettled([
+      // Concurrently fetch compliance summary, inspection details, pending findings, and all findings
+      const [summaryRes, inspRes, pendingRes, allRes] = await Promise.allSettled([
         api.getComplianceSummary(targetId),
         api.getInspection(targetId),
+        api.getFindings(targetId, { status: 'pending_adjudication' }),
+        api.getFindings(targetId),
       ]);
 
       if (inspRes.status === 'fulfilled' && inspRes.value) {
@@ -75,24 +80,27 @@ export const FindingsScreen: React.FC = () => {
       }
 
       if (summaryRes.status === 'fulfilled' && summaryRes.value) {
-        const sumData = summaryRes.value;
-        setSummary(sumData);
-        if (Array.isArray(sumData.findings) && sumData.findings.length > 0) {
-          setFindings(sumData.findings);
-        } else {
-          // If summary doesn't contain findings array, fetch via dedicated findings endpoint
-          const findingsList = await api.getFindings(targetId);
-          setFindings(Array.isArray(findingsList) ? findingsList : []);
-        }
+        setSummary(summaryRes.value);
+      }
+
+      let allFindingsList: any[] = [];
+      if (allRes.status === 'fulfilled' && Array.isArray(allRes.value)) {
+        allFindingsList = allRes.value;
+      } else if (summaryRes.status === 'fulfilled' && Array.isArray(summaryRes.value?.findings)) {
+        allFindingsList = summaryRes.value.findings;
+      }
+      setFindings(allFindingsList);
+
+      if (pendingRes.status === 'fulfilled' && Array.isArray(pendingRes.value)) {
+        setPendingList(pendingRes.value);
       } else {
-        // If compliance-summary endpoint failed, attempt fallback to findings endpoint
-        const findingsList = await api.getFindings(targetId);
-        setFindings(Array.isArray(findingsList) ? findingsList : []);
+        setPendingList(allFindingsList.filter(isFindingPendingAdjudication));
       }
     } catch (err: any) {
       console.error('Failed to load live findings for inspection', targetId, err);
       setError('Unable to load inspection findings');
       setFindings([]);
+      setPendingList([]);
       setSummary(null);
     } finally {
       setLoading(false);
@@ -122,35 +130,78 @@ export const FindingsScreen: React.FC = () => {
   const openModal = (finding: any, action: AdjudicationAction) => {
     setAdjudicatingFinding(finding);
     setActionType(action);
-    setCorrectedValue('');
+    setCorrectedValue(finding.corrected_value || finding.extracted_value || '');
     const defaultNotes: Record<AdjudicationAction, string> = {
       CONFIRMED: finding.adjudication_notes || 'Confirmed non-compliance on physical inspection.',
       DISMISSED: finding.adjudication_notes || 'Dismissed: Verified statutory exemption applies.',
       NOT_APPLICABLE: finding.adjudication_notes || 'Rule is not applicable to this commodity category.',
-      CORRECTED: '',
+      CORRECTED: finding.adjudication_notes || 'Corrected statutory label information.',
     };
     setAdjudicationNotes(defaultNotes[action]);
   };
 
-  const handleRequestNewImage = async (finding: any) => {
-    Alert.alert(
-      'Request New Image',
-      `This will mark finding "${finding.title}" as needing more evidence and navigate you to capture a new package image.\n\nProceed?`,
-      [
-        { text: 'Cancel', style: 'cancel' },
-        {
-          text: 'Capture New Image',
-          onPress: async () => {
-            try {
-              await api.requestNewImage(finding.id);
-              navigation.navigate('CaptureImages', { inspectionId: targetId || '', inspectionNumber });
-            } catch (err: any) {
-              Alert.alert('Error', err.message || 'Could not initiate new image request.');
-            }
+  const handleDirectAdjudicate = async (finding: any, action: AdjudicationAction) => {
+    if (!finding?.id || submittingFindingId) return;
+
+    if (action === 'CORRECTED') {
+      openModal(finding, 'CORRECTED');
+      return;
+    }
+
+    setSubmittingFindingId(finding.id);
+    try {
+      const defaultNotes: Record<AdjudicationAction, string> = {
+        CONFIRMED: 'Confirmed non-compliance on physical inspection.',
+        DISMISSED: 'Dismissed: Verified statutory exemption applies.',
+        NOT_APPLICABLE: 'Rule is not applicable to this commodity category.',
+        CORRECTED: '',
+      };
+
+      await api.adjudicateFinding(finding.id, {
+        action,
+        notes: defaultNotes[action] || undefined,
+      });
+
+      // Refetch live canonical state from backend
+      await loadFindings();
+    } catch (err: any) {
+      console.error('Adjudication failed:', err);
+      const classified = classifyFetchError(err);
+      Alert.alert('Adjudication Error', classified.userMessage || 'Could not save adjudication decision.');
+    } finally {
+      setSubmittingFindingId(null);
+    }
+  };
+
+  const handleRequestNewEvidence = async (finding: any) => {
+    if (!finding?.id || submittingFindingId) return;
+
+    setSubmittingFindingId(finding.id);
+    try {
+      await api.requestNewImage(finding.id);
+      await loadFindings();
+      Alert.alert(
+        'Evidence Requested',
+        `Finding "${finding.title}" is now awaiting additional evidence. It remains pending adjudication until new photographic evidence is reviewed.`,
+        [
+          { text: 'Done', style: 'default' },
+          {
+            text: 'Capture Now',
+            onPress: () =>
+              navigation.navigate('CaptureImages', {
+                inspectionId: targetId || '',
+                inspectionNumber: displayInspectionNumber,
+              }),
           },
-        },
-      ]
-    );
+        ]
+      );
+    } catch (err: any) {
+      console.error('Request new evidence failed:', err);
+      const classified = classifyFetchError(err);
+      Alert.alert('Error', classified.userMessage || 'Could not request new evidence.');
+    } finally {
+      setSubmittingFindingId(null);
+    }
   };
 
   const handleSaveAdjudication = async () => {
@@ -160,11 +211,12 @@ export const FindingsScreen: React.FC = () => {
       return;
     }
     if (actionType === 'CORRECTED' && !correctedValue.trim()) {
-      Alert.alert('Required Value', 'Please enter the corrected value.');
+      Alert.alert('Required Value', 'Please enter the corrected value before saving.');
       return;
     }
 
     setSavingAction(true);
+    setSubmittingFindingId(adjudicatingFinding.id);
     try {
       await api.adjudicateFinding(adjudicatingFinding.id, {
         action: actionType,
@@ -175,9 +227,30 @@ export const FindingsScreen: React.FC = () => {
       await loadFindings();
       setAdjudicatingFinding(null);
     } catch (err: any) {
-      Alert.alert('Error', err.message || 'Could not save finding decision.');
+      const classified = classifyFetchError(err);
+      Alert.alert('Error', classified.userMessage || 'Could not save finding decision.');
     } finally {
       setSavingAction(false);
+      setSubmittingFindingId(null);
+    }
+  };
+
+  const handleProceedToReview = async () => {
+    if (!targetId || navigatingToReview) return;
+    setNavigatingToReview(true);
+    try {
+      await Promise.allSettled([
+        api.getComplianceSummary(targetId),
+        api.getInspection(targetId),
+      ]);
+    } catch (e) {
+      console.warn('Pre-navigation refresh warning:', e);
+    } finally {
+      setNavigatingToReview(false);
+      navigation.navigate('ReviewAndSubmit', {
+        inspectionId: targetId || '',
+        inspectionNumber: displayInspectionNumber,
+      });
     }
   };
 
@@ -235,15 +308,21 @@ export const FindingsScreen: React.FC = () => {
     return isNonPass && !isResolved;
   };
 
-  const pendingFindings = findings.filter(isFindingPendingAdjudication);
+  const pendingFindings = (
+    pendingList !== null ? pendingList : findings.filter(isFindingPendingAdjudication)
+  ).filter(isFindingPendingAdjudication);
+
   const displayedFindings = activeFilter === 'pending_adjudication' ? pendingFindings : findings;
 
-  const legalFindings = displayedFindings.filter(
-    (f) => !f.rule_code?.includes('DATA_QUAL') && f.category !== 'DATA_QUALITY' && f.category !== 'CATEGORY_B_DATA_QUALITY'
-  );
-  const qualityFindings = displayedFindings.filter(
-    (f) => f.rule_code?.includes('DATA_QUAL') || f.category === 'DATA_QUALITY' || f.category === 'CATEGORY_B_DATA_QUALITY'
-  );
+  const authoritativePendingCount =
+    typeof summary?.pending_adjudication_count === 'number'
+      ? summary.pending_adjudication_count
+      : pendingFindings.length;
+
+  // When activeFilter is 'pending_adjudication', show only pending findings.
+  // When activeFilter is 'all', show ALL findings with their current decisions/actions.
+  const legalFindings = displayedFindings;
+  const qualityFindings: any[] = [];
 
   const isEvaluationPending = summary && !summary.evaluation_completed && findings.length === 0;
 
@@ -397,7 +476,7 @@ export const FindingsScreen: React.FC = () => {
                       activeFilter === 'pending_adjudication' && styles.filterTabTextActive,
                     ]}
                   >
-                    Pending Adjudication ({pendingFindings.length})
+                    Pending Adjudication ({authoritativePendingCount})
                   </Text>
                 </TouchableOpacity>
 
@@ -420,7 +499,7 @@ export const FindingsScreen: React.FC = () => {
                       activeFilter === 'all' && styles.filterTabTextActive,
                     ]}
                   >
-                    All Findings ({findings.length})
+                    All Findings ({summary?.total_findings ?? findings.length})
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -439,13 +518,13 @@ export const FindingsScreen: React.FC = () => {
                       activeOpacity={0.8}
                     >
                       <MaterialIcons name="visibility" size={16} color={colors.primary} />
-                      <Text style={styles.viewAllFindingsBtnText}>View All Findings ({findings.length})</Text>
+                      <Text style={styles.viewAllFindingsBtnText}>View All Findings ({summary?.total_findings ?? findings.length})</Text>
                     </TouchableOpacity>
                   </View>
                 </View>
               ) : (
                 <>
-                  {/* Category A: Legal Compliance Checks */}
+                  {/* Category A: Legal Compliance Checks / Pending Findings */}
                   <View style={styles.findingSectionCard}>
                     <View style={[styles.sectionBanner, styles.sectionBannerBlue]}>
                       <View style={styles.sectionBannerTitleRow}>
@@ -458,7 +537,7 @@ export const FindingsScreen: React.FC = () => {
                       </View>
                       <Text style={styles.sectionBannerSub}>
                         {activeFilter === 'pending_adjudication'
-                          ? `${legalFindings.length} finding(s) require inspector action before report submission`
+                          ? `${legalFindings.length} finding${legalFindings.length === 1 ? '' : 's'} require inspector action before report submission`
                           : 'Category A — Legal / Statutory Compliance'}
                       </Text>
                     </View>
@@ -468,13 +547,22 @@ export const FindingsScreen: React.FC = () => {
                         <MaterialIcons name="check-circle-outline" size={28} color={colors.statusGreenText} />
                         <Text style={styles.emptyFindingText}>
                           {activeFilter === 'pending_adjudication'
-                            ? 'No legal compliance findings pending adjudication.'
+                            ? 'No findings pending adjudication.'
                             : 'No legal non-compliance findings detected.'}
                         </Text>
                       </View>
                     ) : (
                       legalFindings.map((finding, idx) => {
                     const isLast = idx === legalFindings.length - 1;
+                    const isResolved = [
+                      'CONFIRMED',
+                      'DISMISSED',
+                      'NOT_APPLICABLE',
+                      'CORRECTED',
+                    ].includes(finding.adjudication_status);
+                    const isAwaitingEvidence = finding.adjudication_status === 'NEEDS_MORE_EVIDENCE';
+                    const isSubmittingThis = submittingFindingId === finding.id;
+
                     const isFail =
                       (finding.result_state === 'POTENTIAL_NON_COMPLIANCE' &&
                         finding.adjudication_status !== 'DISMISSED' &&
@@ -483,9 +571,8 @@ export const FindingsScreen: React.FC = () => {
                     const isWarn =
                       finding.result_state === 'NEEDS_MANUAL_VERIFICATION' ||
                       finding.result_state === 'INSUFFICIENT_EVIDENCE' ||
-                      finding.adjudication_status === 'NEEDS_MORE_EVIDENCE';
+                      isAwaitingEvidence;
 
-                    const hasAdjudication = finding.adjudication_status && finding.adjudication_status !== 'PENDING';
                     const evidenceList = finding.evidence || [];
                     const firstEvidence = evidenceList.length > 0 ? evidenceList[0] : null;
 
@@ -527,8 +614,10 @@ export const FindingsScreen: React.FC = () => {
                                     isFail ? styles.badgeTextRed : isWarn ? styles.badgeTextAmber : styles.badgeTextGreen,
                                   ]}
                                 >
-                                  {hasAdjudication
+                                  {isResolved
                                     ? `Decision: ${finding.adjudication_status}`
+                                    : isAwaitingEvidence
+                                    ? 'Awaiting Evidence'
                                     : isFail
                                     ? 'Potential Non-Compliance'
                                     : isWarn
@@ -584,52 +673,116 @@ export const FindingsScreen: React.FC = () => {
                             )}
 
                             {/* Inspector Adjudication Actions */}
-                            <View style={styles.actionsContainer}>
-                              <TouchableOpacity
-                                style={styles.confirmBtn}
-                                onPress={() => openModal(finding, 'CONFIRMED')}
-                                activeOpacity={0.85}
-                              >
-                                <MaterialIcons name="check" size={16} color="#ffffff" />
-                                <Text style={styles.confirmBtnText}>Confirm Finding</Text>
-                              </TouchableOpacity>
-
-                              <View style={styles.secondaryActionsRow}>
+                            {isResolved ? (
+                              <View style={styles.resolvedDecisionBox}>
+                                <View style={styles.resolvedHeader}>
+                                  <MaterialIcons name="verified" size={16} color={colors.primary} />
+                                  <Text style={styles.resolvedDecisionTitle}>
+                                    Decision: {finding.adjudication_status}
+                                  </Text>
+                                </View>
+                                {finding.adjudication_notes ? (
+                                  <Text style={styles.resolvedNotesText} numberOfLines={2}>
+                                    Note: {finding.adjudication_notes}
+                                  </Text>
+                                ) : null}
+                                {finding.corrected_value ? (
+                                  <Text style={styles.resolvedCorrectedText}>
+                                    Corrected: {finding.corrected_value}
+                                  </Text>
+                                ) : null}
                                 <TouchableOpacity
-                                  style={styles.actionBtnOutline}
-                                  onPress={() => openModal(finding, 'DISMISSED')}
+                                  style={styles.editDecisionBtn}
+                                  onPress={() => openModal(finding, finding.adjudication_status)}
+                                  disabled={!!submittingFindingId}
                                   activeOpacity={0.8}
                                 >
-                                  <Text style={styles.actionBtnOutlineText}>Reject Finding</Text>
-                                </TouchableOpacity>
-
-                                <TouchableOpacity
-                                  style={styles.actionBtnBorder}
-                                  onPress={() => openModal(finding, 'CORRECTED')}
-                                  activeOpacity={0.8}
-                                >
-                                  <Text style={styles.actionBtnBorderText}>Correct Info</Text>
-                                </TouchableOpacity>
-                              </View>
-
-                              <View style={styles.secondaryActionsRow}>
-                                <TouchableOpacity
-                                  style={styles.actionBtnBorder}
-                                  onPress={() => handleRequestNewImage(finding)}
-                                  activeOpacity={0.8}
-                                >
-                                  <Text style={styles.actionBtnBorderText}>Request New Image</Text>
-                                </TouchableOpacity>
-
-                                <TouchableOpacity
-                                  style={styles.actionBtnBorder}
-                                  onPress={() => openModal(finding, 'NOT_APPLICABLE')}
-                                  activeOpacity={0.8}
-                                >
-                                  <Text style={styles.actionBtnBorderText}>Not Applicable</Text>
+                                  <MaterialIcons name="edit" size={12} color={colors.primary} />
+                                  <Text style={styles.editDecisionBtnText}>Edit Decision</Text>
                                 </TouchableOpacity>
                               </View>
-                            </View>
+                            ) : (
+                              <View style={styles.actionsContainer}>
+                                {isAwaitingEvidence && (
+                                  <View style={styles.awaitingNoticeBox}>
+                                    <MaterialIcons name="add-a-photo" size={14} color={colors.statusAmberText} />
+                                    <Text style={styles.awaitingNoticeText}>
+                                      Additional photographic evidence requested. This finding remains pending statutory adjudication.
+                                    </Text>
+                                  </View>
+                                )}
+
+                                {isSubmittingThis ? (
+                                  <View style={styles.actionLoadingBox}>
+                                    <ActivityIndicator size="small" color={colors.primary} />
+                                    <Text style={styles.actionLoadingText}>Saving statutory decision...</Text>
+                                  </View>
+                                ) : (
+                                  <>
+                                    {/* Primary Action */}
+                                    <TouchableOpacity
+                                      style={styles.confirmBtn}
+                                      onPress={() => handleDirectAdjudicate(finding, 'CONFIRMED')}
+                                      disabled={!!submittingFindingId}
+                                      activeOpacity={0.85}
+                                    >
+                                      <MaterialIcons name="check" size={16} color="#ffffff" />
+                                      <Text style={styles.confirmBtnText}>CONFIRM FINDING</Text>
+                                    </TouchableOpacity>
+
+                                    {/* Secondary Row 1 */}
+                                    <View style={styles.secondaryActionsRow}>
+                                      <TouchableOpacity
+                                        style={styles.secondaryBtn}
+                                        onPress={() => handleDirectAdjudicate(finding, 'DISMISSED')}
+                                        disabled={!!submittingFindingId}
+                                        activeOpacity={0.8}
+                                      >
+                                        <Text style={styles.secondaryBtnText} numberOfLines={2}>
+                                          REJECT FINDING
+                                        </Text>
+                                      </TouchableOpacity>
+
+                                      <TouchableOpacity
+                                        style={styles.secondaryBtn}
+                                        onPress={() => openModal(finding, 'CORRECTED')}
+                                        disabled={!!submittingFindingId}
+                                        activeOpacity={0.8}
+                                      >
+                                        <Text style={styles.secondaryBtnText} numberOfLines={2}>
+                                          CORRECT INFORMATION
+                                        </Text>
+                                      </TouchableOpacity>
+                                    </View>
+
+                                    {/* Secondary Row 2 */}
+                                    <View style={styles.secondaryActionsRow}>
+                                      <TouchableOpacity
+                                        style={styles.secondaryBtn}
+                                        onPress={() => handleRequestNewEvidence(finding)}
+                                        disabled={!!submittingFindingId}
+                                        activeOpacity={0.8}
+                                      >
+                                        <Text style={styles.secondaryBtnText} numberOfLines={2}>
+                                          REQUEST NEW EVIDENCE
+                                        </Text>
+                                      </TouchableOpacity>
+
+                                      <TouchableOpacity
+                                        style={styles.secondaryBtn}
+                                        onPress={() => handleDirectAdjudicate(finding, 'NOT_APPLICABLE')}
+                                        disabled={!!submittingFindingId}
+                                        activeOpacity={0.8}
+                                      >
+                                        <Text style={styles.secondaryBtnText} numberOfLines={2}>
+                                          NOT APPLICABLE
+                                        </Text>
+                                      </TouchableOpacity>
+                                    </View>
+                                  </>
+                                )}
+                              </View>
+                            )}
                           </View>
                         </View>
                       </View>
@@ -637,30 +790,8 @@ export const FindingsScreen: React.FC = () => {
                   })
                 )}
               </View>
-
-                  {/* Category B: Data Quality Warnings */}
-                  {qualityFindings.length > 0 && (
-                    <View style={[styles.findingSectionCard, { marginTop: 12 }]}>
-                      <View style={[styles.sectionBanner, styles.sectionBannerAmber]}>
-                        <View style={styles.sectionBannerTitleRow}>
-                          <MaterialIcons name="warning" size={18} color={colors.statusAmberText} />
-                          <Text style={styles.sectionBannerTitle}>DATA QUALITY WARNINGS</Text>
-                        </View>
-                        <Text style={styles.sectionBannerSub}>Category B — Data Quality & Syntax Validation</Text>
-                      </View>
-
-                      {qualityFindings.map((finding, idx) => (
-                        <View key={finding.id || idx} style={styles.findingRow}>
-                          <Text style={styles.findingTitleText}>{finding.title}</Text>
-                          <Text style={styles.findingDescText}>
-                            {finding.explanation || finding.description || 'Data syntax warning.'}
-                          </Text>
-                        </View>
-                      ))}
-                    </View>
-                  )}
-                </>
-              )}
+            </>
+          )}
 
               {/* Inspection Context Card */}
               <View style={styles.contextCard}>
@@ -684,16 +815,18 @@ export const FindingsScreen: React.FC = () => {
               {/* Proceed Button */}
               <TouchableOpacity
                 style={styles.proceedButton}
-                onPress={() =>
-                  navigation.navigate('ReviewAndSubmit', {
-                    inspectionId: targetId || '',
-                    inspectionNumber: displayInspectionNumber,
-                  })
-                }
+                onPress={handleProceedToReview}
+                disabled={navigatingToReview}
                 activeOpacity={0.85}
               >
-                <Text style={styles.proceedButtonText}>Proceed to Review & Submit</Text>
-                <MaterialIcons name="arrow-forward" size={18} color={colors.onPrimary} />
+                {navigatingToReview ? (
+                  <ActivityIndicator size="small" color={colors.onPrimary} />
+                ) : (
+                  <>
+                    <Text style={styles.proceedButtonText}>Proceed to Review & Submit</Text>
+                    <MaterialIcons name="arrow-forward" size={18} color={colors.onPrimary} />
+                  </>
+                )}
               </TouchableOpacity>
             </>
           )}
@@ -1151,6 +1284,7 @@ const styles = StyleSheet.create({
     flexDirection: 'row',
     alignItems: 'center',
     justifyContent: 'center',
+    minHeight: 44,
     paddingVertical: 10,
     paddingHorizontal: 12,
     borderRadius: borderRadius.DEFAULT,
@@ -1162,40 +1296,108 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     fontWeight: '700',
     color: '#ffffff',
+    letterSpacing: 0.5,
   },
   secondaryActionsRow: {
     flexDirection: 'row',
     gap: 8,
   },
-  actionBtnOutline: {
+  secondaryBtn: {
     flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
+    minHeight: 44,
     paddingVertical: 8,
+    paddingHorizontal: 6,
     borderRadius: borderRadius.DEFAULT,
-    borderWidth: 1,
-    borderColor: colors.primary,
+    borderWidth: 1.5,
+    borderColor: colors.borderSubtle,
+    backgroundColor: colors.surfaceContainerLowest,
+    justifyContent: 'center',
+    alignItems: 'center',
   },
-  actionBtnOutlineText: {
+  secondaryBtnText: {
     ...typography.labelCaps,
     fontSize: 11,
+    lineHeight: 14,
     color: colors.primary,
-    fontWeight: '600',
+    fontWeight: '700',
+    textAlign: 'center',
+    letterSpacing: 0.3,
   },
-  actionBtnBorder: {
-    flex: 1,
-    alignItems: 'center',
-    justifyContent: 'center',
-    paddingVertical: 8,
+  resolvedDecisionBox: {
+    marginTop: 10,
+    padding: 12,
+    backgroundColor: colors.surfaceContainerLow,
     borderRadius: borderRadius.DEFAULT,
     borderWidth: 1,
     borderColor: colors.borderSubtle,
-    backgroundColor: colors.surfaceContainerLowest,
+    gap: 6,
   },
-  actionBtnBorderText: {
-    ...typography.labelCaps,
+  resolvedHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+  },
+  resolvedDecisionTitle: {
+    fontSize: 13,
+    fontWeight: '700',
+    color: colors.primary,
+  },
+  resolvedNotesText: {
+    fontSize: 12,
+    color: colors.onSurfaceVariant,
+    fontStyle: 'italic',
+  },
+  resolvedCorrectedText: {
+    fontSize: 12,
+    color: colors.statusGreenText,
+    fontWeight: '600',
+  },
+  editDecisionBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    alignSelf: 'flex-start',
+    marginTop: 4,
+    paddingVertical: 4,
+    paddingHorizontal: 10,
+    borderRadius: borderRadius.xs,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    backgroundColor: colors.surfaceContainerLowest,
+    gap: 4,
+  },
+  editDecisionBtnText: {
     fontSize: 11,
-    color: colors.onSurface,
+    fontWeight: '600',
+    color: colors.primary,
+  },
+  awaitingNoticeBox: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    padding: 10,
+    backgroundColor: '#fff8e1',
+    borderRadius: borderRadius.DEFAULT,
+    borderWidth: 1,
+    borderColor: '#ffe082',
+    gap: 8,
+    marginBottom: 4,
+  },
+  awaitingNoticeText: {
+    flex: 1,
+    fontSize: 12,
+    color: colors.statusAmberText,
+    fontWeight: '500',
+  },
+  actionLoadingBox: {
+    minHeight: 70,
+    justifyContent: 'center',
+    alignItems: 'center',
+    gap: 8,
+    paddingVertical: 12,
+  },
+  actionLoadingText: {
+    fontSize: 12,
+    color: colors.onSurfaceVariant,
+    fontWeight: '500',
   },
   contextCard: {
     backgroundColor: colors.surfaceContainerLowest,
