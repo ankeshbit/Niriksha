@@ -25,9 +25,19 @@ type AdjudicationAction = 'CONFIRMED' | 'DISMISSED' | 'NOT_APPLICABLE' | 'CORREC
 export const FindingsScreen: React.FC = () => {
   const navigation = useNavigation<NativeStackNavigationProp<RootStackParamList>>();
   const route = useRoute<RouteProp<RootStackParamList, 'Findings'>>();
-  const { inspectionId, inspectionNumber } = route.params;
+  const { inspectionId, inspectionNumber, filter: initialFilter } = route.params;
 
   const targetId = inspectionId || inspectionNumber;
+
+  const [activeFilter, setActiveFilter] = useState<'pending_adjudication' | 'all'>(
+    initialFilter === 'pending_adjudication' ? 'pending_adjudication' : 'all'
+  );
+
+  React.useEffect(() => {
+    if (route.params?.filter) {
+      setActiveFilter(route.params.filter);
+    }
+  }, [route.params?.filter]);
 
   const [findings, setFindings] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>(null);
@@ -213,10 +223,25 @@ export const FindingsScreen: React.FC = () => {
     f.adjudication_status !== 'CORRECTED'
   ).length : 0);
 
-  const legalFindings = findings.filter(
+  const isFindingPendingAdjudication = (f: any): boolean => {
+    if (typeof f.is_pending_adjudication === 'boolean') {
+      return f.is_pending_adjudication;
+    }
+    const resultState = (f.result_state || '').toUpperCase();
+    const isNonPass = resultState !== '' && resultState !== 'PASS' && resultState !== 'NOT_APPLICABLE';
+    const adjStatus = (f.adjudication_status || '').toUpperCase();
+    const resolvedActions = ['CONFIRMED', 'DISMISSED', 'NOT_APPLICABLE', 'CORRECTED'];
+    const isResolved = resolvedActions.includes(adjStatus);
+    return isNonPass && !isResolved;
+  };
+
+  const pendingFindings = findings.filter(isFindingPendingAdjudication);
+  const displayedFindings = activeFilter === 'pending_adjudication' ? pendingFindings : findings;
+
+  const legalFindings = displayedFindings.filter(
     (f) => !f.rule_code?.includes('DATA_QUAL') && f.category !== 'DATA_QUALITY' && f.category !== 'CATEGORY_B_DATA_QUALITY'
   );
-  const qualityFindings = findings.filter(
+  const qualityFindings = displayedFindings.filter(
     (f) => f.rule_code?.includes('DATA_QUAL') || f.category === 'DATA_QUALITY' || f.category === 'CATEGORY_B_DATA_QUALITY'
   );
 
@@ -351,23 +376,104 @@ export const FindingsScreen: React.FC = () => {
             </View>
           ) : (
             <>
-              {/* Category A: Legal Compliance Checks */}
-              <View style={styles.findingSectionCard}>
-                <View style={[styles.sectionBanner, styles.sectionBannerBlue]}>
-                  <View style={styles.sectionBannerTitleRow}>
-                    <MaterialIcons name="balance" size={18} color={colors.primary} />
-                    <Text style={styles.sectionBannerTitle}>LEGAL COMPLIANCE CHECKS</Text>
-                  </View>
-                  <Text style={styles.sectionBannerSub}>Category A — Legal / Statutory Compliance</Text>
-                </View>
+              {/* Segmented Filter: Pending Adjudication vs All Findings */}
+              <View style={styles.filterTabContainer}>
+                <TouchableOpacity
+                  style={[
+                    styles.filterTab,
+                    activeFilter === 'pending_adjudication' && styles.filterTabActive,
+                  ]}
+                  onPress={() => setActiveFilter('pending_adjudication')}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons
+                    name="gavel"
+                    size={16}
+                    color={activeFilter === 'pending_adjudication' ? colors.onPrimary : colors.primary}
+                  />
+                  <Text
+                    style={[
+                      styles.filterTabText,
+                      activeFilter === 'pending_adjudication' && styles.filterTabTextActive,
+                    ]}
+                  >
+                    Pending Adjudication ({pendingFindings.length})
+                  </Text>
+                </TouchableOpacity>
 
-                {legalFindings.length === 0 ? (
-                  <View style={styles.emptyFindingRow}>
-                    <MaterialIcons name="check-circle-outline" size={28} color={colors.statusGreenText} />
-                    <Text style={styles.emptyFindingText}>No legal non-compliance findings detected.</Text>
+                <TouchableOpacity
+                  style={[
+                    styles.filterTab,
+                    activeFilter === 'all' && styles.filterTabActive,
+                  ]}
+                  onPress={() => setActiveFilter('all')}
+                  activeOpacity={0.8}
+                >
+                  <MaterialIcons
+                    name="list"
+                    size={16}
+                    color={activeFilter === 'all' ? colors.onPrimary : colors.secondary}
+                  />
+                  <Text
+                    style={[
+                      styles.filterTabText,
+                      activeFilter === 'all' && styles.filterTabTextActive,
+                    ]}
+                  >
+                    All Findings ({findings.length})
+                  </Text>
+                </TouchableOpacity>
+              </View>
+
+              {activeFilter === 'pending_adjudication' && pendingFindings.length === 0 ? (
+                <View style={styles.emptyPendingCard}>
+                  <MaterialIcons name="verified" size={48} color={colors.statusGreenText} />
+                  <Text style={styles.emptyPendingTitle}>No findings pending adjudication</Text>
+                  <Text style={styles.emptyPendingSubtitle}>
+                    All statutory compliance findings have been reviewed and adjudicated.
+                  </Text>
+                  <View style={styles.emptyPendingActions}>
+                    <TouchableOpacity
+                      style={styles.viewAllFindingsBtn}
+                      onPress={() => setActiveFilter('all')}
+                      activeOpacity={0.8}
+                    >
+                      <MaterialIcons name="visibility" size={16} color={colors.primary} />
+                      <Text style={styles.viewAllFindingsBtnText}>View All Findings ({findings.length})</Text>
+                    </TouchableOpacity>
                   </View>
-                ) : (
-                  legalFindings.map((finding, idx) => {
+                </View>
+              ) : (
+                <>
+                  {/* Category A: Legal Compliance Checks */}
+                  <View style={styles.findingSectionCard}>
+                    <View style={[styles.sectionBanner, styles.sectionBannerBlue]}>
+                      <View style={styles.sectionBannerTitleRow}>
+                        <MaterialIcons name="balance" size={18} color={colors.primary} />
+                        <Text style={styles.sectionBannerTitle}>
+                          {activeFilter === 'pending_adjudication'
+                            ? 'FINDINGS REQUIRING ADJUDICATION'
+                            : 'LEGAL COMPLIANCE CHECKS'}
+                        </Text>
+                      </View>
+                      <Text style={styles.sectionBannerSub}>
+                        {activeFilter === 'pending_adjudication'
+                          ? `${legalFindings.length} finding(s) require inspector action before report submission`
+                          : 'Category A — Legal / Statutory Compliance'}
+                      </Text>
+                    </View>
+
+                    {legalFindings.length === 0 ? (
+                      <View style={styles.emptyFindingRow}>
+                        <MaterialIcons name="check-circle-outline" size={28} color={colors.statusGreenText} />
+                        <Text style={styles.emptyFindingText}>
+                          {activeFilter === 'pending_adjudication'
+                            ? 'No legal compliance findings pending adjudication.'
+                            : 'No legal non-compliance findings detected.'}
+                        </Text>
+                      </View>
+                    ) : (
+                      legalFindings.map((finding, idx) => {
                     const isLast = idx === legalFindings.length - 1;
                     const isFail =
                       (finding.result_state === 'POTENTIAL_NON_COMPLIANCE' &&
@@ -532,26 +638,28 @@ export const FindingsScreen: React.FC = () => {
                 )}
               </View>
 
-              {/* Category B: Data Quality Warnings */}
-              {qualityFindings.length > 0 && (
-                <View style={[styles.findingSectionCard, { marginTop: 12 }]}>
-                  <View style={[styles.sectionBanner, styles.sectionBannerAmber]}>
-                    <View style={styles.sectionBannerTitleRow}>
-                      <MaterialIcons name="warning" size={18} color={colors.statusAmberText} />
-                      <Text style={styles.sectionBannerTitle}>DATA QUALITY WARNINGS</Text>
-                    </View>
-                    <Text style={styles.sectionBannerSub}>Category B — Data Quality & Syntax Validation</Text>
-                  </View>
+                  {/* Category B: Data Quality Warnings */}
+                  {qualityFindings.length > 0 && (
+                    <View style={[styles.findingSectionCard, { marginTop: 12 }]}>
+                      <View style={[styles.sectionBanner, styles.sectionBannerAmber]}>
+                        <View style={styles.sectionBannerTitleRow}>
+                          <MaterialIcons name="warning" size={18} color={colors.statusAmberText} />
+                          <Text style={styles.sectionBannerTitle}>DATA QUALITY WARNINGS</Text>
+                        </View>
+                        <Text style={styles.sectionBannerSub}>Category B — Data Quality & Syntax Validation</Text>
+                      </View>
 
-                  {qualityFindings.map((finding, idx) => (
-                    <View key={finding.id || idx} style={styles.findingRow}>
-                      <Text style={styles.findingTitleText}>{finding.title}</Text>
-                      <Text style={styles.findingDescText}>
-                        {finding.explanation || finding.description || 'Data syntax warning.'}
-                      </Text>
+                      {qualityFindings.map((finding, idx) => (
+                        <View key={finding.id || idx} style={styles.findingRow}>
+                          <Text style={styles.findingTitleText}>{finding.title}</Text>
+                          <Text style={styles.findingDescText}>
+                            {finding.explanation || finding.description || 'Data syntax warning.'}
+                          </Text>
+                        </View>
+                      ))}
                     </View>
-                  ))}
-                </View>
+                  )}
+                </>
               )}
 
               {/* Inspection Context Card */}
@@ -1238,5 +1346,85 @@ const styles = StyleSheet.create({
     lineHeight: 14,
     color: colors.onSurfaceVariant,
     fontStyle: 'italic',
+  },
+  filterTabContainer: {
+    flexDirection: 'row',
+    backgroundColor: colors.surfaceContainerHigh,
+    borderRadius: borderRadius.DEFAULT,
+    padding: 4,
+    gap: 6,
+    marginVertical: 4,
+  },
+  filterTab: {
+    flex: 1,
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: borderRadius.sm,
+    gap: 6,
+  },
+  filterTabActive: {
+    backgroundColor: colors.primary,
+  },
+  filterTabText: {
+    ...typography.labelCaps,
+    fontSize: 12,
+    fontWeight: '600',
+    color: colors.onSurfaceVariant,
+  },
+  filterTabTextActive: {
+    color: colors.onPrimary,
+    fontWeight: '700',
+  },
+  emptyPendingCard: {
+    backgroundColor: colors.surfaceContainerLowest,
+    borderRadius: borderRadius.DEFAULT,
+    borderWidth: 1,
+    borderColor: colors.borderSubtle,
+    padding: 24,
+    alignItems: 'center',
+    gap: 10,
+    marginVertical: 8,
+  },
+  emptyPendingTitle: {
+    ...typography.headlineLg,
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.onSurface,
+    textAlign: 'center',
+  },
+  emptyPendingSubtitle: {
+    ...typography.bodySm,
+    fontSize: 13,
+    color: colors.onSurfaceVariant,
+    textAlign: 'center',
+    lineHeight: 18,
+    maxWidth: 300,
+  },
+  emptyPendingActions: {
+    flexDirection: 'column',
+    gap: 10,
+    width: '100%',
+    marginTop: 10,
+  },
+  viewAllFindingsBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'center',
+    gap: 6,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: borderRadius.DEFAULT,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    backgroundColor: colors.surfaceContainerLowest,
+  },
+  viewAllFindingsBtnText: {
+    ...typography.labelCaps,
+    color: colors.primary,
+    fontWeight: '700',
+    fontSize: 12,
   },
 });

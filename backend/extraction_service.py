@@ -688,15 +688,15 @@ class DeterministicRegexExtractor(BaseExtractionProvider):
 
         # Layer 1: PP-Structure Layout Association
         spatial_pair = layout_analyzer.find_spatially_associated_value(
-            r'(?:PKD|MFD|MFG|PACKED|DATE\s*OF\s*MFG)',
+            r'(?:PKD|MFD|MFG(?!\s*BY)|PACKED|DATE\s*OF\s*MFG)',
             text_boxes,
-            value_pattern=r'[0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4}|[0-9]{1,2}[/-][0-9]{2,4}'
+            value_pattern=r'\b(?:[0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4}|[0-9]{1,2}[/-][0-9]{2,4})\b'
         )
         if spatial_pair:
             label_box, val_box = spatial_pair
             val_text = _get_text(val_box)
             l_text = _get_text(label_box)
-            date_m = re.search(r'([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4}|[0-9]{1,2}[/-][0-9]{2,4})', val_text)
+            date_m = re.search(r'\b([0-9]{1,2}[/-][0-9]{1,2}[/-][0-9]{2,4}|[0-9]{1,2}[/-][0-9]{2,4})\b', val_text)
             if date_m:
                 val = date_m.group(1).strip()
                 enclosing = _enclosing_bbox([label_box, val_box])

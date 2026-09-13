@@ -350,8 +350,10 @@ export const api = {
   // Rule Engine & Adjudication
   evaluateRules: (inspectionId: string) =>
     apiRequest(`/api/inspections/${inspectionId}/evaluate`, { method: 'POST' }),
-  getFindings: (inspectionId: string) =>
-    apiRequest(`/api/inspections/${inspectionId}/findings`),
+  getFindings: (inspectionId: string, params?: { status?: string }) => {
+    const q = params?.status ? `?status=${encodeURIComponent(params.status)}` : '';
+    return apiRequest(`/api/inspections/${inspectionId}/findings${q}`);
+  },
   getFinding: (findingId: string) => apiRequest(`/api/findings/${findingId}`),
   adjudicateFinding: (
     findingId: string,
@@ -405,8 +407,10 @@ export const api = {
   // Declaration Validation Matrix & Compliance Summary (SIH PS 26034)
   getDeclarationValidation: (inspectionId: string) =>
     apiRequest(`/api/inspections/${inspectionId}/declaration-validation`),
-  getComplianceSummary: (inspectionId: string) =>
-    apiRequest(`/api/inspections/${inspectionId}/compliance-summary`),
+  getComplianceSummary: (inspectionId: string, params?: { status?: string }) => {
+    const q = params?.status ? `?status=${encodeURIComponent(params.status)}` : '';
+    return apiRequest(`/api/inspections/${inspectionId}/compliance-summary${q}`);
+  },
 
   // Search, Retrieval & Product Repository (SIH PS 26034)
   searchInspections: (params?: {

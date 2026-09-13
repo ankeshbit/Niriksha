@@ -74,7 +74,10 @@ export const ReviewAndSubmitScreen: React.FC = () => {
   );
 
   const unadjudicatedFindings = findings.filter((f) => {
-    // AUDIT-MOB-02: Use actual FindingResponse schema fields (result_state, adjudication_status)
+    if (typeof f.is_pending_adjudication === 'boolean') {
+      return f.is_pending_adjudication;
+    }
+    // Fallback: Use actual FindingResponse schema fields (result_state, adjudication_status)
     const resultState = (f.result_state || '').toUpperCase();
     const isNonPass = resultState !== '' && resultState !== 'PASS' && resultState !== 'NOT_APPLICABLE';
     const adjStatus = (f.adjudication_status || '').toUpperCase();
@@ -94,6 +97,7 @@ export const ReviewAndSubmitScreen: React.FC = () => {
           navigation.navigate('Findings', {
             inspectionId,
             inspectionNumber: inspection?.inspection_number || inspectionNumber,
+            filter: 'pending_adjudication',
           });
         }
       } else {
@@ -107,6 +111,7 @@ export const ReviewAndSubmitScreen: React.FC = () => {
                 navigation.navigate('Findings', {
                   inspectionId,
                   inspectionNumber: inspection?.inspection_number || inspectionNumber,
+                  filter: 'pending_adjudication',
                 }),
             },
             { text: 'Cancel', style: 'cancel' },
@@ -521,6 +526,7 @@ export const ReviewAndSubmitScreen: React.FC = () => {
                       navigation.navigate('Findings', {
                         inspectionId,
                         inspectionNumber: inspection?.inspection_number || inspectionNumber,
+                        filter: 'pending_adjudication',
                       })
                     }
                     activeOpacity={0.8}

@@ -12,6 +12,22 @@ Guarantees strict mutual exclusivity and deterministic categorization.
 
 from typing import List, Dict, Any, Set
 
+RESOLVED_ADJUDICATION_ACTIONS = {"CONFIRMED", "DISMISSED", "NOT_APPLICABLE", "CORRECTED"}
+
+
+def is_pending_adjudication(c: Any) -> bool:
+    """
+    Authoritative state check: Returns True if a compliance finding requires inspector adjudication.
+    
+    A finding requires adjudication if:
+    1. It is NOT compliant (result_state is not 'PASS' and not 'NOT_APPLICABLE' and not empty).
+    2. It has NOT yet been resolved by an inspector (adjudication_status is NOT in {'CONFIRMED', 'DISMISSED', 'NOT_APPLICABLE', 'CORRECTED'}).
+    """
+    r_state = (getattr(c, "result_state", "") or "").upper()
+    adj_status = (getattr(c, "adjudication_status", "PENDING") or "PENDING").upper()
+    is_non_pass = r_state not in ("PASS", "NOT_APPLICABLE", "")
+    return is_non_pass and (adj_status not in RESOLVED_ADJUDICATION_ACTIONS)
+
 
 def compute_canonical_compliance_metrics(checks: List[Any]) -> Dict[str, int]:
     """
@@ -25,7 +41,8 @@ def compute_canonical_compliance_metrics(checks: List[Any]) -> Dict[str, int]:
     3. needs_manual_verification: INSUFFICIENT_EVIDENCE or NEEDS_MANUAL_VERIFICATION,
        or adjudicated as NEEDS_MORE_EVIDENCE (excluding confirmed/dismissed/non-compliance).
     4. warnings: Data quality checks not falling into compliant, non-compliance, or manual verification.
-    5. total_findings: Total number of evaluated rules.
+    5. pending_adjudication_count: Non-PASS checks awaiting inspector adjudication.
+    6. total_findings: Total number of evaluated rules.
     """
     if not checks:
         return {
@@ -33,6 +50,7 @@ def compute_canonical_compliance_metrics(checks: List[Any]) -> Dict[str, int]:
             "potential_non_compliance": 0,
             "needs_manual_verification": 0,
             "warnings": 0,
+            "pending_adjudication_count": 0,
             "total_findings": 0,
         }
 
@@ -112,6 +130,7 @@ def compute_canonical_compliance_metrics(checks: List[Any]) -> Dict[str, int]:
             warnings_count += 1
 
     warnings = warnings_count
+    pending_adjudication_count = sum(1 for c in checks if is_pending_adjudication(c))
     total_findings = len(checks)
 
     return {
@@ -119,5 +138,6 @@ def compute_canonical_compliance_metrics(checks: List[Any]) -> Dict[str, int]:
         "potential_non_compliance": potential_non_compliance,
         "needs_manual_verification": needs_manual_verification,
         "warnings": warnings,
+        "pending_adjudication_count": pending_adjudication_count,
         "total_findings": total_findings,
     }

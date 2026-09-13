@@ -143,7 +143,11 @@ from backend.rule_engine import (
 )
 from backend.listing_service import execute_listing_comparison
 from backend.report_service import report_generator
-from backend.compliance_summary_utils import compute_canonical_compliance_metrics
+from backend.compliance_summary_utils import (
+    compute_canonical_compliance_metrics,
+    is_pending_adjudication,
+    RESOLVED_ADJUDICATION_ACTIONS
+)
 from backend.supabase_storage import storage_service
 from backend.seed import seed_database
 from backend.schema_migration import migrate
@@ -582,7 +586,8 @@ def serialize_finding(check: ComplianceCheck) -> FindingResponse:
         category=category,
         status=check.result_state,
         adjudication=check.adjudication_status or "PENDING",
-        description=check.explanation
+        description=check.explanation,
+        is_pending_adjudication=is_pending_adjudication(check)
     )
 
 def serialize_report(rep: Report) -> ReportResponse:
@@ -2736,6 +2741,7 @@ def get_inspection_declaration_validation(
 @app.get("/api/inspections/{inspection_id}/compliance-summary", response_model=ComplianceSummaryResponse, tags=["Rule Engine & Adjudication"])
 def get_inspection_compliance_summary(
     inspection_id: str,
+    status: Optional[str] = Query(None, description="Filter: 'pending_adjudication' to return only findings requiring officer adjudication"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -2774,13 +2780,19 @@ def get_inspection_compliance_summary(
     potential_non_compliance = metrics["potential_non_compliance"]
     needs_manual_verification = metrics["needs_manual_verification"]
     warnings = metrics["warnings"]
+    pending_adjudication_count = metrics.get("pending_adjudication_count", 0)
 
-    serialized_findings = [serialize_finding(c) for c in checks]
+    if status == "pending_adjudication":
+        display_checks = [c for c in checks if is_pending_adjudication(c)]
+    else:
+        display_checks = checks
+
+    serialized_findings = [serialize_finding(c) for c in display_checks]
 
     logger.info(
-        "Compliance summary for %s (id=%s): total_checks=%d, compliant=%d, non_comp=%d, manual=%d, warnings=%d, completed=%s",
+        "Compliance summary for %s (id=%s): total_checks=%d, compliant=%d, non_comp=%d, manual=%d, warnings=%d, pending=%d, completed=%s",
         inspection.inspection_number, real_inspection_id, len(checks),
-        compliant_checks, potential_non_compliance, needs_manual_verification, warnings, evaluation_completed
+        compliant_checks, potential_non_compliance, needs_manual_verification, warnings, pending_adjudication_count, evaluation_completed
     )
 
     return ComplianceSummaryResponse(
@@ -2792,6 +2804,7 @@ def get_inspection_compliance_summary(
         potential_non_compliance=potential_non_compliance,
         needs_manual_verification=needs_manual_verification,
         warnings=warnings,
+        pending_adjudication_count=pending_adjudication_count,
         total_findings=len(checks),
         findings=serialized_findings,
         **summary_data.model_dump()
@@ -2880,10 +2893,13 @@ def evaluate_inspection_rules(
     declarations = db.query(Declaration).filter(Declaration.inspection_id == inspection.id).all()
     images = db.query(ProductImage).filter(ProductImage.inspection_id == inspection.id).all()
 
+    has_ecommerce = bool(inspection.product and getattr(inspection.product, "listings", None))
     product_data = {
         "product_name": inspection.product.product_name if inspection.product else "",
         "brand_name": inspection.product.brand_name if inspection.product else "",
-        "category": inspection.product.category if inspection.product else "Packaged Food"
+        "category": inspection.product.category if inspection.product else "Packaged Food",
+        "inspection_type": getattr(inspection, "inspection_type", "PHYSICAL") or "PHYSICAL",
+        "has_ecommerce_listing": has_ecommerce
     }
 
     # Execute deterministic rule engine
@@ -3074,10 +3090,11 @@ def evaluate_inspection_rules(
 @app.get("/api/inspections/{inspection_id}/findings", response_model=List[FindingResponse], tags=["Rule Engine & Adjudication"])
 def get_inspection_findings(
     inspection_id: str,
+    status: Optional[str] = Query(None, description="Optional filter: 'pending_adjudication' to return only findings requiring officer adjudication"),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Retrieves all potential findings and compliance check results for an inspection."""
+    """Retrieves potential findings and compliance check results for an inspection, optionally filtered by adjudication status."""
     inspection = get_inspection_by_id_or_number(db, inspection_id)
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")
@@ -3085,7 +3102,10 @@ def get_inspection_findings(
 
     checks = db.query(ComplianceCheck).filter(
         ComplianceCheck.inspection_id == inspection.id
-    ).order_by(ComplianceCheck.created_at.asc()).all()
+    ).options(joinedload(ComplianceCheck.rule_version), joinedload(ComplianceCheck.evidence)).order_by(ComplianceCheck.created_at.asc()).all()
+
+    if status == "pending_adjudication":
+        checks = [c for c in checks if is_pending_adjudication(c)]
 
     return [serialize_finding(c) for c in checks]
 
@@ -3549,11 +3569,7 @@ def finalize_inspection(
     all_checks = db.query(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection.id).all()
 
     # REPORT-BLOCKING GATE: Block finalization if any non-PASS finding is still PENDING adjudication
-    resolved_actions = {"CONFIRMED", "DISMISSED", "NOT_APPLICABLE", "CORRECTED"}
-    unresolved = [
-        c for c in all_checks
-        if c.result_state != "PASS" and c.adjudication_status not in resolved_actions
-    ]
+    unresolved = [c for c in all_checks if is_pending_adjudication(c)]
     if unresolved:
         unresolved_descriptions = [{"rule_code": c.rule_code, "title": c.title, "adjudication_status": c.adjudication_status} for c in unresolved]
         raise HTTPException(

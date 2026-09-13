@@ -270,6 +270,7 @@ class FindingResponse(BaseModel):
     status: Optional[str] = None
     adjudication: Optional[str] = None
     description: Optional[str] = None
+    is_pending_adjudication: bool = False
 
 class ComplianceSummaryResponse(BaseModel):
     inspection_id: str
@@ -282,6 +283,7 @@ class ComplianceSummaryResponse(BaseModel):
     potential_non_compliance: int = 0
     needs_manual_verification: int = 0
     warnings: int = 0                    # CATEGORY_B_DATA_QUALITY only when not already in another bucket
+    pending_adjudication_count: int = 0  # Non-PASS checks awaiting inspector adjudication
     total_findings: int = 0              # total ComplianceCheck rows for this inspection
     findings: List[FindingResponse] = []
     total_mandatory: int = 7

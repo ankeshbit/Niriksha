@@ -6,7 +6,7 @@ export type RootStackParamList = {
   CaptureImages: { inspectionId: string; inspectionNumber?: string };
   Analyzing: { inspectionId: string; inspectionNumber?: string };
   ExtractedDeclarations: { inspectionId: string; inspectionNumber?: string };
-  Findings: { inspectionId: string; inspectionNumber?: string };
+  Findings: { inspectionId: string; inspectionNumber?: string; filter?: 'all' | 'pending_adjudication' };
   EvidenceReview: { inspectionId: string; findingId?: string };
   ReviewAndSubmit: { inspectionId: string; inspectionNumber?: string };
   ReportPreview: { inspectionId: string; inspectionNumber?: string };

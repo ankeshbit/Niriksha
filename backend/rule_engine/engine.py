@@ -99,6 +99,19 @@ class DeterministicRuleEngine:
         decl = decl_map.get(required_field)
 
         # 1. Applicability Check (e.g. Country of Origin on domestic goods or explicit exemption)
+        if rule_code in ["PCR_RULE_06_10_ECOMMERCE_DECLARATION", "PCR_RULE_18_2A_ONLINE_PRICE_OVERCHARGING"]:
+            if product_data.get("inspection_type") != "ECOMMERCE" and not product_data.get("has_ecommerce_listing"):
+                return RuleEvaluationResult(
+                    rule_code=rule_code,
+                    rule_version=rule.rule_version,
+                    title=rule.title,
+                    statutory_reference=rule.statutory_reference,
+                    severity=rule.severity,
+                    result_state=RuleResultState.NOT_APPLICABLE,
+                    explanation=f"{rule.title} is statutory requirement specifically for e-commerce offerings under Rule 6(10) / Rule 18(2A). Not applicable to physical package labeling.",
+                    evidence_items=[]
+                )
+
         is_applicable = self._get_decl_field(decl, "is_applicable", True)
         if not is_applicable:
             return RuleEvaluationResult(

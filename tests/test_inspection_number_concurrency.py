@@ -25,6 +25,7 @@ from sqlalchemy import create_engine, text
 from sqlalchemy.orm import sessionmaker
 
 from backend.models import Base, Inspection, Product, InspectionNumberCounter, User
+from backend.config import settings
 from backend.main import allocate_inspection_number, generate_inspection_number, app
 from fastapi.testclient import TestClient
 
@@ -36,9 +37,37 @@ def db_session():
     from backend.database import SessionLocal
     session = SessionLocal()
     try:
+        session.query(Inspection).filter(Inspection.inspection_number.like("LM-203%")).delete(synchronize_session=False)
+        session.query(InspectionNumberCounter).filter(InspectionNumberCounter.year >= 2030).delete(synchronize_session=False)
+        session.commit()
+    except Exception:
+        session.rollback()
+
+    try:
         yield session
     finally:
+        try:
+            session.query(Inspection).filter(Inspection.inspection_number.like("LM-203%")).delete(synchronize_session=False)
+            session.query(InspectionNumberCounter).filter(InspectionNumberCounter.year >= 2030).delete(synchronize_session=False)
+            session.commit()
+        except Exception:
+            session.rollback()
         session.close()
+
+
+def _get_test_officer_id(session):
+    u = session.query(User).filter(User.officer_id == settings.SEED_OFFICER_ID).first()
+    if not u:
+        u = User(
+            officer_id=settings.SEED_OFFICER_ID,
+            full_name=settings.SEED_OFFICER_NAME,
+            designation=settings.SEED_OFFICER_DESIGNATION,
+            zone=settings.SEED_OFFICER_ZONE,
+            password_hash="testhash"
+        )
+        session.add(u)
+        session.commit()
+    return u.id
 
 
 # =============================================================================
@@ -56,11 +85,12 @@ def test_case_1_no_existing_inspections_for_year(db_session):
 def test_case_2_existing_inspections_through_00005(db_session):
     """CASE 2: When existing records end at 00005, the next allocation is 00006."""
     test_year = 2031
+    officer_id = _get_test_officer_id(db_session)
     # Seed records through 00005
     for i in range(1, 6):
         db_session.add(Inspection(
             inspection_number=f"LM-{test_year}-{i:05d}",
-            inspector_id="temp-officer-id",
+            inspector_id=officer_id,
             location="Test Location",
             status="DRAFT"
         ))
@@ -77,11 +107,12 @@ def test_case_3_existing_numbers_contain_gaps(db_session):
     The allocator must allocate 00008 and NEVER fill historical gaps.
     """
     test_year = 2032
+    officer_id = _get_test_officer_id(db_session)
     gapped_seqs = [1, 3, 7]
     for s in gapped_seqs:
         db_session.add(Inspection(
             inspection_number=f"LM-{test_year}-{s:05d}",
-            inspector_id="temp-officer-id",
+            inspector_id=officer_id,
             location="Test Location",
             status="DRAFT"
         ))
@@ -147,10 +178,11 @@ def test_transaction_rollback_behavior(db_session):
     db_session.rollback()
 
     # 3. Next transaction creates a valid inspection
+    officer_id = _get_test_officer_id(db_session)
     num_retry = allocate_inspection_number(db_session, year=test_year)
     new_insp = Inspection(
         inspection_number=num_retry,
-        inspector_id="temp-officer-id",
+        inspector_id=officer_id,
         location="Valid Location After Rollback",
         status="DRAFT"
     )
