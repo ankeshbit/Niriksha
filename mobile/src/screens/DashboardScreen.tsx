@@ -51,6 +51,8 @@ export const DashboardScreen: React.FC = () => {
   const [kpiError, setKpiError] = useState(false);
   const [inspections, setInspections] = useState<any[]>([]);
   const [pendingActions, setPendingActions] = useState<any[]>([]);
+  const [registryError, setRegistryError] = useState(false);
+  const [pendingActionsError, setPendingActionsError] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
 
@@ -62,21 +64,49 @@ export const DashboardScreen: React.FC = () => {
 
   const loadData = async (silent = false) => {
     try {
+      if (!silent) setLoading(true);
       let kpiFailed = false;
+      let registryFailed = false;
+      let pendingFailed = false;
+
       const [prof, kpiRes, inspRes, pendingRes] = await Promise.all([
         authStorage.getProfile(),
-        api.getDashboardSummary().catch(() => {
+        api.getDashboardSummary().catch((err) => {
+          console.warn('[Dashboard] getDashboardSummary failed:', err);
           kpiFailed = true;
           return null;
         }),
-        api.getDashboardInspections({ limit: 100 }).catch(() => null),
-        api.getDashboardPendingActions(50).catch(() => null),
+        api.getDashboardInspections({ limit: 100 }).catch((err) => {
+          console.warn('[Dashboard] getDashboardInspections failed:', err);
+          registryFailed = true;
+          return null;
+        }),
+        api.getDashboardPendingActions(50).catch((err) => {
+          console.warn('[Dashboard] getDashboardPendingActions failed:', err);
+          pendingFailed = true;
+          return null;
+        }),
       ]);
+
       setProfile(prof);
       setKpiError(kpiFailed || !kpiRes);
       setKpis(kpiRes);
-      setInspections(inspRes?.items || []);
-      setPendingActions(pendingRes?.items || []);
+
+      const isRegErr = registryFailed || inspRes === null;
+      setRegistryError(isRegErr);
+      if (inspRes && Array.isArray(inspRes.items)) {
+        setInspections(inspRes.items);
+      } else if (!registryFailed) {
+        setInspections([]);
+      }
+
+      const isPendingErr = pendingFailed || pendingRes === null;
+      setPendingActionsError(isPendingErr);
+      if (pendingRes && Array.isArray(pendingRes.items)) {
+        setPendingActions(pendingRes.items);
+      } else if (!pendingFailed) {
+        setPendingActions([]);
+      }
     } catch (err) {
       if (!silent) {
         console.error('Failed to load inspector dashboard:', err);
@@ -214,8 +244,8 @@ export const DashboardScreen: React.FC = () => {
                 <Text style={styles.welcomeGreeting}>
                   {`${getTimeBasedGreeting(currentDate)}, ${profile?.full_name || 'Officer'}`}
                 </Text>
-                <View style={{ flexDirection: 'row', alignItems: 'center', flexWrap: 'wrap', gap: 6, marginTop: 2 }}>
-                  <Text style={styles.welcomeSubtext}>
+                <View style={styles.identityRow}>
+                  <Text style={styles.welcomeSubtext} numberOfLines={1} ellipsizeMode="tail">
                     ID: {profile?.officer_id || 'ID Pending'} • {todayStr}
                   </Text>
                   <View style={[styles.roleBadge, styles.roleBadgeInspector]}>
@@ -283,15 +313,24 @@ export const DashboardScreen: React.FC = () => {
                 </View>
 
                 {/* Bottom Metric: Inspections Requiring Manual Action */}
-                <View style={styles.manualActionBanner}>
+                <TouchableOpacity
+                  style={styles.manualActionBanner}
+                  onPress={() => setActiveTab('pending')}
+                  activeOpacity={0.7}
+                  accessibilityRole="button"
+                  accessibilityLabel="View Action Required items"
+                >
                   <View style={styles.manualActionLeft}>
                     <MaterialIcons name="assignment-late" size={20} color={colors.statusAmberText} />
                     <Text style={styles.manualActionTitle}>Action Required (Declarations / Violations)</Text>
                   </View>
-                  <View style={styles.manualActionBadge}>
-                    <Text style={styles.manualActionCount}>{formatCount(kpis?.manual_verification_required)}</Text>
+                  <View style={styles.manualActionRight}>
+                    <View style={styles.manualActionBadge}>
+                      <Text style={styles.manualActionCount}>{formatCount(kpis?.manual_verification_required)}</Text>
+                    </View>
+                    <MaterialIcons name="chevron-right" size={18} color={colors.statusAmberText} />
                   </View>
-                </View>
+                </TouchableOpacity>
               </View>
 
               {/* Tab Navigation Switcher */}
@@ -306,7 +345,7 @@ export const DashboardScreen: React.FC = () => {
                     color={activeTab === 'registry' ? colors.primary : colors.onSurfaceVariant}
                   />
                   <Text style={[styles.tabButtonText, activeTab === 'registry' && styles.tabButtonTextActive]}>
-                    Registry ({inspections.length})
+                    Registry {registryError ? '(!)' : `(${inspections.length})`}
                   </Text>
                 </TouchableOpacity>
 
@@ -320,7 +359,7 @@ export const DashboardScreen: React.FC = () => {
                     color={activeTab === 'pending' ? colors.primary : colors.onSurfaceVariant}
                   />
                   <Text style={[styles.tabButtonText, activeTab === 'pending' && styles.tabButtonTextActive]}>
-                    Actions ({pendingActions.length})
+                    Actions {pendingActionsError ? '(!)' : `(${pendingActions.length})`}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -375,11 +414,41 @@ export const DashboardScreen: React.FC = () => {
 
                   {/* Inspections List */}
                   <View style={styles.cardContainer}>
-                    {filteredInspections.length === 0 ? (
+                    {registryError ? (
                       <View style={styles.emptyContainer}>
-                        <MaterialIcons name="inbox" size={36} color={colors.outline} />
-                        <Text style={styles.emptyTitle}>No matching inspections found.</Text>
-                        <Text style={styles.emptySubtitle}>Adjust your search or filter chips.</Text>
+                        <MaterialIcons name="error-outline" size={36} color={colors.statusRedText} />
+                        <Text style={[styles.emptyTitle, { color: colors.statusRedText }]}>
+                          Unable to load inspections.
+                        </Text>
+                        <Text style={styles.emptySubtitle}>
+                          A network or server error occurred while retrieving the registry.
+                        </Text>
+                        <TouchableOpacity
+                          style={styles.retryButton}
+                          onPress={() => loadData(false)}
+                          activeOpacity={0.7}
+                        >
+                          <MaterialIcons name="refresh" size={16} color="#FFFFFF" />
+                          <Text style={styles.retryButtonText}>Retry</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : filteredInspections.length === 0 ? (
+                      <View style={styles.emptyContainer}>
+                        <MaterialIcons
+                          name={inspections.length === 0 ? 'inventory-2' : 'search-off'}
+                          size={36}
+                          color={colors.outline}
+                        />
+                        <Text style={styles.emptyTitle}>
+                          {inspections.length === 0
+                            ? 'No inspections recorded yet.'
+                            : 'No matching inspections found.'}
+                        </Text>
+                        <Text style={styles.emptySubtitle}>
+                          {inspections.length === 0
+                            ? 'Start a new inspection using the + button below.'
+                            : 'Adjust your search or filter chips.'}
+                        </Text>
                       </View>
                     ) : (
                       filteredInspections.map((item, idx) => {
@@ -387,7 +456,11 @@ export const DashboardScreen: React.FC = () => {
                         const badge = getStatusBadgeProps(item.overall_status || item.status);
                         const dateStr = item.created_at
                           ? new Date(item.created_at).toLocaleDateString('en-GB', { day: 'numeric', month: 'short' })
-                          : '—';
+                          : 'Not Available';
+                        const productName = item.product_name || 'Not Available';
+                        const brandName = item.brand_name ? ` • ${item.brand_name}` : '';
+                        const categoryStr = item.category || 'Not Available';
+                        const locationStr = item.location || 'Not Available';
 
                         return (
                           <TouchableOpacity
@@ -395,20 +468,21 @@ export const DashboardScreen: React.FC = () => {
                             style={[styles.inspectionRow, !isLast && styles.rowBorder]}
                             onPress={() => handleInspectionPress(item)}
                             activeOpacity={0.7}
+                            accessibilityRole="button"
+                            accessibilityLabel={`Inspection ${item.inspection_number || 'ID'}, ${productName}`}
                           >
                             <View style={styles.rowTopHeader}>
-                              <Text style={styles.rowIdText}>{item.inspection_number}</Text>
+                              <Text style={styles.rowIdText}>{item.inspection_number || 'Not Available'}</Text>
                               <Text style={styles.rowDateText}>{dateStr}</Text>
                             </View>
 
                             <Text style={styles.rowProductText} numberOfLines={1}>
-                              {item.product_name}
-                              {item.brand_name ? ` • ${item.brand_name}` : ''}
+                              {productName}{brandName}
                             </Text>
 
                             <View style={styles.rowMetaRow}>
-                              <Text style={styles.rowMetaText}>
-                                {item.category || 'Commodity'} • {item.location || 'Station'}
+                              <Text style={styles.rowMetaText} numberOfLines={1}>
+                                {categoryStr} • {locationStr}
                               </Text>
                               {item.inspector_name ? (
                                 <Text style={styles.rowInspectorText}>Off: {item.inspector_name}</Text>
@@ -451,7 +525,25 @@ export const DashboardScreen: React.FC = () => {
                   </Text>
 
                   <View style={styles.cardContainer}>
-                    {pendingActions.length === 0 ? (
+                    {pendingActionsError ? (
+                      <View style={styles.emptyContainer}>
+                        <MaterialIcons name="error-outline" size={36} color={colors.statusRedText} />
+                        <Text style={[styles.emptyTitle, { color: colors.statusRedText }]}>
+                          Unable to load pending actions.
+                        </Text>
+                        <Text style={styles.emptySubtitle}>
+                          A network or server error occurred while retrieving actions.
+                        </Text>
+                        <TouchableOpacity
+                          style={styles.retryButton}
+                          onPress={() => loadData(false)}
+                          activeOpacity={0.7}
+                        >
+                          <MaterialIcons name="refresh" size={16} color="#FFFFFF" />
+                          <Text style={styles.retryButtonText}>Retry</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : pendingActions.length === 0 ? (
                       <View style={styles.emptyContainer}>
                         <MaterialIcons name="check-circle" size={40} color={colors.statusGreenText} />
                         <Text style={styles.emptyTitle}>All inspections verified!</Text>
@@ -463,7 +555,17 @@ export const DashboardScreen: React.FC = () => {
                         const isCritical = action.severity === 'CRITICAL';
 
                         return (
-                          <View key={idx} style={[styles.actionRow, !isLast && styles.rowBorder]}>
+                          <TouchableOpacity
+                            key={idx}
+                            style={[styles.actionRow, !isLast && styles.rowBorder]}
+                            onPress={() => {
+                              navigation.navigate('Findings', {
+                                inspectionId: action.inspection_id,
+                                inspectionNumber: action.inspection_number,
+                              });
+                            }}
+                            activeOpacity={0.7}
+                          >
                             <View style={styles.actionHeader}>
                               <View style={[styles.severityBadge, isCritical ? styles.severityCritical : styles.severityWarning]}>
                                 <Text style={[styles.severityText, isCritical ? styles.textRed : styles.textAmber]}>
@@ -477,19 +579,11 @@ export const DashboardScreen: React.FC = () => {
                             <Text style={styles.actionDescription}>{action.description}</Text>
                             <Text style={styles.actionProduct}>{action.product_name}</Text>
 
-                            <TouchableOpacity
-                              style={styles.actionReviewBtn}
-                              onPress={() => {
-                                navigation.navigate('Findings', {
-                                  inspectionId: action.inspection_id,
-                                  inspectionNumber: action.inspection_number,
-                                });
-                              }}
-                            >
+                            <View style={styles.actionReviewBtn}>
                               <Text style={styles.actionReviewText}>Adjudicate & Review</Text>
                               <MaterialIcons name="arrow-forward" size={14} color={colors.primary} />
-                            </TouchableOpacity>
-                          </View>
+                            </View>
+                          </TouchableOpacity>
                         );
                       })
                     )}
@@ -545,12 +639,19 @@ const styles = StyleSheet.create({
     lineHeight: 28,
     color: colors.primary,
   },
+  identityRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flexWrap: 'nowrap',
+    gap: 8,
+    marginTop: 4,
+  },
   welcomeSubtext: {
     ...typography.bodySm,
-    fontSize: 13,
+    fontSize: 12.5,
     lineHeight: 18,
     color: colors.onSurfaceVariant,
-    marginTop: spacing.tight,
+    flexShrink: 1,
   },
   metricsContainer: {
     gap: spacing.tight,
@@ -650,6 +751,11 @@ const styles = StyleSheet.create({
     fontSize: 12,
     fontWeight: '700',
     color: colors.statusAmberText,
+  },
+  manualActionRight: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
   },
   manualActionBadge: {
     backgroundColor: colors.surfaceContainerLowest,
@@ -866,7 +972,8 @@ const styles = StyleSheet.create({
     borderRadius: borderRadius.full,
     paddingHorizontal: 7,
     paddingVertical: 1,
-    alignSelf: 'flex-start',
+    alignSelf: 'center',
+    flexShrink: 0,
   },
   roleBadgeInspector: {
     backgroundColor: '#E8F0FE',
@@ -915,9 +1022,26 @@ const styles = StyleSheet.create({
   },
   emptySubtitle: {
     ...typography.caption,
+    fontSize: 12,
     color: colors.onSurfaceVariant,
     textAlign: 'center',
     paddingHorizontal: 20,
+  },
+  retryButton: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    backgroundColor: colors.primary,
+    paddingHorizontal: 16,
+    paddingVertical: 8,
+    borderRadius: borderRadius.md,
+    marginTop: 8,
+  },
+  retryButtonText: {
+    ...typography.caption,
+    fontSize: 13,
+    fontWeight: '700',
+    color: '#FFFFFF',
   },
   // Pending Action Row Styles
   actionRow: {

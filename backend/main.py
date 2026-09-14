@@ -36,7 +36,7 @@ from fastapi import (
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session, joinedload, selectinload
 from sqlalchemy import text, or_, and_, func, distinct, case, desc, asc
 from sqlalchemy.exc import IntegrityError
 
@@ -950,8 +950,8 @@ def get_dashboard_inspections(
         joinedload(Inspection.product),
         joinedload(Inspection.inspector),
         joinedload(Inspection.report),
-        joinedload(Inspection.declarations),
-        joinedload(Inspection.compliance_checks)
+        selectinload(Inspection.declarations),
+        selectinload(Inspection.compliance_checks)
     ).order_by(Inspection.created_at.desc()).offset(offset).limit(limit).all()
 
     items: List[DashboardInspectionListItem] = []
@@ -1005,9 +1005,9 @@ def get_dashboard_pending_actions(
     """Returns an actionable queue of pending enforcement checks requiring officer adjudication."""
     insp_query = db.query(Inspection).options(
         joinedload(Inspection.product),
-        joinedload(Inspection.declarations),
-        joinedload(Inspection.compliance_checks),
-        joinedload(Inspection.images)
+        selectinload(Inspection.declarations),
+        selectinload(Inspection.compliance_checks),
+        selectinload(Inspection.images)
     ).filter(
         Inspection.status != "COMPLETED",
         Inspection.finalized_at.is_(None)

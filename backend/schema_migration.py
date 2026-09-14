@@ -164,6 +164,18 @@ def migrate():
 def migrate_audit_logs_foreign_key(conn):
     """AUDIT-DEL-01: Ensure audit_logs.inspection_id foreign key constraint has ON DELETE SET NULL."""
     try:
+        # Check if already exists with SET NULL to avoid exclusive table locks on startup
+        check_query = text("""
+            SELECT 1 FROM information_schema.referential_constraints rc
+            JOIN information_schema.table_constraints tc ON rc.constraint_name = tc.constraint_name
+            WHERE tc.table_name = 'audit_logs' AND tc.constraint_name = 'audit_logs_inspection_id_fkey'
+            AND rc.delete_rule = 'SET NULL';
+        """)
+        exists = conn.execute(check_query).scalar()
+        if exists:
+            print("  [OK]    audit_logs_inspection_id_fkey verified with ON DELETE SET NULL.")
+            return
+
         conn.execute(text("ALTER TABLE audit_logs DROP CONSTRAINT IF EXISTS audit_logs_inspection_id_fkey;"))
         conn.execute(text("""
             ALTER TABLE audit_logs ADD CONSTRAINT audit_logs_inspection_id_fkey

@@ -16,6 +16,7 @@ Satisfies PS 26034 requirements:
 """
 
 import os
+import uuid
 import pytest
 from datetime import datetime, timedelta, timezone
 from fastapi.testclient import TestClient
@@ -119,8 +120,9 @@ def test_dashboard_summary_kpis(db_session: Session, auth_headers):
     headers, user = auth_headers
 
     # Create a batch of distinct test inspections
+    uid = uuid.uuid4().hex[:6]
     insp1 = Inspection(
-        inspection_number="INSP-TEST-KPI-01",
+        inspection_number=f"INSP-TEST-KPI-01-{uid}",
         inspector_id=user.id,
         location="Connaught Place, New Delhi",
         status="COMPLETED",
@@ -128,14 +130,14 @@ def test_dashboard_summary_kpis(db_session: Session, auth_headers):
         finalized_at=datetime.utcnow()
     )
     insp2 = Inspection(
-        inspection_number="INSP-TEST-KPI-02",
+        inspection_number=f"INSP-TEST-KPI-02-{uid}",
         inspector_id=user.id,
         location="Bandra West, Mumbai",
         status="RULE_EVALUATION_COMPLETE",
         overall_status="POTENTIAL_NON_COMPLIANCE"
     )
     insp3 = Inspection(
-        inspection_number="INSP-TEST-KPI-03",
+        inspection_number=f"INSP-TEST-KPI-03-{uid}",
         inspector_id=user.id,
         location="Koramangala, Bengaluru",
         status="EXTRACTION_COMPLETE",
@@ -202,8 +204,9 @@ def test_dashboard_inspections_filtering(db_session: Session, auth_headers):
     """Verify filtering by status, overall_status, category, location, and report presence."""
     headers, user = auth_headers
 
+    uid = uuid.uuid4().hex[:6]
     insp_filter = Inspection(
-        inspection_number="INSP-FILTER-001",
+        inspection_number=f"INSP-FILTER-001-{uid}",
         inspector_id=user.id,
         location="Sector 18, Noida",
         status="COMPLETED",
@@ -276,8 +279,9 @@ def test_dashboard_inspector_isolation(db_session: Session, auth_headers, second
     h_admin, admin_user = admin_headers
 
     # Create private inspection for user1
+    uid = uuid.uuid4().hex[:6]
     private_insp = Inspection(
-        inspection_number="INSP-PRIVATE-USER1",
+        inspection_number=f"INSP-PRIVATE-USER1-{uid}",
         inspector_id=user1.id,
         location="Inspector 1 Exclusive Area",
         status="DRAFT"
@@ -294,7 +298,7 @@ def test_dashboard_inspector_isolation(db_session: Session, auth_headers, second
     assert not any(i["id"] == private_insp.id for i in user2_items)
 
     # Admin queries inspections list -> Must see user1's inspection
-    r_admin = client.get("/api/dashboard/inspections", headers=h_admin)
+    r_admin = client.get(f"/api/dashboard/inspections?search={private_insp.inspection_number}", headers=h_admin)
     assert r_admin.status_code == 200
     admin_items = r_admin.json()["items"]
     assert any(i["id"] == private_insp.id for i in admin_items)
@@ -304,12 +308,13 @@ def test_dashboard_inspector_isolation(db_session: Session, auth_headers, second
 # 4. Pending Actions Adjudication Queue
 # ===========================================================================
 
-def test_dashboard_pending_actions(db_session: Session, auth_headers):
+def test_dashboard_pending_actions(db_session: Session, secondary_inspector_headers):
     """Verify pending actions queue detects missing declarations, conflicts, and unadjudicated findings."""
-    headers, user = auth_headers
+    headers, user = secondary_inspector_headers
 
+    uid = uuid.uuid4().hex[:6]
     insp = Inspection(
-        inspection_number="INSP-PENDING-ACTION-01",
+        inspection_number=f"INSP-PENDING-ACTION-01-{uid}",
         inspector_id=user.id,
         location="Jaipur Mandi",
         status="RULE_EVALUATION_COMPLETE",
