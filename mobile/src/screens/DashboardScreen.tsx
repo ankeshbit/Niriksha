@@ -69,6 +69,12 @@ export const DashboardScreen: React.FC = () => {
       let registryFailed = false;
       let pendingFailed = false;
 
+      const token = await authStorage.getToken();
+      if (!token) {
+        navigation.replace('Login');
+        return;
+      }
+
       const [prof, kpiRes, inspRes, pendingRes] = await Promise.all([
         authStorage.getProfile(),
         api.getDashboardSummary().catch((err) => {
