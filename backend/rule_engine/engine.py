@@ -11,6 +11,7 @@ from backend.rule_engine.models import (
     StatutoryRuleDefinition
 )
 from backend.rule_engine.registry import STATUTORY_RULE_REGISTRY, get_all_rules
+from backend.declaration_validation_service import declaration_validation_engine
 
 class DeterministicRuleEngine:
     """
@@ -24,7 +25,8 @@ class DeterministicRuleEngine:
         inspection_id: str,
         product_data: Dict[str, Any],
         declarations: List[Any],
-        images: List[Any]
+        images: List[Any],
+        listing_comparisons: Optional[List[Any]] = None
     ) -> List[RuleEvaluationResult]:
         decl_map = {}
         for d in declarations:
@@ -388,180 +390,133 @@ class DeterministicRuleEngine:
         # 4. Deterministic Rule Evaluation Logic
         if rule_code == "PCR_RULE_06_1_E":
             # Maximum Retail Price (MRP)
-            has_price_val = bool(re.search(r'[0-9]+(?:\.[0-9]{1,2})?', effective_val))
-            has_tax_qualifier = bool(re.search(r'(?:incl|inclusive|taxes)', effective_val, re.I))
-
-            if not has_price_val:
-                return RuleEvaluationResult(
-                    rule_code=rule_code,
-                    rule_version=rule.rule_version,
-                    title=rule.title,
-                    statutory_reference=rule.statutory_reference,
-                    severity=rule.severity,
-                    result_state=RuleResultState.POTENTIAL_NON_COMPLIANCE,
-                    effective_value_used=effective_val,
-                    original_ocr_value=original_val,
-                    is_verified_by_officer=is_verified,
-                    explanation="MRP declaration does not contain a discernible numerical retail price.",
-                    evidence_items=[evidence_item]
-                )
-            elif not has_tax_qualifier:
-                return RuleEvaluationResult(
-                    rule_code=rule_code,
-                    rule_version=rule.rule_version,
-                    title=rule.title,
-                    statutory_reference=rule.statutory_reference,
-                    severity=rule.severity,
-                    result_state=RuleResultState.POTENTIAL_NON_COMPLIANCE,
-                    effective_value_used=effective_val,
-                    original_ocr_value=original_val,
-                    is_verified_by_officer=is_verified,
-                    explanation="MRP declaration is missing mandatory statutory tax qualifier: 'Inclusive of all taxes'.",
-                    evidence_items=[evidence_item]
-                )
+            fmt_status, findings, exp = declaration_validation_engine.validate_format_and_misleading("mrp", effective_val)
+            explanation_text = "; ".join(findings) if findings else exp
+            if fmt_status == "COMPLIANT":
+                res_state = RuleResultState.PASS
+            elif fmt_status == "POTENTIAL_MISLEADING":
+                res_state = RuleResultState.NEEDS_MANUAL_VERIFICATION
             else:
-                return RuleEvaluationResult(
-                    rule_code=rule_code,
-                    rule_version=rule.rule_version,
-                    title=rule.title,
-                    statutory_reference=rule.statutory_reference,
-                    severity=rule.severity,
-                    result_state=RuleResultState.PASS,
-                    effective_value_used=effective_val,
-                    original_ocr_value=original_val,
-                    is_verified_by_officer=is_verified,
-                    explanation="MRP declared clearly with inclusive tax qualifier in compliance with Rule 6(1)(e).",
-                    evidence_items=[evidence_item]
-                )
+                res_state = RuleResultState.POTENTIAL_NON_COMPLIANCE
 
-        elif rule_code == "PCR_RULE_06_1_A":
-            # Manufacturer / Packer / Importer
-            if len(effective_val) < 6:
-                return RuleEvaluationResult(
-                    rule_code=rule_code,
-                    rule_version=rule.rule_version,
-                    title=rule.title,
-                    statutory_reference=rule.statutory_reference,
-                    severity=rule.severity,
-                    result_state=RuleResultState.POTENTIAL_NON_COMPLIANCE,
-                    effective_value_used=effective_val,
-                    original_ocr_value=original_val,
-                    is_verified_by_officer=is_verified,
-                    explanation="Manufacturer/Packer details appear incomplete or illegible.",
-                    evidence_items=[evidence_item]
-                )
             return RuleEvaluationResult(
                 rule_code=rule_code,
                 rule_version=rule.rule_version,
                 title=rule.title,
                 statutory_reference=rule.statutory_reference,
                 severity=rule.severity,
-                result_state=RuleResultState.PASS,
+                result_state=res_state,
                 effective_value_used=effective_val,
                 original_ocr_value=original_val,
                 is_verified_by_officer=is_verified,
-                explanation="Manufacturer / Packer name & address declared in accordance with Rule 6(1)(a).",
+                explanation=explanation_text,
+                evidence_items=[evidence_item]
+            )
+
+        elif rule_code == "PCR_RULE_06_1_A":
+            # Manufacturer / Packer / Importer
+            fmt_status, findings, exp = declaration_validation_engine.validate_format_and_misleading("manufacturer_details", effective_val)
+            explanation_text = "; ".join(findings) if findings else exp
+            if fmt_status == "COMPLIANT":
+                res_state = RuleResultState.PASS
+            elif fmt_status == "POTENTIAL_MISLEADING":
+                res_state = RuleResultState.NEEDS_MANUAL_VERIFICATION
+            else:
+                res_state = RuleResultState.POTENTIAL_NON_COMPLIANCE
+
+            return RuleEvaluationResult(
+                rule_code=rule_code,
+                rule_version=rule.rule_version,
+                title=rule.title,
+                statutory_reference=rule.statutory_reference,
+                severity=rule.severity,
+                result_state=res_state,
+                effective_value_used=effective_val,
+                original_ocr_value=original_val,
+                is_verified_by_officer=is_verified,
+                explanation=explanation_text,
                 evidence_items=[evidence_item]
             )
 
         elif rule_code == "PCR_RULE_06_1_C":
             # Net Quantity
-            has_metric_unit = bool(re.search(r'\b(?:kg|g|gm|gms|l|ltr|litre|litres|ml|units?|pieces?|count|n|u)\b', effective_val, re.I))
-            has_qty_num = bool(re.search(r'[0-9]+(?:\.[0-9]+)?', effective_val))
-
-            if not (has_metric_unit and has_qty_num):
-                return RuleEvaluationResult(
-                    rule_code=rule_code,
-                    rule_version=rule.rule_version,
-                    title=rule.title,
-                    statutory_reference=rule.statutory_reference,
-                    severity=rule.severity,
-                    result_state=RuleResultState.POTENTIAL_NON_COMPLIANCE,
-                    effective_value_used=effective_val,
-                    original_ocr_value=original_val,
-                    is_verified_by_officer=is_verified,
-                    explanation="Net quantity must declare a numeric quantity with standard SI metric units (kg, g, L, ml, count).",
-                    evidence_items=[evidence_item]
+            fmt_status, findings, exp = declaration_validation_engine.validate_format_and_misleading("net_quantity", effective_val)
+            explanation_text = "; ".join(findings) if findings else exp
+            if fmt_status == "COMPLIANT":
+                res_state = RuleResultState.PASS
+                explanation_text = (
+                    f"{explanation_text} Note: Physical net quantity requires appropriate physical verification/testing "
+                    "and cannot be conclusively determined from package photographs alone."
                 )
+            elif fmt_status == "POTENTIAL_MISLEADING":
+                res_state = RuleResultState.NEEDS_MANUAL_VERIFICATION
+            else:
+                res_state = RuleResultState.POTENTIAL_NON_COMPLIANCE
+
             return RuleEvaluationResult(
                 rule_code=rule_code,
                 rule_version=rule.rule_version,
                 title=rule.title,
                 statutory_reference=rule.statutory_reference,
                 severity=rule.severity,
-                result_state=RuleResultState.PASS,
+                result_state=res_state,
                 effective_value_used=effective_val,
                 original_ocr_value=original_val,
                 is_verified_by_officer=is_verified,
-                explanation=(
-                    "Net quantity declared in standard metric units conforming to Rule 6(1)(c). "
-                    "Note: Physical net quantity requires appropriate physical verification/testing "
-                    "and cannot be conclusively determined from package photographs alone."
-                ),
+                explanation=explanation_text,
                 evidence_items=[evidence_item]
             )
 
         elif rule_code == "PCR_RULE_06_1_D":
             # Month & Year of Mfg / Packing
-            has_date_format = bool(re.search(r'[0-9]{1,2}[/-][0-9]{2,4}|[A-Za-z]{3,9}\s*[0-9]{4}|[0-9]{2}/[0-9]{4}', effective_val))
-            if not has_date_format:
-                return RuleEvaluationResult(
-                    rule_code=rule_code,
-                    rule_version=rule.rule_version,
-                    title=rule.title,
-                    statutory_reference=rule.statutory_reference,
-                    severity=rule.severity,
-                    result_state=RuleResultState.POTENTIAL_NON_COMPLIANCE,
-                    effective_value_used=effective_val,
-                    original_ocr_value=original_val,
-                    is_verified_by_officer=is_verified,
-                    explanation="Month and Year of manufacture/packing is missing or in an invalid format.",
-                    evidence_items=[evidence_item]
-                )
+            fmt_status, findings, exp = declaration_validation_engine.validate_format_and_misleading("date_of_manufacture_packing", effective_val)
+            explanation_text = "; ".join(findings) if findings else exp
+            if fmt_status == "COMPLIANT":
+                res_state = RuleResultState.PASS
+            elif fmt_status == "POTENTIAL_MISLEADING":
+                res_state = RuleResultState.NEEDS_MANUAL_VERIFICATION
+            else:
+                res_state = RuleResultState.POTENTIAL_NON_COMPLIANCE
+
             return RuleEvaluationResult(
                 rule_code=rule_code,
                 rule_version=rule.rule_version,
                 title=rule.title,
                 statutory_reference=rule.statutory_reference,
                 severity=rule.severity,
-                result_state=RuleResultState.PASS,
+                result_state=res_state,
                 effective_value_used=effective_val,
                 original_ocr_value=original_val,
                 is_verified_by_officer=is_verified,
-                explanation="Month and Year of packing declared in compliance with Rule 6(1)(d).",
+                explanation=explanation_text,
                 evidence_items=[evidence_item]
             )
 
         elif rule_code == "PCR_RULE_06_1_G":
             # Consumer Care Details
-            has_contact = bool(re.search(r'(?:1800|[0-9]{10}|@[a-zA-Z0-9-]+\.|care|consumer|tel|phone|helpline|help@)', effective_val, re.I))
-            if not has_contact:
-                return RuleEvaluationResult(
-                    rule_code=rule_code,
-                    rule_version=rule.rule_version,
-                    title=rule.title,
-                    statutory_reference=rule.statutory_reference,
-                    severity=rule.severity,
-                    result_state=RuleResultState.POTENTIAL_NON_COMPLIANCE,
-                    effective_value_used=effective_val,
-                    original_ocr_value=original_val,
-                    is_verified_by_officer=is_verified,
-                    explanation="Consumer grievance redressal telephone number or email address is missing.",
-                    evidence_items=[evidence_item]
-                )
+            fmt_status, findings, exp = declaration_validation_engine.validate_format_and_misleading("consumer_care_details", effective_val)
+            explanation_text = "; ".join(findings) if findings else exp
+            if fmt_status == "COMPLIANT":
+                res_state = RuleResultState.PASS
+            elif fmt_status == "POTENTIAL_MISLEADING":
+                res_state = RuleResultState.NEEDS_MANUAL_VERIFICATION
+            else:
+                res_state = RuleResultState.POTENTIAL_NON_COMPLIANCE
+
             return RuleEvaluationResult(
                 rule_code=rule_code,
                 rule_version=rule.rule_version,
                 title=rule.title,
                 statutory_reference=rule.statutory_reference,
                 severity=rule.severity,
-                result_state=RuleResultState.PASS,
+                result_state=res_state,
                 effective_value_used=effective_val,
                 original_ocr_value=original_val,
                 is_verified_by_officer=is_verified,
-                explanation="Consumer care contact information declared in compliance with Rule 6(2).",
+                explanation=explanation_text,
                 evidence_items=[evidence_item]
             )
+
 
         elif rule_code == "PCR_RULE_06_1_F":
             # Commodity Name (Rule 6(1)(b) in PCR 2011)

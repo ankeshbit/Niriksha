@@ -92,8 +92,14 @@ class DeclarationValidationEngine:
         re.IGNORECASE
     )
 
+    # Statutory Reference: Rule 12(6), Legal Metrology (Packaged Commodities) Rules, 2011.
+    # Prohibits words tending to create an exaggerated or misleading impression as to quantity:
+    # "minimum", "not less than", "average", "about", "approximately", etc.
+    # NOTE on "when packed": Removed per Rule 11(4) & Third Schedule, which explicitly permits
+    # "when packed" for specific commodities (soaps of all kinds, lotions, creams). To prevent
+    # false positives without category-level adjudication, "when packed" is omitted here.
     PROHIBITED_QUANTITY_TERMS = re.compile(
-        r"\b(?:when\s*packed|net\s*wt\s*approx|approximately|not\s*less\s*than|minimum\s*weight)\b",
+        r"\b(?:net\s*wt\s*approx|approximately|approx|not\s*less\s*than|minimum(?:\s*weight)?|average|about)\b",
         re.IGNORECASE
     )
 
@@ -128,9 +134,14 @@ class DeclarationValidationEngine:
 
         # 1. Net Quantity Validation
         if field_name == "net_quantity":
-            # Check for prohibited qualifying words under Rule 13(5)
+            # Check for discernible numeric value under Rule 6(1)(c)
+            if not re.search(r"\d+(?:\.\d+)?", v):
+                findings.append("Net quantity declaration does not contain a discernible numeric value under Rule 6(1)(c).")
+                return "NON_COMPLIANT", findings, "Net quantity lacks numerical measurement."
+
+            # Check for prohibited qualifying words under Rule 12(6)
             if self.PROHIBITED_QUANTITY_TERMS.search(v):
-                findings.append("Prohibited qualification used (e.g. 'when packed' or 'approximate') under Rule 13(5).")
+                findings.append("Prohibited qualification used (e.g. 'approximate', 'minimum', or 'average') under Rule 12(6).")
                 return "POTENTIAL_MISLEADING", findings, "Net quantity qualified by ambiguous or non-standard condition."
 
             # Check if promotional text was mixed without base net weight
@@ -138,18 +149,22 @@ class DeclarationValidationEngine:
                 findings.append("Promotional claim detected without mandatory base net quantity declaration.")
                 return "POTENTIAL_MISLEADING", findings, "Promotional quantity expression masquerading as net quantity."
 
-            # Verify standard SI metric units under Rule 11
+            # Verify standard SI metric units under Rule 13
             if not self.STANDARD_METRIC_UNITS.search(v):
-                findings.append("Net quantity does not declare standard SI metric units (kg, g, l, ml, count) under Rule 11.")
+                findings.append("Net quantity does not declare standard SI metric units (kg, g, l, ml, count) under Rule 13.")
                 return "NON_COMPLIANT", findings, "Non-standard unit abbreviation or missing metric unit."
 
             return "COMPLIANT", [], "Net quantity declared in compliant standard metric unit."
 
         # 2. MRP Validation
         elif field_name == "mrp":
-            # Check for currency indicator
+            # Check for numerical retail price
+            has_price_val = bool(re.search(r"\d+(?:\.\d+)?", v))
             has_currency = bool(re.search(r"(?:₹|rs\.?|inr|rupees)", v, re.IGNORECASE))
             has_taxes = bool(self.TAX_QUALIFIER_TERMS.search(v))
+
+            if not has_price_val:
+                findings.append("MRP declaration does not contain a discernible numerical retail price under Rule 6(1)(e).")
 
             if not has_currency:
                 findings.append("MRP declaration lacks statutory Indian currency symbol (₹ or Rs.) under Rule 6(1)(e).")

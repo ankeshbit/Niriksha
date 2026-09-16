@@ -2899,8 +2899,14 @@ def evaluate_inspection_rules(
 
     declarations = db.query(Declaration).filter(Declaration.inspection_id == inspection.id).all()
     images = db.query(ProductImage).filter(ProductImage.inspection_id == inspection.id).all()
+    listing_comparisons = db.query(ListingComparison).filter(ListingComparison.inspection_id == inspection.id).all()
 
-    has_ecommerce = bool(inspection.product and getattr(inspection.product, "listings", None))
+    has_ecommerce = bool(
+        inspection.listing is not None or
+        bool(listing_comparisons) or
+        (inspection.product and getattr(inspection.product, "listings", None)) or
+        getattr(inspection, "inspection_type", "PHYSICAL") in ["ONLINE_LISTING", "HYBRID", "ECOMMERCE"]
+    )
     product_data = {
         "product_name": inspection.product.product_name if inspection.product else "",
         "brand_name": inspection.product.brand_name if inspection.product else "",
@@ -2910,7 +2916,13 @@ def evaluate_inspection_rules(
     }
 
     # Execute deterministic rule engine
-    eval_results = rule_engine.evaluate_inspection(inspection.id, product_data, declarations, images)
+    eval_results = rule_engine.evaluate_inspection(
+        inspection.id,
+        product_data,
+        declarations,
+        images,
+        listing_comparisons=listing_comparisons
+    )
 
     # Idempotent replacement of previous checks and evidence for this inspection
     existing_checks = db.query(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection.id).all()

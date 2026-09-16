@@ -2,13 +2,12 @@
 backend/font_size_service.py
 
 Font-Size and Numeral Height Analysis Engine for NiriKsha.
-Statutory Reference: Rule 9, Table 1 of Legal Metrology (Packaged Commodities) Rules, 2011 (PDF p. 8-10)
+Statutory Reference: Rule 7(2) & Table-I of Legal Metrology (Packaged Commodities) Rules, 2011 (PDF p. 8)
 
-Statutory Minimum Heights (Table 1 under Rule 9):
-- Net Quantity <= 50 g/ml: Minimum height 1.0 mm (Normal), 2.0 mm (Blown/Molded)
-- Net Quantity 50 g/ml to 200 g/ml: Minimum height 2.0 mm (Normal), 4.0 mm (Blown/Molded)
-- Net Quantity 200 g/ml to 1 kg/L: Minimum height 4.0 mm (Normal), 6.0 mm (Blown/Molded)
-- Net Quantity > 1 kg/L: Minimum height 6.0 mm (Normal), 6.0 mm (Blown/Molded)
+Statutory Minimum Heights for Numerals (Rule 7(2), Table-I — Weight / Volume):
+- Net Quantity up to 200 g/ml: Minimum height 1.0 mm (Normal), 2.0 mm (Blown/Molded)
+- Net Quantity above 200 g/ml to 500 g/ml: Minimum height 2.0 mm (Normal), 4.0 mm (Blown/Molded)
+- Net Quantity above 500 g/ml: Minimum height 4.0 mm (Normal), 6.0 mm (Blown/Molded)
 
 CRITICAL LEGAL SAFETY GUARANTEES:
 1. Pixel height alone is NOT physical millimetres.
@@ -47,8 +46,8 @@ class FontSizeAnalysisResult(BaseModel):
     ml_features: Optional[Dict[str, Any]] = None
     statutory_minimum_height_mm: float = 1.0
     font_size_status: str  # FONT_SIZE_COMPLIANT, FONT_SIZE_NON_COMPLIANT, FONT_SIZE_UNCERTAIN, FONT_SIZE_UNDETERMINABLE, NOT_APPLICABLE, MANUAL_VERIFICATION_REQUIRED
-    statutory_rule_code: str = "PCR_RULE_09_FONT_SIZE"
-    statutory_rule_reference: str = "Rule 9(1) & Table 1, Legal Metrology (Packaged Commodities) Rules, 2011 (p. 8-10)"
+    statutory_rule_code: str = "PCR_RULE_07_2_FONT_SIZE"
+    statutory_rule_reference: str = "Rule 7(2) & Table-I, Legal Metrology (Packaged Commodities) Rules, 2011 (PDF p. 8)"
     explanation: str
     confidence: float
     verification_status: str = "STATUTORY_VERIFIED"
@@ -58,18 +57,18 @@ class FontSizeAnalysisResult(BaseModel):
 class FontSizeAnalyzer:
     """
     Measures text and numeral heights from genuine OCR bounding boxes and
-    evaluates statutory compliance under PCR 2011 Rule 9 using trained ML models and optical metrology.
+    evaluates statutory compliance under PCR 2011 Rule 7(2) Table-I using trained ML models and optical metrology.
     """
 
     # Numerical plausibility range for pixels-per-mm calibration from notebook Section 9
     PLAUSIBLE_PIXELS_PER_MM_RANGE = (0.2, 200.0)
 
-    # Table 1: Minimum height of numerals and letters based on Net Quantity
+    # Table-I: Minimum height of numerals based on Net Quantity (Weight or Volume) under Rule 7(2)
+    # TODO: Rule 7(3) mandates a flat letter-height floor (1.0 mm normal / 2.0 mm blown/molded); numeral vs letter classification is not yet implemented.
     TABLE_1_THRESHOLDS = [
-        {"max_qty_g_or_ml": 50.0, "min_height_mm": 1.0, "molded_height_mm": 2.0},
-        {"max_qty_g_or_ml": 200.0, "min_height_mm": 2.0, "molded_height_mm": 4.0},
-        {"max_qty_g_or_ml": 1000.0, "min_height_mm": 4.0, "molded_height_mm": 6.0},
-        {"max_qty_g_or_ml": float("inf"), "min_height_mm": 6.0, "molded_height_mm": 6.0},
+        {"max_qty_g_or_ml": 200.0, "min_height_mm": 1.0, "molded_height_mm": 2.0},
+        {"max_qty_g_or_ml": 500.0, "min_height_mm": 2.0, "molded_height_mm": 4.0},
+        {"max_qty_g_or_ml": float("inf"), "min_height_mm": 4.0, "molded_height_mm": 6.0},
     ]
 
     def __init__(self):
@@ -181,22 +180,23 @@ class FontSizeAnalyzer:
 
     def get_statutory_threshold(self, net_quantity_str: Optional[str], is_blown_or_molded: bool = False) -> Tuple[float, str]:
         """
-        Determines the applicable minimum height under Rule 9, Table 1.
+        Determines the applicable minimum height under Rule 7(2), Table-I.
         Returns: (min_height_mm, statutory_tier_explanation)
         """
         qty_magnitude = self._parse_net_quantity_magnitude(net_quantity_str)
         if qty_magnitude is None:
-            # Default minimum general font size under Rule 9(2) is 1.0 mm
-            return 1.0, "Rule 9(2) default minimum height (1.0 mm) applied (net quantity magnitude unspecified)."
+            # Default minimum general font size under Rule 7(3) / Table-I tier 1 is 1.0 mm
+            return 1.0, "Rule 7 default minimum height (1.0 mm) applied (net quantity magnitude unspecified)."
 
         for tier in self.TABLE_1_THRESHOLDS:
             if qty_magnitude <= tier["max_qty_g_or_ml"]:
                 h = tier["molded_height_mm"] if is_blown_or_molded else tier["min_height_mm"]
                 pkg_type = "blown/molded/perforated" if is_blown_or_molded else "standard printing"
-                tier_desc = f"Net quantity {qty_magnitude:g}g/ml -> Rule 9 Table 1 minimum: {h:.1f} mm ({pkg_type})"
+                tier_desc = f"Net quantity {qty_magnitude:g}g/ml -> Rule 7(2) Table-I minimum: {h:.1f} mm ({pkg_type})"
                 return h, tier_desc
 
-        return 6.0, "Net quantity > 1 kg/L -> Rule 9 Table 1 minimum: 6.0 mm"
+        fallback_h = 6.0 if is_blown_or_molded else 4.0
+        return fallback_h, f"Net quantity > 500 g/ml -> Rule 7(2) Table-I minimum: {fallback_h:.1f} mm"
 
     def get_statutory_min_height(self, net_quantity_str: Optional[str], is_blown_or_molded: bool = False) -> float:
         """Returns statutory minimum height in mm as a float."""
@@ -373,7 +373,7 @@ class FontSizeAnalyzer:
                     font_size_status="MANUAL_VERIFICATION_REQUIRED",
                     explanation=(
                         f"Estimated character height ({computed_mm:.2f} mm) is below statutory minimum ({threshold_mm:.1f} mm). "
-                        f"Flagged for inspector physical verification under Rule 9, Table 1."
+                        f"Flagged for inspector physical verification under Rule 7(2), Table-I."
                     ),
                     confidence=0.85
                 )

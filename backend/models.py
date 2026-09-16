@@ -47,7 +47,8 @@ class Inspection(Base):
     inspector_id = Column(String(36), ForeignKey("users.id"), nullable=False)
     location = Column(String(255), nullable=False, index=True)
     
-    # State Lifecycle: DRAFT -> IMAGES_UPLOADED -> ANALYZING -> ANALYSIS_COMPLETE -> NEEDS_REVIEW -> FINALIZED
+    # State Lifecycle: DRAFT -> IMAGES_UPLOADED -> OCR_PROCESSING -> EXTRACTION_COMPLETE
+    #  -> RULE_EVALUATION_COMPLETE -> COMPLETED
     status = Column(String(30), default="DRAFT", nullable=False, index=True)
     
     # Final statutory status: NO_POTENTIAL_VIOLATIONS, POTENTIAL_NON_COMPLIANCE, NEEDS_MANUAL_VERIFICATION, INSUFFICIENT_EVIDENCE

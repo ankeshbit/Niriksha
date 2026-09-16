@@ -13,7 +13,7 @@ def generate_test_fixtures():
     cv2.putText(clear_img, "NET QUANTITY: 5 kg", (80, 220), cv2.FONT_HERSHEY_SIMPLEX, 1.0, (10, 10, 10), 2)
     cv2.putText(clear_img, "MRP Rs. 450.00 (INCL. OF ALL TAXES)", (80, 310), cv2.FONT_HERSHEY_SIMPLEX, 0.95, (10, 10, 10), 2)
     cv2.putText(clear_img, "MFD: 08/2026", (80, 400), cv2.FONT_HERSHEY_SIMPLEX, 0.95, (10, 10, 10), 2)
-    cv2.putText(clear_img, "MFG BY: AGRO FOODS PVT LTD, GORAKHPUR UP", (80, 490), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (10, 10, 10), 2)
+    cv2.putText(clear_img, "MFG BY: AGRO FOODS PVT LTD, 12 CIVIL LINES ROAD, GORAKHPUR UP 273001", (80, 490), cv2.FONT_HERSHEY_SIMPLEX, 0.52, (10, 10, 10), 2)
     cv2.putText(clear_img, "CUSTOMER CARE: 1800-11-2233 / CARE@AGRO.IN", (80, 580), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (10, 10, 10), 2)
     cv2.putText(clear_img, "COUNTRY OF ORIGIN: INDIA", (80, 680), cv2.FONT_HERSHEY_SIMPLEX, 0.8, (10, 10, 10), 2)
     cv2.imwrite(str(FIXTURES_DIR / "good_package.jpg"), clear_img)
