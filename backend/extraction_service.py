@@ -762,12 +762,12 @@ class DeterministicRegexExtractor(BaseExtractionProvider):
             )
 
         match = re.search(
-            r'(?:FOR\s*FEEDBACK|FEEDBACK|CUSTOMER\s*CARE|CONSUMER\s*CARE|FOR\s*COMPLAINTS|HELPLINE|GRIEVANCE)[:\s\-]*([A-Za-z0-9\s,\.\-\@\:\/\(\)]+?)(?=(?:NET|MRP|MFD|PKD|BATCH|LIC|FSSAI|\n\n|$))',
+            r'(?:FOR\s*FEEDBACK|FEEDBACK|CUSTOMER\s*CARE|CONSUMER\s*CARE|FOR\s*COMPLAINTS|HELPLINE|GRIEVANCE)[:\s\-]*([A-Za-z0-9\s,\.\-\@\:\/\(\)\u2010\u2011\u2012\u2013\u2014]+?)(?=(?:NET|MRP|MFD|PKD|BATCH|LIC|FSSAI|\n\n|$))',
             text,
             re.IGNORECASE
         )
         phone_matches = re.findall(
-            r'(?:1-800[-—\s]?[0-9]{3,4}[-—\s]?[0-9]{3,5}|1800[-—\s]?[0-9]{2,3}[-—\s]?[0-9]{3,4}|\+?91[-—\s]?[0-9]{10})',
+            r'(?:1[-\u2010\u2011\u2012\u2013\u2014]?800[-\u2010\u2011\u2012\u2013\u2014\s]*[0-9]{3,4}[-\u2010\u2011\u2012\u2013\u2014\s]*[0-9]{3,5}|1800[-\u2010\u2011\u2012\u2013\u2014\s]*[0-9]{2,3}[-\u2010\u2011\u2012\u2013\u2014\s]*[0-9]{3,4}|\+?91[-\u2010\u2011\u2012\u2013\u2014\s]*[0-9]{10})',
             text
         )
         email_matches = re.findall(r'([a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+)', text)
@@ -775,10 +775,14 @@ class DeterministicRegexExtractor(BaseExtractionProvider):
         if match or phone_matches or email_matches:
             details = []
             if match:
-                details.append(match.group(1).strip())
+                clean_match = re.sub(r'[\u2010\u2011\u2012\u2013\u2014]+', '-', match.group(1).strip())
+                clean_match = re.sub(r'-+', '-', clean_match)
+                details.append(clean_match)
             for p in phone_matches:
-                if p not in " ".join(details):
-                    details.append(f"Tel: {p}")
+                clean_p = re.sub(r'[\u2010\u2011\u2012\u2013\u2014]+', '-', p)
+                clean_p = re.sub(r'-+', '-', clean_p)
+                if clean_p not in " ".join(details):
+                    details.append(f"Tel: {clean_p}")
             for e in email_matches:
                 if e not in " ".join(details):
                     details.append(f"Email: {e}")
