@@ -156,7 +156,10 @@ from backend.schema_migration import migrate
 # AUDIT-STARTUP-01: Only auto-create schema and seed in non-production environments.
 # Production schema management should be explicit (via migrations or manual seed).
 if settings.ENVIRONMENT != "production":
-    Base.metadata.create_all(bind=engine)
+    try:
+        Base.metadata.create_all(bind=engine)
+    except Exception as e:
+        print(f"[Warning] Base.metadata.create_all error on startup: {e}")
     try:
         migrate()
     except Exception as e:
@@ -217,11 +220,14 @@ async def global_exception_handler(request: Request, exc: Exception):
 # Base Paths
 BASE_DIR = Path(__file__).resolve().parent.parent
 STITCH_DIR = BASE_DIR / "stitch_screens"
-UPLOADS_DIR = BASE_DIR / "uploads"
-REPORTS_DIR = BASE_DIR / "generated_reports"
+_cfg_uploads = Path(settings.UPLOAD_DIR)
+UPLOADS_DIR = _cfg_uploads if _cfg_uploads.is_absolute() else (BASE_DIR / _cfg_uploads)
+_cfg_reports = Path(settings.REPORTS_DIR)
+REPORTS_DIR = _cfg_reports if _cfg_reports.is_absolute() else (BASE_DIR / _cfg_reports)
 
-UPLOADS_DIR.mkdir(exist_ok=True)
-REPORTS_DIR.mkdir(exist_ok=True)
+UPLOADS_DIR.mkdir(parents=True, exist_ok=True)
+REPORTS_DIR.mkdir(parents=True, exist_ok=True)
+report_generator.reports_dir = REPORTS_DIR
 
 # Mount Static Assets
 if STITCH_DIR.exists():

@@ -1,7 +1,7 @@
 fastapi==0.141.1
 uvicorn[standard]==0.52.4
 pydantic==2.13.4
-pydantic-settings==2.15.0
+pydantic-settings==2.15.0  # pydantic_settings
 SQLAlchemy==2.0.52
 python-multipart==0.0.32
 python-jose[cryptography]==3.5.0
@@ -12,8 +12,7 @@ python-dotenv==1.2.3
 httpx==0.28.1
 pytest==9.1.1
 reportlab==5.0.1
-opencv-contrib-python==4.10.0.84
-opencv-python-headless==4.9.0.80
+opencv-python-headless==4.10.0.84  # cv2
 numpy==1.26.4
 Pillow==12.3.0
 pypdf==6.16.2
@@ -23,3 +22,7 @@ paddleocr==3.7.0
 psycopg[binary]==3.3.5
 python-docx==1.2.0
 python-barcode==0.16.1
+pandas==2.3.3
+joblib==1.6.0
+scikit-learn==1.7.2
+pyzbar==0.1.9

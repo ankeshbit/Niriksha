@@ -51,7 +51,8 @@ class DeterministicRuleEngine:
                 decl_map=decl_map,
                 product_data=product_data,
                 fallback_image_id=primary_image_id,
-                has_poor_quality=has_poor_quality_images
+                has_poor_quality=has_poor_quality_images,
+                listing_comparisons=listing_comparisons
             )
             results.append(eval_res)
 
@@ -94,7 +95,8 @@ class DeterministicRuleEngine:
         decl_map: Dict[str, Any],
         product_data: Dict[str, Any],
         fallback_image_id: Optional[str],
-        has_poor_quality: bool = False
+        has_poor_quality: bool = False,
+        listing_comparisons: Optional[List[Any]] = None
     ) -> RuleEvaluationResult:
         rule_code = rule.rule_code
         required_field = rule.required_fields[0] if rule.required_fields else None
@@ -102,7 +104,8 @@ class DeterministicRuleEngine:
 
         # 1. Applicability Check (e.g. Country of Origin on domestic goods or explicit exemption)
         if rule_code in ["PCR_RULE_06_10_ECOMMERCE_DECLARATION", "PCR_RULE_18_2A_ONLINE_PRICE_OVERCHARGING"]:
-            if product_data.get("inspection_type") != "ECOMMERCE" and not product_data.get("has_ecommerce_listing"):
+            is_ecom = (product_data.get("inspection_type") in ["ECOMMERCE", "ONLINE_LISTING"]) or bool(product_data.get("has_ecommerce_listing"))
+            if not is_ecom:
                 return RuleEvaluationResult(
                     rule_code=rule_code,
                     rule_version=rule.rule_version,
@@ -113,6 +116,68 @@ class DeterministicRuleEngine:
                     explanation=f"{rule.title} is statutory requirement specifically for e-commerce offerings under Rule 6(10) / Rule 18(2A). Not applicable to physical package labeling.",
                     evidence_items=[]
                 )
+
+            effective_val = self._get_effective_value(decl)
+            original_val = self._get_decl_field(decl, "extracted_value")
+            is_verified = self._get_decl_field(decl, "verification_status") in ["VERIFIED", "CORRECTED", "VERIFIED_OK", "CORRECTED_BY_OFFICER"]
+
+            rule_comps = []
+            if listing_comparisons:
+                for c in listing_comparisons:
+                    c_rule = getattr(c, "applicable_rule_code", c.get("applicable_rule_code") if isinstance(c, dict) else None)
+                    if c_rule == rule_code:
+                        rule_comps.append(c)
+
+            if not listing_comparisons or len(rule_comps) == 0:
+                return RuleEvaluationResult(
+                    rule_code=rule_code,
+                    rule_version=rule.rule_version,
+                    title=rule.title,
+                    statutory_reference=rule.statutory_reference,
+                    severity=rule.severity,
+                    result_state=RuleResultState.NEEDS_MANUAL_VERIFICATION,
+                    effective_value_used=effective_val,
+                    original_ocr_value=original_val,
+                    is_verified_by_officer=is_verified,
+                    explanation=f"Needs Manual Verification: E-commerce listing comparison has not yet been run for {rule.title}.",
+                    evidence_items=[]
+                )
+
+            discrepancies = []
+            for c in rule_comps:
+                status = getattr(c, "comparison_status", c.get("comparison_status") if isinstance(c, dict) else None)
+                insp_status = getattr(c, "inspector_status", c.get("inspector_status") if isinstance(c, dict) else None)
+                if status in ["MISMATCH", "MISSING_ON_LISTING"] and insp_status not in ["VERIFIED_MATCH", "DISMISSED_DISCREPANCY"]:
+                    discrepancies.append(c)
+
+            if discrepancies:
+                return RuleEvaluationResult(
+                    rule_code=rule_code,
+                    rule_version=rule.rule_version,
+                    title=rule.title,
+                    statutory_reference=rule.statutory_reference,
+                    severity=rule.severity,
+                    result_state=RuleResultState.NEEDS_MANUAL_VERIFICATION,
+                    effective_value_used=effective_val,
+                    original_ocr_value=original_val,
+                    is_verified_by_officer=is_verified,
+                    explanation=f"Needs Manual Verification: Found {len(discrepancies)} detected discrepancies between product packaging and e-commerce listing.",
+                    evidence_items=[]
+                )
+
+            return RuleEvaluationResult(
+                rule_code=rule_code,
+                rule_version=rule.rule_version,
+                title=rule.title,
+                statutory_reference=rule.statutory_reference,
+                severity=rule.severity,
+                result_state=RuleResultState.PASS,
+                effective_value_used=effective_val,
+                original_ocr_value=original_val,
+                is_verified_by_officer=True,
+                explanation=f"Statutory requirement verified against e-commerce listing comparison.",
+                evidence_items=[]
+            )
 
         is_applicable = self._get_decl_field(decl, "is_applicable", True)
         if not is_applicable:
