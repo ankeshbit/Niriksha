@@ -238,6 +238,37 @@ report_generator.reports_dir = REPORTS_DIR
 if STITCH_DIR.exists():
     app.mount("/stitch", StaticFiles(directory=str(STITCH_DIR), html=True), name="stitch")
 
+
+@app.on_event("startup")
+def startup_event():
+    """
+    Mandatory startup recovery & worker boot:
+    1. Sweeps the database for any jobs stranded in PROCESSING (e.g. from container OOM/SIGKILL or restart).
+    2. Safely increments retry count or transitions exhausted jobs to FAILED and inspection to OCR_FAILED.
+    3. Starts the durable background OCR worker daemon thread.
+    """
+    try:
+        from backend.database import SessionLocal
+        db = SessionLocal()
+        try:
+            recovered = ocr_job_service.recover_stale_jobs_on_startup(db)
+            logger.info(f"[STARTUP] Mandatory stale OCR job recovery finished. Recovered {recovered} jobs/inspections.")
+        finally:
+            db.close()
+    except Exception as e:
+        logger.error(f"[STARTUP] Stale OCR job recovery encountered error: {e}", exc_info=True)
+
+    ocr_job_service.start_worker_loop()
+    logger.info("[STARTUP] Durable OCR background worker daemon thread started.")
+
+
+@app.on_event("shutdown")
+def shutdown_event():
+    """Stops the durable background OCR worker on container shutdown."""
+    ocr_job_service.stop_worker_loop()
+    logger.info("[SHUTDOWN] Durable OCR worker stopped.")
+
+
 app.mount("/uploads", StaticFiles(directory=str(UPLOADS_DIR)), name="uploads")
 app.mount("/reports-static", StaticFiles(directory=str(REPORTS_DIR)), name="reports_static")
 
@@ -2211,9 +2242,6 @@ async def check_image_quality_endpoint(
         details=details
     )
 
-import threading
-_ocr_active_events: dict = {}
-_ocr_active_lock = threading.Lock()
 
 def _build_existing_ocr_response(inspection_id: str, db: Session) -> Optional[RunOCRResponse]:
     inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
@@ -2263,28 +2291,8 @@ def _build_existing_ocr_response(inspection_id: str, db: Session) -> Optional[Ru
         barcodes=BarcodeInspectionSummaryResponse(**cons_bc.model_dump()) if cons_bc else None
     )
 
-from contextlib import contextmanager
 
-@contextmanager
-def _ocr_concurrency_guard(inspection_id: str):
-    with _ocr_active_lock:
-        event = _ocr_active_events.get(inspection_id)
-        if event is None:
-            event = threading.Event()
-            _ocr_active_events[inspection_id] = event
-            is_primary = True
-        else:
-            is_primary = False
-    try:
-        yield is_primary, event
-    finally:
-        if is_primary:
-            with _ocr_active_lock:
-                ev = _ocr_active_events.pop(inspection_id, None)
-                if ev:
-                    ev.set()
-
-# ── Durable Asynchronous OCR Job Endpoints (Phases 2-6) ──────────────────────
+# ── Durable Asynchronous OCR Job Endpoints (Canonical Asynchronous Pipeline) ──
 
 @app.post("/api/inspections/{inspection_id}/ocr/start", response_model=OCRJobStartResponse, status_code=status.HTTP_202_ACCEPTED, tags=["OCR & Declarations"])
 def start_inspection_ocr_job(
@@ -2420,393 +2428,38 @@ def run_inspection_ocr_and_extraction(
     if not images:
         raise HTTPException(status_code=400, detail="Cannot run OCR: No images uploaded for this inspection")
 
-    with _ocr_concurrency_guard(inspection_id) as (is_primary_worker, in_flight_event):
-        if not is_primary_worker:
-            logger.info(f"[OCR_CONCURRENCY_WAIT] inspection_id={inspection_id} Waiting for active OCR inference")
-            db.close()
-            in_flight_event.wait(timeout=600.0)
-            cached_resp = _build_existing_ocr_response(inspection_id, db)
-            if cached_resp:
-                return cached_resp
-            reloaded = db.query(Inspection).filter(Inspection.id == inspection_id).first()
-            if reloaded and reloaded.status == "OCR_PROCESSING":
-                raise HTTPException(status_code=504, detail="OCR processing timed out on concurrent worker")
-
-        t_ocr_req_start = time.time()
-        ocr_req_id = uuid.uuid4().hex[:8]
-        logger.info(
-            f"[OCR_START] req_id={ocr_req_id} inspection_id={inspection_id} "
-            f"num_images={len(images)}"
-        )
-
-        inspection.status = "OCR_PROCESSING"
-        db.commit()
-
-    # --- CRITICAL: Extract ALL needed primitive values before closing the session ---
-    # After db.close(), ALL ORM objects (inspection, images, current_user) become detached.
-    # Any attribute access on detached ORM objects raises DetachedInstanceError.
-    # We must eagerly convert all needed ORM attributes to plain Python values NOW.
-
-    image_specs = [
-        (img.id, img.file_path, img.quality_metadata_json)
-        for img in images
-    ]
-    _product = inspection.product  # trigger lazy load while session still active
-    product_ctx = {
-        "product_name": _product.product_name if _product else "",
-        "brand_name": _product.brand_name if _product else "",
-        "category": _product.category if _product else "Packaged Food"
-    }
-    # Extract all primitive fields needed after OCR
-    inspector_officer_id: str = str(current_user.officer_id)
-    inspection_id_str: str = str(inspection_id)
-
-    # CRITICAL: Close/return the connection to the pool IMMEDIATELY before PaddleOCR inference.
-    # Neon (Serverless PostgreSQL) enforces a 5-minute idle-in-transaction timeout.
-    # PaddleOCR on CPU can take 2–10 minutes per image without downscaling.
-    # After db.commit(), SQLAlchemy still holds a connection open for the next query.
-    # db.close() returns the connection to the pool; the session can reconnect later.
-    db.close()
-    logger.info(f"[DB_SESSION_CLOSED] req_id={ocr_req_id} Connection returned to pool before OCR inference")
-
-    all_raw_text_parts = []
-    all_boxes = []
-    per_image_declarations = {}
-    per_image_barcodes = {}
-    ocr_processed_items = []
-
-    # ------------------------------------------------------------------
-    # SEQUENTIAL PER-IMAGE OCR
-    # Images are processed sequentially.  Concurrent inference on the shared
-    # PaddleOCR CPU singleton was benchmarked and rejected:
-    #   - Concurrent 2-img (warm): 38.58s — 15% SLOWER than sequential
-    #   - img1 accuracy dropped: 3→2 boxes, conf 0.99→0.69, corrupted text
-    # Root cause: PaddleOCR shares BLAS thread pools; concurrent predict()
-    # calls on the same singleton cause CPU bandwidth contention and
-    # non-deterministic buffer reads that corrupt OCR output.
-    # With OCR_WARMUP_ON_STARTUP=True, warm sequential latency is ~33s for
-    # 2 images — a 4.23x improvement over the 142s cold baseline.
-    # ------------------------------------------------------------------
-    for idx, (img_id, img_file_path, img_quality_meta) in enumerate(image_specs, 1):
-        clean_rel = img_file_path.lstrip("/")
-        abs_path = BASE_DIR / clean_rel
-        if not abs_path.exists():
-            logger.warning(f"[IMAGE_LOAD_MISSING] req_id={ocr_req_id} path={abs_path}")
-            continue
-
-        t_img_start = time.time()
-        logger.info(f"[IMAGE_{idx}_OCR_START] req_id={ocr_req_id} img_id={img_id} path={clean_rel}")
-        ocr_data = ocr_service.process_image(str(abs_path), image_id=img_id)
-        t_img_ocr = time.time() - t_img_start
-        logger.info(
-            f"[IMAGE_{idx}_OCR_END] req_id={ocr_req_id} img_id={img_id} "
-            f"duration={t_img_ocr:.2f}s boxes={len(ocr_data.text_boxes)} "
-            f"mean_conf={ocr_data.mean_confidence:.2f} engine={ocr_data.engine_used}"
-        )
-
-        # Barcode & QR Code decoding + OCR cross-validation
-        t_bc_start = time.time()
-        img_barcodes = barcode_service.detect_and_decode(str(abs_path), source_image_id=img_id, source_image_path=img_file_path)
-        img_barcodes = barcode_service.cross_validate_with_ocr(img_barcodes, ocr_data.raw_text)
-        per_image_barcodes[img_id] = img_barcodes
-        t_bc = time.time() - t_bc_start
-
-        # Extract declarations for this individual image
-        t_decl_start = time.time()
-        logger.info(f"[DECLARATION_EXTRACTION_START] req_id={ocr_req_id} idx={idx} img_id={img_id}")
-        img_ctx = dict(product_ctx)
-        img_ctx["ocr_status"] = getattr(ocr_data, "ocr_status", "OCR_SUCCESS")
-        img_items = extraction_service.extract_declarations(
-            full_text=(ocr_data.normalized_text or ocr_data.raw_text),
-            text_boxes=ocr_data.text_boxes,
-            product_context=img_ctx,
-            image_id=img_id,
-            image_path=img_file_path
-        )
-        t_decl = time.time() - t_decl_start
-        logger.info(f"[DECLARATION_EXTRACTION_END] req_id={ocr_req_id} idx={idx} items={len(img_items)} duration={t_decl:.2f}s")
-        per_image_declarations[img_id] = img_items
-
-        norm_or_raw = ocr_data.normalized_text or ocr_data.raw_text
-        if norm_or_raw:
-            all_raw_text_parts.append(norm_or_raw)
-        all_boxes.extend(ocr_data.text_boxes)
-
-        ocr_processed_items.append((img_id, ocr_data, img_barcodes))
-
-    logger.info(f"[DB_WRITE_START] req_id={ocr_req_id} Reconnecting DB session for persistence")
-    # Re-connect to DB to persist OCR and barcode results in a fast, dedicated transaction
-    saved_ocr_results = []
-    for img_id, ocr_data, img_barcodes in ocr_processed_items:
-        existing_ocr = db.query(OCRResult).filter(OCRResult.image_id == img_id).first()
-        boxes_dict = [b.model_dump() for b in ocr_data.text_boxes]
-        
-        if existing_ocr:
-            existing_ocr.raw_text = ocr_data.raw_text
-            existing_ocr.normalized_text = ocr_data.normalized_text
-            existing_ocr.confidence = ocr_data.mean_confidence
-            existing_ocr.bounding_boxes_json = json.dumps(boxes_dict)
-            ocr_record = existing_ocr
-        else:
-            ocr_record = OCRResult(
-                image_id=img_id,
-                raw_text=ocr_data.raw_text,
-                normalized_text=ocr_data.normalized_text,
-                confidence=ocr_data.mean_confidence,
-                bounding_boxes_json=json.dumps(boxes_dict)
-            )
-            db.add(ocr_record)
-
-        saved_ocr_results.append(ocr_record)
-
-        # Persist barcode items in image quality metadata for fast retrieval
-        try:
-            db_img = db.query(ProductImage).filter(ProductImage.id == img_id).first()
-            if db_img:
-                meta = json.loads(db_img.quality_metadata_json) if db_img.quality_metadata_json else {}
-                meta["barcodes"] = [b.model_dump() for b in img_barcodes]
-                db_img.quality_metadata_json = json.dumps(meta)
-        except Exception:
-            pass
-
-    db.flush()
-
-    # Consolidate multi-image barcode evidence
-    consolidated_barcodes = barcode_service.consolidate_multi_image_barcodes(per_image_barcodes)
-
-    combined_full_text = "\n".join(all_raw_text_parts)
-    primary_image_id = image_specs[0][0] if image_specs else None
-
-    # Cross-image verification and conflict detection across all images
-    logger.info(f"[CROSS_IMAGE_CONSOLIDATION_START] req_id={ocr_req_id}")
-    merged_items, detected_conflicts = cross_image_verification(per_image_declarations)
-    logger.info(
-        f"[CROSS_IMAGE_CONSOLIDATION_END] req_id={ocr_req_id} "
-        f"merged_declarations={len(merged_items)} conflicts={len(detected_conflicts)}"
-    )
-
-    # Fallback to combined text if any field was not found in per-image scans
-    combined_items = extraction_service.extract_declarations(
-        full_text=combined_full_text,
-        text_boxes=all_boxes,
-        product_context=product_ctx,
-        image_id=primary_image_id
-    )
-    combined_map = {item.field_name: item for item in combined_items if item.extracted_value and item.extraction_status not in ["NOT_FOUND", "OCR_UNAVAILABLE"]}
-
-    for item in merged_items:
-        if (not item.extracted_value or item.extraction_status in ["NOT_FOUND", "OCR_UNAVAILABLE"]) and item.field_name in combined_map:
-            fb = combined_map[item.field_name]
-            item.extracted_value = fb.extracted_value
-            item.normalized_value = fb.normalized_value
-            item.confidence = fb.confidence
-            item.bounding_box = fb.bounding_box
-            item.extraction_status = fb.extraction_status
-            item.source_image_id = primary_image_id
-
-    db.query(Declaration).filter(Declaration.inspection_id == inspection_id).delete()
-    db.flush()
-
-    saved_declarations = []
-    for item in merged_items:
-        meta_dict = {}
-        if item.has_conflict:
-            meta_dict = {
-                "conflict": True,
-                "candidates": item.conflicts,
-                "source_images": item.source_images
-            }
-            item.extraction_status = "CONFLICTING"
-            v_status = "NEEDS_MANUAL_VERIFICATION"
-        elif item.extraction_status in ["NOT_FOUND", "OCR_UNAVAILABLE"]:
-            v_status = "NEEDS_MANUAL_VERIFICATION"
-        else:
-            v_status = "UNVERIFIED"
-
-        if item.raw_text or item.layout_region:
-            meta_dict["raw_text"] = item.raw_text
-            meta_dict["layout_region"] = item.layout_region
-            meta_dict["layout_bbox"] = item.layout_bbox
-
-        reason_val = json.dumps(meta_dict) if meta_dict else None
-
-        decl = Declaration(
-            inspection_id=inspection_id,
-            field_name=item.field_name,
-            extracted_value=item.extracted_value,
-            normalized_value=item.normalized_value,
-            confidence=item.confidence,
-            bounding_box_json=json.dumps(item.bounding_box) if item.bounding_box else None,
-            extraction_status=item.extraction_status,
-            is_applicable=item.is_applicable,
-            verification_status=v_status,
-            correction_reason=reason_val,
-            source_image_id=item.source_image_id or primary_image_id
-        )
-        db.add(decl)
-        saved_declarations.append(decl)
-
-    # Build and persist Unified Declaration Compliance Matrix (Placement, Font Size, Readability, Format)
-    try:
-        all_imgs = db.query(ProductImage).filter(ProductImage.inspection_id == inspection_id_str).all()
-        matrix_rows = declaration_validation_engine.build_declaration_matrix(saved_declarations, all_imgs)
-        matrix_row_map = {r.field_name: r for r in matrix_rows}
-        for decl in saved_declarations:
-            r = matrix_row_map.get(decl.field_name)
-            if r:
-                decl.placement_status = r.placement_status
-                decl.placement_details_json = json.dumps({"expected_panel": r.placement_status, "statutory_ref": r.statutory_reference})
-                decl.font_size_status = r.font_size_status
-                decl.font_size_details_json = json.dumps({"status": r.font_size_status})
-                decl.readability_status = r.readability_status
-                decl.readability_details_json = json.dumps({"status": r.readability_status, "confidence": decl.confidence})
-                decl.format_status = r.format_status
-                decl.format_details_json = json.dumps({"findings": r.findings, "explanation": r.explanation})
-                decl.validation_matrix_json = json.dumps(r.model_dump())
-    except Exception as e:
-        logger.warning(f"[DECLARATION_MATRIX_BUILD_WARN] {e}")
-
-    # Re-attach inspection to session for final status update and audit log
-    # (The session auto-reconnects to the DB on this query)
-    db_inspection = db.query(Inspection).filter(Inspection.id == inspection_id_str).first()
-    if db_inspection:
-        db_inspection.status = "EXTRACTION_COMPLETE"
-    log_audit(
-        db,
-        inspector_officer_id,
-        "OCR_AND_EXTRACTION_COMPLETED",
-        "inspection",
-        inspection_id_str,
-        inspection_id_str,
-        details=f"Extracted {len(saved_declarations)} statutory declarations. Conflicts: {len(detected_conflicts)}"
-    )
-    db.commit()
-    t_db_end = time.time()
-    logger.info(
-        f"[DB_WRITE_END] req_id={ocr_req_id} saved_decls={len(saved_declarations)} "
-        f"db_status={db_inspection.status if db_inspection else 'UNKNOWN'}"
-    )
-
-    final_status = db_inspection.status if db_inspection else "EXTRACTION_COMPLETE"
-    total_req_time = t_db_end - t_ocr_req_start
-
-    logger.info(
-        f"[HTTP_RESPONSE_START] req_id={ocr_req_id} total_elapsed={total_req_time:.2f}s "
-        f"status={final_status}"
-    )
-
-    t_ser_start = time.time()
-    response_obj = RunOCRResponse(
-        inspection_id=inspection_id_str,
-        status=final_status,
-        total_images_processed=len(image_specs),
-        declarations_count=len(saved_declarations),
-        ocr_results=[serialize_ocr_result(r) for r in saved_ocr_results],
-        declarations=[serialize_declaration(d) for d in saved_declarations],
-        conflicts=detected_conflicts,
-        barcodes=BarcodeInspectionSummaryResponse(**consolidated_barcodes.model_dump()) if consolidated_barcodes else None
-    )
-    t_ser = time.time() - t_ser_start
-    total_req_time = time.time() - t_ocr_req_start
-
-    logger.info(
-        f"[OCR_PERF_SUMMARY] req_id={ocr_req_id} images={len(image_specs)} "
-        f"db_write_time={t_db_end - t_db_start:.3f}s ser_time={t_ser:.3f}s "
-        f"total_request_time={total_req_time:.2f}s declarations={len(saved_declarations)}"
-    )
-    logger.info(f"[HTTP_RESPONSE_END] req_id={ocr_req_id} Returning 200 OK in {total_req_time:.2f}s")
-    return response_obj
-
-
-@app.post("/api/inspections/{inspection_id}/ocr/start", response_model=OCRJobStartResponse, status_code=status.HTTP_202_ACCEPTED, tags=["OCR & Declarations"])
-def start_durable_ocr_job(
-    inspection_id: str,
-    force: bool = Query(False, description="Force start even if previous completed"),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Durable Asynchronous OCR Job Initiation.
-    Decouples the HTTP request from long PaddleOCR CPU inference.
-    Returns immediately (HTTP 202 Accepted) with the durable job ID.
-    The mobile app polls /api/inspections/{inspection_id}/ocr/status to monitor progress and completion.
-    Survives mobile backgrounding, HTTP connection drops, and Render container restarts.
-    """
-    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
-    if not inspection:
-        raise HTTPException(status_code=404, detail="Inspection not found")
-    verify_inspection_access(inspection, current_user, allow_supervisory=False)
-
-    images = db.query(ProductImage).filter(ProductImage.inspection_id == inspection_id).all()
-    if not images:
-        raise HTTPException(status_code=400, detail="Cannot start OCR: No images uploaded for this inspection")
-
+    # 2. Delegate to durable OCR job service (ensures single architecture)
     job, is_existing = ocr_job_service.create_or_get_job(
         inspection_id=inspection_id,
         db=db,
-        force_new=force
+        force=force,
+        inspector_id=current_user.officer_id
     )
-
-    # Trigger background worker loop to wake up immediately
     ocr_job_service.trigger_worker()
 
-    return OCRJobStartResponse(
-        job_id=job.id,
-        inspection_id=inspection_id,
-        status=job.status,
-        is_existing=is_existing,
-        message="Existing OCR job returned" if is_existing else "Durable OCR job initiated"
-    )
+    # 3. Wait up to 15s for fast or already-running job to complete
+    wait_until = time.time() + 15.0
+    while time.time() < wait_until:
+        time.sleep(1.0)
+        db.expire_all()
+        fresh_job = db.query(OCRJob).filter(OCRJob.id == job.id).first()
+        if fresh_job and fresh_job.status == "COMPLETED":
+            cached_resp = _build_existing_ocr_response(inspection_id, db)
+            if cached_resp:
+                return cached_resp
+            break
+        elif fresh_job and fresh_job.status == "FAILED":
+            raise HTTPException(status_code=500, detail=fresh_job.error_message or "OCR processing failed")
 
+    # 4. If completed, return response
+    cached_resp = _build_existing_ocr_response(inspection_id, db)
+    if cached_resp:
+        return cached_resp
 
-@app.get("/api/inspections/{inspection_id}/ocr/status", response_model=OCRJobStatusResponse, tags=["OCR & Declarations"])
-def get_durable_ocr_job_status(
-    inspection_id: str,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """
-    Polls the status of the durable asynchronous OCR job for an inspection.
-    Returns current stage, progress percentage, lease health, and completion state.
-    Handles stale lease crash recovery automatically.
-    """
-    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
-    if not inspection:
-        raise HTTPException(status_code=404, detail="Inspection not found")
-    verify_inspection_access(inspection, current_user, allow_supervisory=True)
-
-    job = ocr_job_service.get_job_status(inspection_id, db)
-    if not job:
-        # If no job was created yet, check if inspection is already complete
-        if inspection.status in ["EXTRACTION_COMPLETE", "COMPLETED", "UNDER_REVIEW", "EVALUATION_COMPLETE"]:
-            return OCRJobStatusResponse(
-                job_id="completed-inspection",
-                inspection_id=inspection_id,
-                status="COMPLETED",
-                current_stage="COMPLETED",
-                progress_percent=100,
-                retry_count=0
-            )
-        raise HTTPException(status_code=404, detail="No OCR job found for this inspection")
-
-    elapsed = None
-    if job.started_at:
-        end_time = job.completed_at or datetime.utcnow()
-        elapsed = max(0.0, (end_time - job.started_at).total_seconds())
-
-    return OCRJobStatusResponse(
-        job_id=job.id,
-        inspection_id=job.inspection_id,
-        status=job.status,
-        current_stage=job.current_stage,
-        progress_percent=job.progress_percent,
-        started_at=job.started_at,
-        completed_at=job.completed_at,
-        elapsed_seconds=elapsed,
-        worker_id=job.worker_id,
-        retry_count=job.retry_count,
-        error_code=job.error_code,
-        error_message=job.error_message
+    # If still processing after 15s wait, return 202 Accepted
+    raise HTTPException(
+        status_code=status.HTTP_202_ACCEPTED,
+        detail="OCR job is processing asynchronously. Please query /api/inspections/{id}/ocr/status for progress."
     )
 
 

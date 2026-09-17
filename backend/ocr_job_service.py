@@ -247,6 +247,64 @@ class OCRJobService:
                 f"[STALE_JOB_TERMINAL_FAILURE] job_id={job.id} max retries exceeded."
             )
 
+    def recover_stale_jobs_on_startup(self, db: Session) -> int:
+        """
+        Mandatory Startup Recovery:
+        Sweeps the database on container boot for any jobs stranded in PROCESSING
+        due to prior container OOM/SIGKILL or platform reboot.
+        Safely increments retries and re-queues to PENDING, or transitions exhausted jobs to FAILED
+        and sets inspection.status = 'OCR_FAILED'.
+        Ensures inspections are NEVER left stranded in OCR_PROCESSING.
+        """
+        try:
+            processing_jobs = (
+                db.query(OCRJob)
+                .filter(OCRJob.status == "PROCESSING")
+                .all()
+            )
+            recovered_count = 0
+            for job in processing_jobs:
+                if self._is_job_stale(job):
+                    logger.warning(
+                        f"[STARTUP_STALE_JOB_FOUND] job_id={job.id} inspection_id={job.inspection_id} "
+                        f"retries={job.retry_count}/{job.max_retries}"
+                    )
+                    self._handle_stale_job(job, db)
+                    recovered_count += 1
+
+            # Also ensure no inspections are stranded in OCR_PROCESSING if no active job exists
+            stranded_inspections = (
+                db.query(Inspection)
+                .filter(Inspection.status == "OCR_PROCESSING")
+                .all()
+            )
+            for insp in stranded_inspections:
+                active_job = (
+                    db.query(OCRJob)
+                    .filter(
+                        OCRJob.inspection_id == insp.id,
+                        OCRJob.status.in_(["PENDING", "PROCESSING"])
+                    )
+                    .first()
+                )
+                if not active_job:
+                    decls = db.query(Declaration).filter(Declaration.inspection_id == insp.id).count()
+                    if decls > 0:
+                        insp.status = "EXTRACTION_COMPLETE"
+                        logger.info(f"[STARTUP_INSPECTION_RECOVERED] inspection_id={insp.id} -> EXTRACTION_COMPLETE")
+                    else:
+                        insp.status = "OCR_FAILED"
+                        logger.warning(f"[STARTUP_INSPECTION_RECOVERED] inspection_id={insp.id} -> OCR_FAILED (no active job)")
+                    recovered_count += 1
+
+            db.commit()
+            logger.info(f"[STARTUP_RECOVERY_COMPLETE] Checked {len(processing_jobs)} processing jobs; recovered {recovered_count}")
+            return recovered_count
+        except Exception as e:
+            db.rollback()
+            logger.error(f"[STARTUP_RECOVERY_ERROR] {e}", exc_info=True)
+            return 0
+
     # ─── Atomic Worker Claiming (PostgreSQL SKIP LOCKED) ─────────────────────
 
     def claim_next_job(self, db: Session) -> Optional[Tuple[str, str, int]]:
@@ -369,7 +427,7 @@ class OCRJobService:
             for idx, (img_id, img_file_path, view_type) in enumerate(image_specs, 1):
                 # Reconnect briefly to update heartbeat & stage
                 db = SessionLocal()
-                stage_name = f"OCR_IMAGE_{idx}_OF_{total_images}"
+                stage_name = f"OCR_IMAGE_{idx}"
                 job = db.query(OCRJob).filter(OCRJob.id == job_id).first()
                 if job:
                     job.current_stage = stage_name
@@ -427,8 +485,8 @@ class OCRJobService:
             db = SessionLocal()
             job = db.query(OCRJob).filter(OCRJob.id == job_id).first()
             if job:
-                job.current_stage = "SAVING_OCR_RESULTS"
-                job.progress_percent = 70
+                job.current_stage = "EXTRACTING_DECLARATIONS"
+                job.progress_percent = 75
                 job.heartbeat_at = datetime.utcnow()
                 db.commit()
 
@@ -460,12 +518,6 @@ class OCRJobService:
             db.flush()
 
             # 2. Cross-image consolidation
-            if job:
-                job.current_stage = "CONSOLIDATING_DECLARATIONS"
-                job.progress_percent = 80
-                job.heartbeat_at = datetime.utcnow()
-                db.commit()
-
             merged_items, detected_conflicts = cross_image_verification(per_image_declarations)
             primary_image_id = image_specs[0][0] if image_specs else None
             combined_full_text = "\n".join(all_raw_text_parts)
@@ -528,7 +580,13 @@ class OCRJobService:
                 saved_declarations.append(decl)
             db.flush()
 
-            # 4. Unified Declaration Matrix
+            # 4. Unified Declaration Matrix & Compliance Evaluation
+            if job:
+                job.current_stage = "COMPLIANCE_EVALUATION"
+                job.progress_percent = 90
+                job.heartbeat_at = datetime.utcnow()
+                db.commit()
+
             try:
                 all_imgs = db.query(ProductImage).filter(ProductImage.inspection_id == inspection_id).all()
                 matrix_rows = declaration_validation_engine.build_declaration_matrix(saved_declarations, all_imgs)

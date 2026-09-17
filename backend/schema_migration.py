@@ -171,6 +171,9 @@ def migrate():
         # AUDIT-DEL-01: Ensure audit_logs.inspection_id foreign key has ON DELETE SET NULL
         migrate_audit_logs_foreign_key(conn)
 
+        # Ensure partial unique index on active ocr_jobs exists
+        migrate_ocr_jobs(conn)
+
         # Create any new tables (product_listings, listing_comparisons)
         try:
             Base.metadata.create_all(bind=conn)
@@ -250,6 +253,22 @@ def migrate_inspection_number_counters(conn):
         print(f"  [WARN]  Could not initialize counters from inspections: {e}")
 
 
+def migrate_ocr_jobs(conn):
+    """Ensure partial unique index on active ocr_jobs exists: strictly 1 active job per inspection."""
+    try:
+        conn.execute(text("""
+            CREATE UNIQUE INDEX IF NOT EXISTS uq_ocr_jobs_active_per_inspection 
+            ON ocr_jobs (inspection_id) 
+            WHERE status IN ('PENDING', 'PROCESSING');
+        """))
+        conn.commit()
+        print("  [OK]    Partial unique index uq_ocr_jobs_active_per_inspection verified.")
+    except Exception as e:
+        conn.rollback()
+        print(f"  [WARN]  ocr_jobs partial unique index note: {e}")
+
+
 if __name__ == "__main__":
     print("Running Legal Metrology DB Schema Migration...")
     migrate()
+

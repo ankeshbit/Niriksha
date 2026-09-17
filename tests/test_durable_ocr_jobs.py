@@ -245,3 +245,60 @@ def test_worker_execution_success_flow(test_inspection):
         assert insp.status in ["EXTRACTION_COMPLETE", "EVALUATION_COMPLETE", "UNDER_REVIEW", "COMPLETED"]
     finally:
         db.close()
+
+
+def test_startup_recovery_sweep(test_inspection):
+    """Verify mandatory startup recovery reclaims stale PROCESSING jobs on container boot."""
+    db = SessionLocal()
+    try:
+        # Create a stale PROCESSING job
+        stale_id = str(uuid.uuid4())
+        stale_job = OCRJob(
+            id=stale_id,
+            inspection_id=test_inspection,
+            status="PROCESSING",
+            current_stage="INITIALIZING_OCR",
+            created_at=datetime.utcnow() - timedelta(seconds=300),
+            started_at=datetime.utcnow() - timedelta(seconds=250),
+            heartbeat_at=datetime.utcnow() - timedelta(seconds=200),
+            retry_count=0,
+            max_retries=2
+        )
+        db.add(stale_job)
+        db.commit()
+
+        # Run startup recovery
+        recovered = ocr_job_service.recover_stale_jobs_on_startup(db)
+        assert recovered >= 1
+
+        db.refresh(stale_job)
+        assert stale_job.status == "PENDING"
+        assert stale_job.retry_count == 1
+        assert stale_job.error_code == "WORKER_CRASH_RECOVERED"
+    finally:
+        db.close()
+
+
+def test_legacy_ocr_endpoint_delegates_to_durable_job(auth_headers, test_inspection):
+    """Verify that legacy POST /ocr delegates to the durable job service rather than divergent code."""
+    # Ensure inspection has no active job
+    db = SessionLocal()
+    try:
+        db.query(OCRJob).filter(OCRJob.inspection_id == test_inspection).delete()
+        db.commit()
+    finally:
+        db.close()
+
+    resp = client.post(f"/api/inspections/{test_inspection}/ocr", headers=auth_headers)
+    # Since worker loop is paused in unit test fixture, it will wait up to 15s or return 202
+    assert resp.status_code in [200, 202]
+
+    # Verify a durable OCR job was indeed created
+    db = SessionLocal()
+    try:
+        job = db.query(OCRJob).filter(OCRJob.inspection_id == test_inspection).first()
+        assert job is not None
+        assert job.status in ["PENDING", "PROCESSING", "COMPLETED"]
+    finally:
+        db.close()
+
