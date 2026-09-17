@@ -57,7 +57,8 @@ from backend.models import (
     Report,
     InspectionNumberCounter,
     ProductListing,
-    ListingComparison
+    ListingComparison,
+    OCRJob
 )
 from backend.schemas import (
     HealthCheckResponse,
@@ -77,6 +78,9 @@ from backend.schemas import (
     DeclarationResponse,
     UpdateDeclarationRequest,
     RunOCRResponse,
+    OCRJobResponse,
+    OCRJobStartResponse,
+    OCRJobStatusResponse,
     EvidenceResponse,
     FindingResponse,
     AdjudicateFindingRequest,
@@ -145,6 +149,7 @@ from backend.rule_engine import (
 )
 from backend.listing_service import execute_listing_comparison
 from backend.report_service import report_generator
+from backend.ocr_job_service import ocr_job_service
 from backend.compliance_summary_utils import (
     compute_canonical_compliance_metrics,
     is_pending_adjudication,
@@ -254,6 +259,12 @@ async def _startup_ocr_warmup():
     )
     warmup_thread.start()
     logger.info("[OCR_WARMUP_THREAD_STARTED] PaddleOCR warmup launched in background thread")
+
+@app.on_event("startup")
+async def _startup_ocr_worker():
+    """Initializes and runs the durable OCR job worker loop with PostgreSQL SKIP LOCKED claiming."""
+    ocr_job_service.start_worker_loop()
+    logger.info("[OCR_JOB_WORKER_INITIALIZED] Durable background OCR worker active")
 
 # ----------------- Helper Functions -----------------
 
@@ -2273,6 +2284,109 @@ def _ocr_concurrency_guard(inspection_id: str):
                 if ev:
                     ev.set()
 
+# ── Durable Asynchronous OCR Job Endpoints (Phases 2-6) ──────────────────────
+
+@app.post("/api/inspections/{inspection_id}/ocr/start", response_model=OCRJobStartResponse, status_code=status.HTTP_202_ACCEPTED, tags=["OCR & Declarations"])
+def start_inspection_ocr_job(
+    inspection_id: str,
+    force: bool = False,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Decoupled Asynchronous OCR Trigger.
+    Returns immediately (<100ms) with job metadata, while background worker
+    processes OCR with atomic PostgreSQL leases and crash recovery.
+    """
+    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    if not inspection:
+        raise HTTPException(status_code=404, detail="Inspection not found")
+    verify_inspection_access(inspection, current_user, allow_supervisory=False)
+
+    if inspection.status == "COMPLETED" or inspection.report is not None:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Cannot run or modify OCR for an inspection that has been finalized or has an official report."
+        )
+
+    try:
+        job, is_existing = ocr_job_service.create_or_get_job(
+            inspection_id=inspection_id,
+            db=db,
+            force=force,
+            inspector_id=current_user.officer_id
+        )
+        return OCRJobStartResponse(
+            job_id=job.id,
+            inspection_id=inspection_id,
+            status=job.status,
+            current_stage=job.current_stage,
+            progress_percent=job.progress_percent,
+            is_existing=is_existing
+        )
+    except ValueError as ve:
+        raise HTTPException(status_code=400, detail=str(ve))
+
+
+@app.get("/api/inspections/{inspection_id}/ocr/status", response_model=OCRJobStatusResponse, tags=["OCR & Declarations"])
+def get_inspection_ocr_job_status(
+    inspection_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Polls the durable OCR job status for an inspection.
+    Includes active stage, elapsed time, progress, and error details if failed.
+    """
+    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    if not inspection:
+        raise HTTPException(status_code=404, detail="Inspection not found")
+    verify_inspection_access(inspection, current_user, allow_supervisory=True)
+
+    job = ocr_job_service.get_job_status(inspection_id, db)
+    if not job:
+        # If inspection is already EXTRACTION_COMPLETE or further, return synthetic COMPLETED status
+        if inspection.status in ["EXTRACTION_COMPLETE", "RULE_EVALUATION_COMPLETE", "COMPLETED"]:
+            decls_count = db.query(Declaration).filter(Declaration.inspection_id == inspection_id).count()
+            return OCRJobStatusResponse(
+                job_id=f"synth-{inspection_id[:8]}",
+                inspection_id=inspection_id,
+                status="COMPLETED",
+                current_stage="COMPLETED",
+                progress_percent=100,
+                declarations_count=decls_count
+            )
+        raise HTTPException(status_code=404, detail="No OCR job found for this inspection.")
+
+    elapsed = None
+    if job.started_at:
+        end_t = job.completed_at or datetime.utcnow()
+        elapsed = round((end_t - job.started_at).total_seconds(), 1)
+
+    summary = {}
+    if job.ocr_summary_json:
+        try:
+            summary = json.loads(job.ocr_summary_json)
+        except Exception:
+            pass
+
+    return OCRJobStatusResponse(
+        job_id=job.id,
+        inspection_id=inspection_id,
+        status=job.status,
+        current_stage=job.current_stage,
+        progress_percent=job.progress_percent,
+        elapsed_seconds=elapsed,
+        created_at=job.created_at,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        error_code=job.error_code,
+        error_message=job.error_message,
+        declarations_count=summary.get("declarations_count"),
+        conflicts_count=summary.get("conflicts_count")
+    )
+
+
 @app.post("/api/inspections/{inspection_id}/ocr", response_model=RunOCRResponse, tags=["OCR & Declarations"])
 def run_inspection_ocr_and_extraction(
     inspection_id: str,
@@ -2602,6 +2716,99 @@ def run_inspection_ocr_and_extraction(
     )
     logger.info(f"[HTTP_RESPONSE_END] req_id={ocr_req_id} Returning 200 OK in {total_req_time:.2f}s")
     return response_obj
+
+
+@app.post("/api/inspections/{inspection_id}/ocr/start", response_model=OCRJobStartResponse, status_code=status.HTTP_202_ACCEPTED, tags=["OCR & Declarations"])
+def start_durable_ocr_job(
+    inspection_id: str,
+    force: bool = Query(False, description="Force start even if previous completed"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Durable Asynchronous OCR Job Initiation.
+    Decouples the HTTP request from long PaddleOCR CPU inference.
+    Returns immediately (HTTP 202 Accepted) with the durable job ID.
+    The mobile app polls /api/inspections/{inspection_id}/ocr/status to monitor progress and completion.
+    Survives mobile backgrounding, HTTP connection drops, and Render container restarts.
+    """
+    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    if not inspection:
+        raise HTTPException(status_code=404, detail="Inspection not found")
+    verify_inspection_access(inspection, current_user, allow_supervisory=False)
+
+    images = db.query(ProductImage).filter(ProductImage.inspection_id == inspection_id).all()
+    if not images:
+        raise HTTPException(status_code=400, detail="Cannot start OCR: No images uploaded for this inspection")
+
+    job, is_existing = ocr_job_service.create_or_get_job(
+        inspection_id=inspection_id,
+        db=db,
+        force_new=force
+    )
+
+    # Trigger background worker loop to wake up immediately
+    ocr_job_service.trigger_worker()
+
+    return OCRJobStartResponse(
+        job_id=job.id,
+        inspection_id=inspection_id,
+        status=job.status,
+        is_existing=is_existing,
+        message="Existing OCR job returned" if is_existing else "Durable OCR job initiated"
+    )
+
+
+@app.get("/api/inspections/{inspection_id}/ocr/status", response_model=OCRJobStatusResponse, tags=["OCR & Declarations"])
+def get_durable_ocr_job_status(
+    inspection_id: str,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """
+    Polls the status of the durable asynchronous OCR job for an inspection.
+    Returns current stage, progress percentage, lease health, and completion state.
+    Handles stale lease crash recovery automatically.
+    """
+    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    if not inspection:
+        raise HTTPException(status_code=404, detail="Inspection not found")
+    verify_inspection_access(inspection, current_user, allow_supervisory=True)
+
+    job = ocr_job_service.get_job_status(inspection_id, db)
+    if not job:
+        # If no job was created yet, check if inspection is already complete
+        if inspection.status in ["EXTRACTION_COMPLETE", "COMPLETED", "UNDER_REVIEW", "EVALUATION_COMPLETE"]:
+            return OCRJobStatusResponse(
+                job_id="completed-inspection",
+                inspection_id=inspection_id,
+                status="COMPLETED",
+                current_stage="COMPLETED",
+                progress_percent=100,
+                retry_count=0
+            )
+        raise HTTPException(status_code=404, detail="No OCR job found for this inspection")
+
+    elapsed = None
+    if job.started_at:
+        end_time = job.completed_at or datetime.utcnow()
+        elapsed = max(0.0, (end_time - job.started_at).total_seconds())
+
+    return OCRJobStatusResponse(
+        job_id=job.id,
+        inspection_id=job.inspection_id,
+        status=job.status,
+        current_stage=job.current_stage,
+        progress_percent=job.progress_percent,
+        started_at=job.started_at,
+        completed_at=job.completed_at,
+        elapsed_seconds=elapsed,
+        worker_id=job.worker_id,
+        retry_count=job.retry_count,
+        error_code=job.error_code,
+        error_message=job.error_message
+    )
+
 
 @app.get("/api/inspections/{inspection_id}/barcodes", response_model=BarcodeInspectionSummaryResponse, tags=["Barcodes"])
 def get_inspection_barcodes(

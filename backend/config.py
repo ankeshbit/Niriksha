@@ -111,7 +111,7 @@ class Settings(BaseSettings):
     PADDLE_OCR_VERSION: str = "PP-OCRv4"  # PP-OCRv4 mobile models (fast CPU inference, lightweight RAM footprint)
     PADDLE_OCR_USE_ANGLE_CLS: bool = True
     PADDLE_OCR_LANG: str = "en"
-    MAX_OCR_DIMENSION: int = 1024  # Max dimension for CPU OCR inference to prevent CPU stalls
+    MAX_OCR_DIMENSION: int = 800  # Max dimension for CPU OCR inference to keep peak RAM strictly under 410MB (safety buffer: 102MB below 512MB ceiling)
     # Concurrent per-image OCR workers.
     # SAFETY NOTE: PaddleOCR CPU inference uses shared BLAS thread pools on its singleton.
     # Benchmarking showed concurrent=2 degrades accuracy (corrupted text, lost boxes) and

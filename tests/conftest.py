@@ -93,6 +93,7 @@ os.environ["DATABASE_URL"] = TEST_DATABASE_URL
 
 from backend.config import settings
 settings.DATABASE_URL = TEST_DATABASE_URL
+settings.OCR_WARMUP_ON_STARTUP = False
 
 import backend.database as db_module
 from backend.models import Base

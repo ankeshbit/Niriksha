@@ -244,148 +244,117 @@ export const AnalyzingScreen: React.FC = () => {
 
       if (!isMountedRef.current || abortRef.current?.signal.aborted) return;
 
-      // Stage 2: OCR — run PaddleOCR or wait for in-progress OCR
+      // Stage 2: OCR — Durable Asynchronous OCR Job
       setStage('OCR');
       setProgressPercent(40);
 
       const ocrStart = Date.now();
-      let ocrRes: any = null;
 
       if (alreadyExtracted) {
         console.log('[ANALYZING_SCREEN] Step 3 OCR fast-path hit. Reusing extracted declarations.');
-      } else if (inProgressOnBackend) {
-        console.log('[ANALYZING_SCREEN] Step 3: Awaiting in-flight server OCR completion...');
+      } else {
+        console.log('[ANALYZING_SCREEN] Step 3: Initiating Durable Asynchronous OCR Job', { inspectionId, stage: 'OCR' });
+        
+        let jobId: string | null = null;
+        let jobStarted = false;
+        let startAttempts = 0;
+        
+        // 1. Start or retrieve existing durable OCR job
+        while (!jobStarted && startAttempts < 5) {
+          if (!isMountedRef.current || abortRef.current?.signal.aborted) return;
+          startAttempts++;
+          try {
+            const startRes = await api.startOCRJob(inspectionId);
+            jobId = startRes?.job_id;
+            jobStarted = true;
+            console.log('[ANALYZING_SCREEN] OCR job confirmed on backend', {
+              jobId,
+              status: startRes?.status,
+              isExisting: startRes?.is_existing,
+            });
+          } catch (startErr: any) {
+            console.warn(`[ANALYZING_SCREEN] startOCRJob attempt ${startAttempts} warning:`, startErr);
+            if (startAttempts >= 5) {
+              // Fallback: check if job status is already active
+              try {
+                const curSt = await api.getOCRJobStatus(inspectionId);
+                if (curSt?.job_id) {
+                  jobId = curSt.job_id;
+                  jobStarted = true;
+                  break;
+                }
+              } catch {}
+              const classified = classifyFetchError(startErr);
+              setStage('ERROR');
+              setErrorTitle('Unable to Start Analysis');
+              setErrorMessage(classified.userMessage || 'Could not initiate AI text recognition. Please retry.');
+              return;
+            }
+            await new Promise<void>((r) => setTimeout(r, 2000));
+          }
+        }
+
+        // 2. Poll job status until COMPLETED or FAILED
         let finished = false;
+        let consecutiveErrors = 0;
         const pollStart = Date.now();
-        // Poll for up to 600s (10 minutes)
+        // Allow up to 10 minutes (600,000 ms) for total processing
         while (!finished && Date.now() - pollStart < 600000) {
           if (!isMountedRef.current || abortRef.current?.signal.aborted) return;
-          await new Promise<void>((r) => setTimeout(r, 3000));
+          await new Promise<void>((r) => setTimeout(r, 2000));
+          
           try {
-            const inspStatus = await api.getInspection(inspectionId);
-            const curSt = inspStatus?.status;
-            if (
-              curSt === 'EXTRACTION_COMPLETE' ||
-              curSt === 'COMPLETED' ||
-              curSt === 'UNDER_REVIEW' ||
-              curSt === 'EVALUATION_COMPLETE'
-            ) {
+            const jobStatus = await api.getOCRJobStatus(inspectionId);
+            consecutiveErrors = 0; // Success reset
+            
+            if (jobStatus.status === 'COMPLETED') {
+              console.log('[ANALYZING_SCREEN] Durable OCR job COMPLETED', {
+                inspectionId,
+                jobId: jobStatus.job_id,
+                durationMs: Date.now() - ocrStart,
+              });
               finished = true;
               break;
-            } else if (curSt === 'OCR_FAILED') {
-              throw new Error('OCR text recognition failed on server.');
-            }
-          } catch (pollErr: any) {
-            if (pollErr?.message?.includes('failed on server')) throw pollErr;
-          }
-        }
-        if (!finished) {
-          throw new Error('OCR processing timed out on server.');
-        }
-      } else {
-        console.log('[ANALYZING_SCREEN] Step 3: Running OCR and text recognition', { inspectionId, stage: 'OCR' });
-        try {
-          ocrRes = await api.runOCR(inspectionId, { signal: abortRef.current?.signal });
-          const ocrDuration = Date.now() - ocrStart;
-          console.log('[ANALYZING_SCREEN] Step 3 OCR complete', {
-            inspectionId,
-            durationMs: ocrDuration,
-            declarationsCount: ocrRes?.declarations_count,
-          });
-        } catch (err: any) {
-          if (!isMountedRef.current) return;
-          const ocrDuration = Date.now() - ocrStart;
-          const classified = classifyFetchError(err);
-
-          // Check if backend is still actively processing before showing error
-          let backendStillProcessing = false;
-          try {
-            const statusCheck = await api.getInspection(inspectionId);
-            const bStatus = statusCheck?.status;
-            if (
-              bStatus === 'EXTRACTION_COMPLETE' ||
-              bStatus === 'COMPLETED' ||
-              bStatus === 'UNDER_REVIEW' ||
-              bStatus === 'EVALUATION_COMPLETE'
-            ) {
-              alreadyExtracted = true;
-              console.log('[ANALYZING_SCREEN] Backend completed at timeout boundary. Proceeding.');
-            } else if (bStatus === 'OCR_PROCESSING') {
-              backendStillProcessing = true;
-            }
-          } catch {
-            // Cannot reach backend to check status
-          }
-
-          if (backendStillProcessing) {
-            console.log('[ANALYZING_SCREEN] Backend is still actively processing OCR. Switching to polling mode.');
-            let pollFinished = false;
-            const pollStart = Date.now();
-            while (!pollFinished && Date.now() - pollStart < 600000) {
-              if (!isMountedRef.current) return;
-              await new Promise<void>((r) => setTimeout(r, 3000));
-              try {
-                const s = await api.getInspection(inspectionId);
-                const curSt = s?.status;
-                if (
-                  curSt === 'EXTRACTION_COMPLETE' ||
-                  curSt === 'COMPLETED' ||
-                  curSt === 'UNDER_REVIEW' ||
-                  curSt === 'EVALUATION_COMPLETE'
-                ) {
-                  pollFinished = true;
-                  break;
-                } else if (curSt === 'OCR_FAILED') {
-                  throw new Error('OCR text recognition failed on server.');
-                }
-              } catch (pe: any) {
-                if (pe?.message?.includes('failed on server')) throw pe;
+            } else if (jobStatus.status === 'FAILED') {
+              const errMsg = jobStatus.error_message || 'OCR text recognition failed on server.';
+              console.error('[ANALYZING_SCREEN] OCR Job marked FAILED on backend', jobStatus);
+              setStage('ERROR');
+              setErrorTitle('Analysis Error');
+              setErrorMessage(errMsg);
+              return;
+            } else {
+              // PENDING or PROCESSING: update UI genuine progress
+              if (jobStatus.progress_percent && jobStatus.progress_percent > 40) {
+                setProgressPercent(Math.min(65, jobStatus.progress_percent));
               }
             }
-            if (!pollFinished) {
+          } catch (pollErr: any) {
+            consecutiveErrors++;
+            console.warn(`[ANALYZING_SCREEN] Polling connection hiccup (${consecutiveErrors}/40):`, pollErr?.message || pollErr);
+            
+            // Allow up to 40 consecutive transient network/502/server-restart hiccups (~80 seconds)
+            // without prematurely dropping or failing the inspection!
+            if (consecutiveErrors >= 40) {
+              const classified = classifyFetchError(pollErr);
               setStage('ERROR');
-              setErrorTitle('Analysis Taking Longer Than Expected');
+              setErrorTitle('Connection Lost During Analysis');
               setErrorMessage(
-                'OCR processing is taking longer than expected. ' +
-                'Your inspection and images are safely saved — please go back and retry.'
+                'Connection to the server was lost during OCR. ' +
+                'Your inspection and images are safely saved in the cloud. Please retry when connected.'
               );
               return;
             }
-          } else if (!alreadyExtracted) {
-            console.error('[ANALYZING_SCREEN_ERROR] OCR failed', {
-              inspectionId,
-              stage: 'OCR',
-              durationMs: ocrDuration,
-              errorType: classified.type,
-              message: classified.message,
-            });
-
-            let title = 'Analysis Error';
-            let message = classified.userMessage || err.message || 'Failed to complete OCR extraction.';
-
-            if (classified.type === 'REQUEST_TIMEOUT') {
-              title = 'Analysis Taking Longer Than Expected';
-              message =
-                'OCR processing is taking longer than expected. ' +
-                'Your inspection and images are safely saved — please go back and retry.';
-            } else if (classified.type === 'NETWORK_UNREACHABLE') {
-              title = 'Connection Lost During Analysis';
-              message =
-                'Connection to the server was lost during OCR. ' +
-                'Your inspection and images are safely saved. Please retry when connected.';
-            } else if (classified.type === 'SERVER_ERROR') {
-              title = 'Server Error During Analysis';
-              message = classified.userMessage || 'The server encountered an error while processing package images.';
-            } else if (classified.type === 'AUTH_ERROR') {
-              title = 'Session Expired';
-              message = classified.userMessage || 'Your session has expired. Please sign in again.';
-            }
-
-            setStage('ERROR');
-            setErrorTitle(title);
-            setErrorMessage(message);
-            return;
           }
+        }
+
+        if (!finished && Date.now() - pollStart >= 600000) {
+          setStage('ERROR');
+          setErrorTitle('Analysis Taking Longer Than Expected');
+          setErrorMessage(
+            'OCR processing is taking longer than expected. ' +
+            'Your inspection and images are safely saved — please go back and retry.'
+          );
+          return;
         }
       }
 

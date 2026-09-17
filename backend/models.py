@@ -70,6 +70,7 @@ class Inspection(Base):
     report = relationship("Report", back_populates="inspection", uselist=False, cascade="all, delete-orphan")
     listing = relationship("ProductListing", back_populates="inspection", uselist=False, cascade="all, delete-orphan")
     listing_comparisons = relationship("ListingComparison", back_populates="inspection", cascade="all, delete-orphan")
+    ocr_jobs = relationship("OCRJob", back_populates="inspection", cascade="all, delete-orphan")
 
 
 class Product(Base):
@@ -125,6 +126,29 @@ class OCRResult(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
 
     image = relationship("ProductImage", back_populates="ocr_results")
+
+
+class OCRJob(Base):
+    """Layer 1: Persistent OCR Job State Machine (Crash & Restart Resilient)"""
+    __tablename__ = "ocr_jobs"
+
+    id = Column(String(36), primary_key=True, default=generate_uuid)
+    inspection_id = Column(String(36), ForeignKey("inspections.id", ondelete="CASCADE"), nullable=False, index=True)
+    status = Column(String(30), default="PENDING", nullable=False, index=True)  # PENDING, PROCESSING, COMPLETED, FAILED, CANCELLED
+    current_stage = Column(String(50), default="QUEUED", nullable=False)        # QUEUED, INITIALIZING, OCR_FRONT, OCR_BACK, CONSOLIDATING, COMPLETED, FAILED
+    progress_percent = Column(Integer, default=0, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
+    started_at = Column(DateTime, nullable=True)
+    heartbeat_at = Column(DateTime, nullable=True, index=True)
+    completed_at = Column(DateTime, nullable=True)
+    worker_id = Column(String(100), nullable=True)
+    retry_count = Column(Integer, default=0, nullable=False)
+    max_retries = Column(Integer, default=2, nullable=False)
+    error_code = Column(String(50), nullable=True)
+    error_message = Column(Text, nullable=True)
+    ocr_summary_json = Column(Text, nullable=True)
+
+    inspection = relationship("Inspection", back_populates="ocr_jobs")
 
 
 class Declaration(Base):

@@ -337,7 +337,29 @@ export const api = {
 
   // OCR & Declarations
   /**
-   * Run OCR endpoint.
+   * Durable Asynchronous OCR Job: Start processing.
+   * Returns immediately (<100ms) with { job_id, inspection_id, status: "PENDING" }.
+   */
+  startOCRJob: (inspectionId: string, options?: { force?: boolean; signal?: AbortSignal }) =>
+    apiRequest(`/api/inspections/${inspectionId}/ocr/start${options?.force ? '?force=true' : ''}`, {
+      method: 'POST',
+      timeoutMs: 15000,
+      signal: options?.signal,
+    }),
+
+  /**
+   * Durable Asynchronous OCR Job: Poll job status.
+   * Retrieves active stage, progress, elapsed time, and completion state.
+   */
+  getOCRJobStatus: (inspectionId: string, options?: { signal?: AbortSignal }) =>
+    apiRequest(`/api/inspections/${inspectionId}/ocr/status`, {
+      method: 'GET',
+      timeoutMs: 10000,
+      signal: options?.signal,
+    }),
+
+  /**
+   * Run OCR endpoint (legacy synchronous compatibility).
    * Supports optional AbortSignal for user cancellation.
    */
   runOCR: (inspectionId: string, options?: { signal?: AbortSignal }) =>

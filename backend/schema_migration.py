@@ -139,11 +139,20 @@ def migrate():
     ]
 
     with engine.connect() as conn:
+        insp = inspect(conn)
+        table_cols = {}
         for m in migrations:
-            if not column_exists(conn, m["table"], m["column"]):
+            tbl = m["table"]
+            if tbl not in table_cols:
+                try:
+                    table_cols[tbl] = {c["name"] for c in insp.get_columns(tbl)}
+                except Exception:
+                    table_cols[tbl] = set()
+            if m["column"] not in table_cols[tbl]:
                 print(f"  [APPLY] Adding {m['table']}.{m['column']}")
                 conn.execute(text(m["ddl"]))
                 conn.commit()
+                table_cols[tbl].add(m["column"])
                 print(f"  [OK]    {m['table']}.{m['column']} added.")
             else:
                 print(f"  [SKIP]  {m['table']}.{m['column']} already exists.")

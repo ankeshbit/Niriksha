@@ -346,6 +346,43 @@ class AdjudicateFindingRequest(BaseModel):
         self.action = mapping.get(raw, raw)
         return self
 
+class OCRJobResponse(BaseModel):
+    job_id: str
+    inspection_id: str
+    status: str  # PENDING, PROCESSING, COMPLETED, FAILED, CANCELLED
+    current_stage: str
+    progress_percent: int
+    created_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    retry_count: int = 0
+    ocr_summary: Optional[Dict[str, Any]] = None
+
+class OCRJobStartResponse(BaseModel):
+    job_id: str
+    inspection_id: str
+    status: str
+    current_stage: str
+    progress_percent: int = 0
+    is_existing: bool = False
+
+class OCRJobStatusResponse(BaseModel):
+    job_id: str
+    inspection_id: str
+    status: str
+    current_stage: str
+    progress_percent: int
+    elapsed_seconds: Optional[float] = None
+    created_at: Optional[datetime] = None
+    started_at: Optional[datetime] = None
+    completed_at: Optional[datetime] = None
+    error_code: Optional[str] = None
+    error_message: Optional[str] = None
+    declarations_count: Optional[int] = None
+    conflicts_count: Optional[int] = None
+
 class RunOCRResponse(BaseModel):
     inspection_id: str
     status: str
