@@ -22,10 +22,13 @@ def build_engine(database_url: str):
     # PostgreSQL / Neon Serverless configuration:
     # pool_pre_ping=True ensures resilience across serverless compute wake-up.
     # pool_recycle=300 prevents stale idle connections on long-lived processes.
+    # connect_timeout=15 bounds how long psycopg waits to establish a connection to Neon
+    # so a cold/suspended compute fails fast instead of hanging Render request gateway.
     return create_engine(
         database_url,
         pool_pre_ping=True,
         pool_recycle=300,
+        connect_args={"connect_timeout": 15},
         echo=False,
     )
 
