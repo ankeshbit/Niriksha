@@ -177,12 +177,14 @@ export const AnalyzingScreen: React.FC = () => {
 
   const [stage, setStage] = useState<AnalysisStage>('IDLE');
   const [progressPercent, setProgressPercent] = useState(15);
+  const [elapsedSeconds, setElapsedSeconds] = useState(0);
   const [errorTitle, setErrorTitle] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
 
   // Abort controller ref — lets us cancel in-flight OCR request on unmount/cancel
   const abortRef = useRef<AbortController | null>(null);
   const isMountedRef = useRef(true);
+  const hasExecutedRef = useRef(false);
 
   useEffect(() => {
     isMountedRef.current = true;
@@ -192,13 +194,30 @@ export const AnalyzingScreen: React.FC = () => {
     };
   }, []);
 
+  // Live timer for active analysis stages
   useEffect(() => {
+    let interval: ReturnType<typeof setInterval> | null = null;
+    if (['STARTING', 'OCR', 'EXTRACTION', 'COMPLIANCE'].includes(stage)) {
+      interval = setInterval(() => {
+        setElapsedSeconds((s) => s + 1);
+      }, 1000);
+    }
+    return () => {
+      if (interval) clearInterval(interval);
+    };
+  }, [stage]);
+
+  useEffect(() => {
+    if (hasExecutedRef.current) return;
+    hasExecutedRef.current = true;
+
     const executeAnalysis = async () => {
       if (!isMountedRef.current) return;
 
       // Stage 1: STARTING — Check existing inspection state & prepare pipeline
       setStage('STARTING');
       setProgressPercent(20);
+      abortRef.current = new AbortController();
       console.log('[ANALYZING_SCREEN] Starting analysis pipeline', { inspectionId, stage: 'STARTING' });
 
       // Pre-check if OCR is already complete or in-flight on server
@@ -223,7 +242,7 @@ export const AnalyzingScreen: React.FC = () => {
         console.warn('[ANALYZING_SCREEN] Status pre-check warning:', initialErr);
       }
 
-      if (!isMountedRef.current) return;
+      if (!isMountedRef.current || abortRef.current?.signal.aborted) return;
 
       // Stage 2: OCR — run PaddleOCR or wait for in-progress OCR
       setStage('OCR');
@@ -240,7 +259,7 @@ export const AnalyzingScreen: React.FC = () => {
         const pollStart = Date.now();
         // Poll for up to 600s (10 minutes)
         while (!finished && Date.now() - pollStart < 600000) {
-          if (!isMountedRef.current) return;
+          if (!isMountedRef.current || abortRef.current?.signal.aborted) return;
           await new Promise<void>((r) => setTimeout(r, 3000));
           try {
             const inspStatus = await api.getInspection(inspectionId);
@@ -266,7 +285,7 @@ export const AnalyzingScreen: React.FC = () => {
       } else {
         console.log('[ANALYZING_SCREEN] Step 3: Running OCR and text recognition', { inspectionId, stage: 'OCR' });
         try {
-          ocrRes = await api.runOCR(inspectionId);
+          ocrRes = await api.runOCR(inspectionId, { signal: abortRef.current?.signal });
           const ocrDuration = Date.now() - ocrStart;
           console.log('[ANALYZING_SCREEN] Step 3 OCR complete', {
             inspectionId,
@@ -476,7 +495,7 @@ export const AnalyzingScreen: React.FC = () => {
               {stage === 'IDLE' || stage === 'STARTING'
                 ? 'Preparing package data...'
                 : stage === 'OCR'
-                ? 'Running AI text recognition...'
+                ? `Running AI text recognition (${elapsedSeconds}s)...`
                 : stage === 'EXTRACTION'
                 ? 'Parsing statutory declarations...'
                 : stage === 'COMPLIANCE'
@@ -541,7 +560,7 @@ export const AnalyzingScreen: React.FC = () => {
                     <MaterialIcons name="radio-button-unchecked" size={20} color={colors.secondary} />
                   )}
                   <Text style={step3Done ? styles.stepTextDone : (step3Active ? styles.stepTextActive : styles.stepTextPending)}>
-                    Reading package text
+                    Reading package text {step3Active ? `(${elapsedSeconds}s)` : ''}
                   </Text>
                 </View>
 

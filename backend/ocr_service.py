@@ -358,9 +358,9 @@ class PaddleOCREngine(BaseOCREngine):
 
     def __init__(self):
         self._enabled = getattr(settings, "PADDLE_OCR_ENABLED", True)
-        # LEGACY: _use_angle_cls retained for backward-compat mocking in existing tests
         self._use_angle_cls = getattr(settings, "PADDLE_OCR_USE_ANGLE_CLS", True)
         self._lang = getattr(settings, "PADDLE_OCR_LANG", "en")
+        self._ocr_version = getattr(settings, "PADDLE_OCR_VERSION", "PP-OCRv4")
 
     def is_available(self) -> bool:
         if not getattr(settings, "PADDLE_OCR_ENABLED", True):
@@ -374,9 +374,10 @@ class PaddleOCREngine(BaseOCREngine):
         """
         Lazy-initializes PaddleOCR singleton using PaddleOCR 3.x API.
         Falls back through multiple initialization strategies in order:
-          1. PaddleOCR 3.x: PaddleOCR(lang=..., use_textline_orientation=True)
-          2. PaddleOCR 2.x legacy: PaddleOCR(lang=..., use_angle_cls=...)
-          3. Minimal: PaddleOCR(lang=...)
+          1. PaddleOCR 3.x with mobile model version: PaddleOCR(ocr_version='PP-OCRv4', lang=..., use_textline_orientation=...)
+          2. PaddleOCR 3.x standard: PaddleOCR(lang=..., use_textline_orientation=...)
+          3. PaddleOCR 2.x legacy: PaddleOCR(lang=..., use_angle_cls=...)
+          4. Minimal: PaddleOCR(lang=...)
         Sets _init_error on permanent failure to prevent repeated initialization attempts.
         """
         if PaddleOCREngine._instance is not None:
@@ -388,19 +389,21 @@ class PaddleOCREngine(BaseOCREngine):
             return None
 
         t_init_start = time.time()
-        logger.info(f"[PADDLE_INIT_START] Starting PaddleOCR model load (lang={self._lang})")
+        logger.info(f"[PADDLE_INIT_START] Starting PaddleOCR model load (lang={self._lang}, version={self._ocr_version})")
         from paddleocr import PaddleOCR
 
-        # Strategy 1: PaddleOCR 3.7+ native API with CPU OneDNN workaround
+        # Strategy 1: PaddleOCR 3.7+ native API with mobile model version and CPU OneDNN workaround
         try:
             PaddleOCREngine._instance = PaddleOCR(
+                ocr_version=self._ocr_version,
                 lang=self._lang,
                 use_doc_orientation_classify=False,
                 use_doc_unwarping=False,
+                use_textline_orientation=self._use_angle_cls,
                 enable_mkldnn=False,
             )
             init_sec = time.time() - t_init_start
-            logger.info(f"[PADDLE_INIT_END] PaddleOCR Strategy 1 initialized successfully in {init_sec:.2f}s")
+            logger.info(f"[PADDLE_INIT_END] PaddleOCR Strategy 1 ({self._ocr_version}) initialized successfully in {init_sec:.2f}s")
             return PaddleOCREngine._instance
         except (TypeError, ValueError, Exception) as e1:
             logger.debug(f"[PADDLE_INIT] Strategy 1 fallback: {e1}")
@@ -825,10 +828,12 @@ class ModularOCRService:
             )
 
         # 2. Load image safely
+        t_decode_start = time.time()
         try:
             img = cv2.imread(image_path)
         except Exception:
             img = None
+        t_decode = time.time() - t_decode_start
 
         if img is None or img.size == 0:
             elapsed_ms = (time.time() - start_time) * 1000.0
@@ -847,6 +852,7 @@ class ModularOCRService:
         filesize = os.path.getsize(image_path) if os.path.exists(image_path) else 0
 
         # Safe maximum resolution cap for CPU OCR inference to avoid multi-minute stalls
+        t_resize_start = time.time()
         max_dim = getattr(settings, "MAX_OCR_DIMENSION", 1024)
         if max(orig_h, orig_w) > max_dim:
             scale = float(max_dim) / float(max(orig_h, orig_w))
@@ -858,12 +864,13 @@ class ModularOCRService:
             proc_img = img
             proc_w, proc_h = orig_w, orig_h
             scale_factors = (1.0, 1.0)
+        t_resize = time.time() - t_resize_start
 
         filename = os.path.basename(image_path)
         logger.info(
             f"[OCR_IMAGE_METRICS] filename={filename} image_id={image_id} filesize={filesize}B "
             f"decoded_dimensions={orig_w}x{orig_h} processed_dimensions={proc_w}x{proc_h} "
-            f"scale={scale_factors[0]:.4f}"
+            f"scale={scale_factors[0]:.4f} decode_time={t_decode:.3f}s resize_time={t_resize:.3f}s"
         )
 
         # 3. Inspect resolution: detect extremely small images
@@ -981,10 +988,18 @@ class ModularOCRService:
             mean_conf = 0.0
 
         # 9. Format raw and normalized text
+        t_norm_start = time.time()
         raw_text = "\n".join([b.text for b in all_boxes if b.text.strip()])
         norm_text = normalize_ocr_text(raw_text)
+        t_norm = time.time() - t_norm_start
 
         elapsed_ms = (time.time() - start_time) * 1000.0
+        logger.info(
+            f"[OCR_PERF_BREAKDOWN] image_id={image_id} filename={filename} "
+            f"decode={t_decode:.3f}s resize={t_resize:.3f}s engine={engine_used} "
+            f"boxes={len(all_boxes)} mean_conf={mean_conf:.2f} norm={t_norm:.3f}s "
+            f"total_img_elapsed={elapsed_ms/1000.0:.3f}s"
+        )
 
         return OCRResultData(
             raw_text=raw_text,

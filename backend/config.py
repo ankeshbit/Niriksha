@@ -108,6 +108,7 @@ class Settings(BaseSettings):
     # OCR & AI Providers
     OCR_ENGINE: str = "auto"
     PADDLE_OCR_ENABLED: bool = True
+    PADDLE_OCR_VERSION: str = "PP-OCRv4"  # PP-OCRv4 mobile models (fast CPU inference, lightweight RAM footprint)
     PADDLE_OCR_USE_ANGLE_CLS: bool = True
     PADDLE_OCR_LANG: str = "en"
     MAX_OCR_DIMENSION: int = 1024  # Max dimension for CPU OCR inference to prevent CPU stalls

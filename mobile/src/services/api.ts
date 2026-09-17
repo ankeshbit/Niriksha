@@ -164,6 +164,8 @@ export async function apiRequest<T = any>(
     isFormData?: boolean;
     /** Request timeout in milliseconds. Default: 30000ms. Use 180000ms for OCR. */
     timeoutMs?: number;
+    /** Optional external AbortSignal for user cancellation */
+    signal?: AbortSignal;
   } = {}
 ): Promise<T> {
   const effectiveMethod = options.method || 'GET';
@@ -188,6 +190,14 @@ export async function apiRequest<T = any>(
   const timeoutId = controller
     ? setTimeout(() => controller.abort(), timeoutMs)
     : null;
+
+  if (controller && options.signal) {
+    if (options.signal.aborted) {
+      controller.abort();
+    } else {
+      options.signal.addEventListener('abort', () => controller.abort(), { once: true });
+    }
+  }
 
   try {
     const response = await fetch(url, {
@@ -327,15 +337,14 @@ export const api = {
 
   // OCR & Declarations
   /**
-   * OCR uses 600s timeout (10 minutes).
-   * Sequential CPU inference on multiple package sides (e.g. 78 text boxes across Front + Back)
-   * can take ~470-500s. A generous 10-minute window prevents false client-side aborts while
-   * the backend is actively performing inference.
+   * Run OCR endpoint.
+   * Supports optional AbortSignal for user cancellation.
    */
-  runOCR: (inspectionId: string) =>
+  runOCR: (inspectionId: string, options?: { signal?: AbortSignal }) =>
     apiRequest(`/api/inspections/${inspectionId}/ocr`, {
       method: 'POST',
       timeoutMs: 600000,
+      signal: options?.signal,
     }),
   getDeclarations: (inspectionId: string) =>
     apiRequest(`/api/inspections/${inspectionId}/declarations`),

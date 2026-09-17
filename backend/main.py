@@ -2581,6 +2581,7 @@ def run_inspection_ocr_and_extraction(
         f"status={final_status}"
     )
 
+    t_ser_start = time.time()
     response_obj = RunOCRResponse(
         inspection_id=inspection_id_str,
         status=final_status,
@@ -2591,8 +2592,15 @@ def run_inspection_ocr_and_extraction(
         conflicts=detected_conflicts,
         barcodes=BarcodeInspectionSummaryResponse(**consolidated_barcodes.model_dump()) if consolidated_barcodes else None
     )
+    t_ser = time.time() - t_ser_start
+    total_req_time = time.time() - t_ocr_req_start
 
-    logger.info(f"[HTTP_RESPONSE_END] req_id={ocr_req_id} Returning 200 OK")
+    logger.info(
+        f"[OCR_PERF_SUMMARY] req_id={ocr_req_id} images={len(image_specs)} "
+        f"db_write_time={t_db_end - t_db_start:.3f}s ser_time={t_ser:.3f}s "
+        f"total_request_time={total_req_time:.2f}s declarations={len(saved_declarations)}"
+    )
+    logger.info(f"[HTTP_RESPONSE_END] req_id={ocr_req_id} Returning 200 OK in {total_req_time:.2f}s")
     return response_obj
 
 @app.get("/api/inspections/{inspection_id}/barcodes", response_model=BarcodeInspectionSummaryResponse, tags=["Barcodes"])
