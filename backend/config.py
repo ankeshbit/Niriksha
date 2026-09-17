@@ -116,8 +116,8 @@ class Settings(BaseSettings):
     # Benchmarking showed concurrent=2 degrades accuracy (corrupted text, lost boxes) and
     # is 15% SLOWER than warm sequential inference on this CPU.  Keep at 1 (sequential).
     OCR_CONCURRENT_IMAGES: int = 1
-    # Run a tiny warmup inference at startup to amortize PaddleOCR JIT cost before first request
-    OCR_WARMUP_ON_STARTUP: bool = True
+    # Disable startup warmup inference on cloud instances to keep memory under limits and prevent OOM restarts
+    OCR_WARMUP_ON_STARTUP: bool = False
     TESSERACT_CMD: Optional[str] = None
     TESSDATA_PREFIX: Optional[str] = None
     GEMINI_API_KEY: Optional[str] = None
