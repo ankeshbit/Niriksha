@@ -9,7 +9,7 @@
         "buildType": "apk"
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://REPLACE-WITH-YOUR-RENDER-URL.onrender.com"
+        "EXPO_PUBLIC_API_URL": "https://niriksha-1.onrender.com"
       }
     },
     "production": {
@@ -20,7 +20,7 @@
         "simulator": false
       },
       "env": {
-        "EXPO_PUBLIC_API_URL": "https://REPLACE-WITH-YOUR-RENDER-URL.onrender.com"
+        "EXPO_PUBLIC_API_URL": "https://niriksha-1.onrender.com"
       }
     }
   }
