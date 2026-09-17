@@ -74,13 +74,17 @@ export const LoginScreen: React.FC = () => {
       }
     } catch (err: any) {
       const msg = String(err?.message || '');
-      if (
+      if (err?.name === 'AbortError' || msg.toLowerCase().includes('abort')) {
+        setErrorMessage(
+          'Connection timed out. The server was waking up from sleep — please tap Login again.'
+        );
+      } else if (
         msg.includes('Failed to fetch') ||
         msg.includes('Network request failed') ||
         msg.includes('NetworkError')
       ) {
         setErrorMessage(
-          `Cannot reach backend server (${getApiBaseUrl()}). Please ensure the server is running on port 8000.`
+          `Cannot reach backend server (${getApiBaseUrl()}). Please check your internet connection.`
         );
       } else {
         setErrorMessage(msg || 'Invalid Inspector ID or password. Please try again.');

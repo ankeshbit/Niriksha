@@ -236,9 +236,9 @@ export async function apiRequest<T = any>(
 }
 
 export const api = {
-  // Auth
+  // Auth (timeoutMs: 60000 allows Render free-tier instance wake-up without premature abort)
   login: (credentials: { officer_id: string; password: string }) =>
-    apiRequest('/api/auth/login', { method: 'POST', body: credentials }),
+    apiRequest('/api/auth/login', { method: 'POST', body: credentials, timeoutMs: 60000 }),
   logout: () => apiRequest('/api/auth/logout', { method: 'POST' }),
   getProfile: () => apiRequest('/api/auth/me'),
   updateProfile: (data: { email?: string; phone?: string }) =>
