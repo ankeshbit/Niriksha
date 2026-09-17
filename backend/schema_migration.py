@@ -124,6 +124,12 @@ def migrate():
             "column": "validation_matrix_json",
             "ddl": "ALTER TABLE declarations ADD COLUMN validation_matrix_json TEXT",
         },
+        # OCR Results: add derived normalized_text for downstream extraction pipeline
+        {
+            "table": "ocr_results",
+            "column": "normalized_text",
+            "ddl": "ALTER TABLE ocr_results ADD COLUMN normalized_text TEXT",
+        },
     ]
 
     with engine.connect() as conn:

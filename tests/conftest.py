@@ -118,8 +118,6 @@ import backend.main as main_module
 main_module.REPORTS_DIR = TEST_REPORTS_DIR
 if hasattr(main_module, "report_generator"):
     main_module.report_generator.reports_dir = TEST_REPORTS_DIR
-if hasattr(main_module, "storage_service"):
-    main_module.storage_service.is_configured = False
 
 
 @pytest.fixture(scope="session", autouse=True)

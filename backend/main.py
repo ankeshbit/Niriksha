@@ -103,6 +103,7 @@ from backend.schemas import (
     RepositoryReportItem,
     RepositoryReportsResponse,
     UserListItemResponse,
+    CreateUserRequest,
     UpdateUserRoleRequest,
     ProductListingCreateRequest,
     ProductListingResponse,
@@ -149,7 +150,6 @@ from backend.compliance_summary_utils import (
     is_pending_adjudication,
     RESOLVED_ADJUDICATION_ACTIONS
 )
-from backend.supabase_storage import storage_service
 from backend.seed import seed_database
 from backend.schema_migration import migrate
 
@@ -450,6 +450,7 @@ def serialize_ocr_result(res: OCRResult) -> OCRResultResponse:
         id=res.id,
         image_id=res.image_id,
         raw_text=res.raw_text,
+        normalized_text=getattr(res, "normalized_text", None),
         confidence=res.confidence,
         bounding_boxes=boxes,
         created_at=res.created_at
@@ -1950,13 +1951,10 @@ async def upload_inspection_image(
     safe_filename = f"{uuid.uuid4().hex}_{orig_stem}_{view_type.lower()}{file_ext}"
     dest_path = target_dir / safe_filename
 
-    # Use Supabase Storage Service (with local filesystem fallback)
-    rel_file_path = storage_service.upload_image(
-        inspection_id=inspection_id,
-        filename=safe_filename,
-        file_bytes=content,
-        content_type=file.content_type
-    )
+    # Save to local persistent storage
+    with open(dest_path, "wb") as f:
+        f.write(content)
+    rel_file_path = f"/uploads/inspections/{inspection_id}/{safe_filename}"
 
     try:
         quality_res = assess_image_quality(str(dest_path))
@@ -2057,24 +2055,7 @@ def get_image_binary(
     clean_rel = img.file_path.lstrip("/")
     abs_path = BASE_DIR / clean_rel
     if not abs_path.exists():
-        if storage_service.is_configured:
-            try:
-                # Fallback: fetch from Supabase Storage
-                filename = abs_path.name
-                url = f"{storage_service.supabase_url}/storage/v1/object/{storage_service.bucket_images}/inspections/{img.inspection_id}/{filename}"
-                headers = {"Authorization": f"Bearer {storage_service.supabase_key}"}
-                import httpx
-                response = httpx.get(url, headers=headers, timeout=10.0)
-                if response.status_code == 200:
-                    abs_path.parent.mkdir(parents=True, exist_ok=True)
-                    with open(abs_path, "wb") as f:
-                        f.write(response.content)
-                else:
-                    raise HTTPException(status_code=404, detail="Image file not found on disk or storage bucket")
-            except Exception as e:
-                raise HTTPException(status_code=404, detail=f"Image file not found and storage fallback failed: {str(e)}")
-        else:
-            raise HTTPException(status_code=404, detail="Image file not found on disk")
+        raise HTTPException(status_code=404, detail="Image file not found on disk")
 
     return FileResponse(str(abs_path), media_type=img.mime_type or "image/jpeg")
 
@@ -2415,7 +2396,7 @@ def run_inspection_ocr_and_extraction(
         img_ctx = dict(product_ctx)
         img_ctx["ocr_status"] = getattr(ocr_data, "ocr_status", "OCR_SUCCESS")
         img_items = extraction_service.extract_declarations(
-            full_text=ocr_data.raw_text,
+            full_text=(ocr_data.normalized_text or ocr_data.raw_text),
             text_boxes=ocr_data.text_boxes,
             product_context=img_ctx,
             image_id=img_id,
@@ -2425,8 +2406,9 @@ def run_inspection_ocr_and_extraction(
         logger.info(f"[DECLARATION_EXTRACTION_END] req_id={ocr_req_id} idx={idx} items={len(img_items)} duration={t_decl:.2f}s")
         per_image_declarations[img_id] = img_items
 
-        if ocr_data.raw_text:
-            all_raw_text_parts.append(ocr_data.raw_text)
+        norm_or_raw = ocr_data.normalized_text or ocr_data.raw_text
+        if norm_or_raw:
+            all_raw_text_parts.append(norm_or_raw)
         all_boxes.extend(ocr_data.text_boxes)
 
         ocr_processed_items.append((img_id, ocr_data, img_barcodes))
@@ -2440,6 +2422,7 @@ def run_inspection_ocr_and_extraction(
         
         if existing_ocr:
             existing_ocr.raw_text = ocr_data.raw_text
+            existing_ocr.normalized_text = ocr_data.normalized_text
             existing_ocr.confidence = ocr_data.mean_confidence
             existing_ocr.bounding_boxes_json = json.dumps(boxes_dict)
             ocr_record = existing_ocr
@@ -2447,6 +2430,7 @@ def run_inspection_ocr_and_extraction(
             ocr_record = OCRResult(
                 image_id=img_id,
                 raw_text=ocr_data.raw_text,
+                normalized_text=ocr_data.normalized_text,
                 confidence=ocr_data.mean_confidence,
                 bounding_boxes_json=json.dumps(boxes_dict)
             )
@@ -3421,15 +3405,6 @@ def generate_inspection_report(
         report_version=new_version
     )
 
-    # Upload PDF report to Supabase Storage if configured
-    if storage_service.is_configured:
-        try:
-            with open(pdf_path, "rb") as f:
-                pdf_bytes = f.read()
-            storage_service.upload_report_pdf(real_inspection_id, new_version, pdf_bytes)
-        except Exception as e:
-            print(f"[SupabaseStorage] Warning: Failed to upload report PDF to Supabase: {e}")
-
     safety_statement = (
         "This official inspection report was generated by the AI-Assisted Legal Metrology Packaged-Commodity Inspection System (DoCA). "
         "Compliance evaluations were executed via deterministic PCR 2011 rule verification under designated inspecting officer authority."
@@ -3825,6 +3800,50 @@ def list_users(
     """Admin-only: lists all registered enforcement officers and their roles."""
     users = db.query(User).order_by(User.created_at.asc()).all()
     return users
+
+
+@app.post("/api/users", response_model=UserProfileResponse, status_code=status.HTTP_201_CREATED, tags=["User Management"])
+def create_user(
+    req: CreateUserRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_admin)
+):
+    """Admin-only: registers a new enforcement officer or supervisor with hashed password."""
+    norm_officer_id = req.officer_id.strip()
+    existing_user = db.query(User).filter(User.officer_id == norm_officer_id).first()
+    if existing_user:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail=f"Officer with ID '{norm_officer_id}' already exists."
+        )
+
+    new_user = User(
+        id=str(uuid.uuid4()),
+        officer_id=norm_officer_id,
+        full_name=req.full_name.strip(),
+        designation=req.designation.strip(),
+        zone=req.zone.strip(),
+        role=req.role,
+        email=req.email.strip() if req.email else None,
+        phone=req.phone.strip() if req.phone else None,
+        password_hash=hash_password(req.password),
+        created_at=datetime.utcnow(),
+        password_updated_at=datetime.utcnow()
+    )
+    db.add(new_user)
+
+    log_audit(
+        db,
+        current_user.officer_id,
+        "USER_CREATED",
+        "user",
+        new_user.id,
+        new_val=new_user.role,
+        details=f"Admin created officer {new_user.officer_id} ({new_user.full_name}) with role {new_user.role} in zone {new_user.zone}"
+    )
+    db.commit()
+    db.refresh(new_user)
+    return new_user
 
 
 @app.patch("/api/users/{user_id}/role", response_model=UserListItemResponse, tags=["User Management"])

@@ -119,6 +119,7 @@ class OCRResult(Base):
     id = Column(String(36), primary_key=True, default=generate_uuid)
     image_id = Column(String(36), ForeignKey("product_images.id"), nullable=False)
     raw_text = Column(Text, nullable=False)
+    normalized_text = Column(Text, nullable=True)
     confidence = Column(Float, nullable=False)
     bounding_boxes_json = Column(Text, nullable=False)  # Serialized coordinates array
     created_at = Column(DateTime, default=datetime.utcnow)

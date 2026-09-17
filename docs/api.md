@@ -281,3 +281,54 @@ Lists all active statutory rules registered in the deterministic rule engine.
 
 ### `GET /api/inspections/{inspection_id}/audit-logs`
 Retrieves the complete immutable audit trail of actions performed on an inspection.
+
+---
+
+## Supervisor Management
+
+Administrative and supervisory monitoring endpoints for Legal Metrology officers and zonal administrators:
+
+### `GET /api/users`
+Admin-only endpoint listing all registered enforcement officers, designations, zones, and system roles (`INSPECTOR`, `SUPERVISOR`, `ADMIN`).
+
+### `POST /api/users`
+Admin-only registration endpoint to provision new officer credentials with salted bcrypt password hashing and audit event recording.
+- **Request Body**:
+  ```json
+  {
+    "officer_id": "DOCA-INSP-901",
+    "full_name": "Rajesh Kumar",
+    "password": "SecurePassword123",
+    "designation": "Legal Metrology Inspector",
+    "zone": "Northern Zone - Delhi HQ",
+    "role": "INSPECTOR",
+    "email": "rajesh.kumar@gov.in",
+    "phone": "+91-9876543210"
+  }
+  ```
+- **Responses**:
+  - `201 Created`: Returns `UserProfileResponse` (excluding `password_hash`).
+  - `409 Conflict`: Returned if `officer_id` is already registered.
+
+### `PATCH /api/users/{user_id}/role`
+Admin-only role promotion/demotion endpoint (`INSPECTOR`, `SUPERVISOR`, `ADMIN`).
+
+### `GET /api/supervisor/dashboard`
+Aggregated supervisory KPIs across jurisdiction zones, compliance rates, open violation tallies, and monthly throughput.
+
+### `GET /api/supervisor/inspectors`
+Zonal workforce directory reporting active inspector counts, assigned caseloads, and completed inspection ratios.
+
+### `GET /api/supervisor/inspections`
+Supervisory cross-inspector filterable audit registry for review, notice tracking, and escalation.
+
+---
+
+## Known Limitations / Roadmap
+
+As an evaluation prototype for SIH 2026 Problem Statement 26034, the system has the following documented engineering boundaries and roadmap items:
+
+1. **Hindi & Regional Language OCR (Rule 6(3))**: Mandatory regional language declarations under Rule 6(3) (Hindi in Devanagari script) currently rely on fallback heuristic processing. Full Devanagari OCR inference and bilingual rule evaluation are scheduled for Phase 2.
+2. **E-Commerce ListingComparison Architecture Split**: Physical packaging inspections vs e-commerce listing comparisons are tracked via distinct relational models (`ListingComparison` and `ProductListing`) with independent evidentiary audit chains.
+3. **Pre-Existing E-Commerce Test Mocks**: The three pre-existing e-commerce test suites evaluate external platform scraping mockups that require live e-commerce sandbox endpoints; tracked for isolated containerized simulation in upcoming CI passes.
+4. **Single-Worker Concurrency Invariant**: PaddleOCR CPU inference uses process-local locks (`threading.Lock`) requiring `--workers 1` until PostgreSQL advisory distributed locking is implemented.

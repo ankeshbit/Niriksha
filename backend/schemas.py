@@ -43,6 +43,16 @@ class UserProfileResponse(BaseModel):
     last_login_at: Optional[datetime] = None
     previous_login_at: Optional[datetime] = None
 
+class CreateUserRequest(BaseModel):
+    officer_id: str = Field(..., description="Unique badge/officer identifier")
+    full_name: str = Field(..., description="Officer full legal name")
+    password: str = Field(..., min_length=6, description="Initial temporary/permanent password")
+    designation: str = Field(..., description="Official designation, e.g. Legal Metrology Officer")
+    zone: str = Field(..., description="Jurisdictional zone, e.g. Northern Zone")
+    role: Literal["INSPECTOR", "SUPERVISOR", "ADMIN"] = Field("INSPECTOR", description="System RBAC role")
+    email: Optional[str] = Field(None, description="Official email address")
+    phone: Optional[str] = Field(None, description="Official contact phone number")
+
 class UpdateProfileRequest(BaseModel):
     email: Optional[str] = Field(None, description="Inspector email address")
     phone: Optional[str] = Field(None, description="Inspector phone number")
@@ -163,6 +173,7 @@ class OCRResultResponse(BaseModel):
     id: str
     image_id: str
     raw_text: str
+    normalized_text: Optional[str] = None
     confidence: float
     bounding_boxes: List[OCRTextBoxResponse] = []
     created_at: datetime

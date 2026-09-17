@@ -117,7 +117,7 @@ flowchart TD
     end
 
     subgraph Persistence Layer
-        J[(Relational Database<br/>SQLite / PostgreSQL Supabase)]
+        J[(Relational Database<br/>PostgreSQL (Neon Serverless))]
         K[File Storage<br/>uploads/ & generated_reports/]
     end
 
@@ -146,13 +146,13 @@ flowchart TD
 |---|---|---|
 | **Mobile Client** | React Native 0.74.5, Expo SDK 51, TypeScript | Cross-platform mobile inspection application for field officers. |
 | **Backend API** | Python 3.10+, FastAPI, Uvicorn, Pydantic v2 | High-performance asynchronous REST API and service coordination. |
-| **Database** | SQLAlchemy 2.0, SQLite (Local Dev), PostgreSQL / Supabase | Relational data persistence with 12 structured models and audit logging. |
+| **Database** | SQLAlchemy 2.0, PostgreSQL (Neon Serverless) — SQLite is not supported at any layer | Relational data persistence with 15 structured models and audit logging. |
 | **Computer Vision** | OpenCV (cv2), NumPy | Laplacian blur detection, glare percentile analysis, CLAHE enhancement. |
-| **OCR & Extraction** | Morphological text segmenter, Tesseract fallback | Text bounding box localization and Rule 6 structured field extraction. |
-| **Rule Engine** | Codified Python statutory engine | Deterministic compliance evaluation for PCR 2011 Rules 6(1)(a)–(g). |
+| **OCR & Extraction** | PaddleOCR 3.x (primary), Tesseract (fallback), morphological OpenCV segmenter (last-resort, geometry only — never fabricates text) | Multi-engine OCR with textline orientation detection, PP-Structure layout analysis, and deterministic regex extraction of 8 statutory declaration fields. |
+| **Rule Engine** | Codified Python statutory engine | Deterministic compliance evaluation across 12 version-pinned PCR 2011 rules (Rule 6(1)(a)-(g), unit sale price, country of origin, font size, misleading declarations, e-commerce listings). |
 | **Authentication** | JWT (python-jose), bcrypt | HS256 token issuance and salted password hashing. |
 | **Report Generation** | ReportLab | Enforcement-grade multi-page inspection report PDF compiler. |
-| **Automated Testing** | Pytest, FastAPI TestClient, pypdf | 160 automated unit, lifecycle, statutory, and end-to-end integration tests. |
+| **Automated Testing** | Pytest, FastAPI TestClient, pypdf | 526 automated unit, lifecycle, statutory, and end-to-end integration tests (540 collected with parametrization). |
 
 ---
 
@@ -182,7 +182,7 @@ python -m venv venv
 # 3. Install dependencies
 pip install -r backend/requirements.txt
 
-# 4. Copy environment template (configured for zero-setup local SQLite by default)
+# 4. Copy environment template and configure your Neon PostgreSQL connection string (see .env.example)
 # Windows:
 Copy-Item .env.example .env
 # Linux/macOS: cp .env.example .env
@@ -227,11 +227,11 @@ A pre-seeded demonstration inspector account is available in `backend/seed.py`:
 
 ## Automated Testing & Verification
 
-The codebase includes **160 automated tests** with 100% pass rate:
+The codebase includes **526 automated test functions** (540 collected via parametrization) with comprehensive coverage:
 
 ```bash
 # Run complete test suite (Windows PowerShell)
-$env:DATABASE_URL="sqlite:///./legal_metrology.db"
+# Ensure TEST_DATABASE_URL is configured in your .env pointing to your isolated Neon test database
 .\venv\Scripts\python.exe -m pytest tests/ -v -W ignore::starlette.exceptions.StarletteDeprecationWarning
 
 # Run QA hardening audit
@@ -243,7 +243,7 @@ npm run ts:check
 ```
 
 **Verified Test Metrics**:
-- Pytest Suite: **159 Passed, 1 Skipped**
+- Pytest Suite: **526 Test Definitions, 540 Collected Tests**
 - TypeScript Diagnostic: **0 Errors (`tsc --noEmit`)**
 
 ---
@@ -302,7 +302,7 @@ npm run ts:check
 │   └── test_phase6.py          # Inspector adjudication and ReportLab PDF tests
 │
 ├── database/
-│   └── schema.sql              # Base PostgreSQL / SQLite DDL schema
+│   └── schema.sql              # Base PostgreSQL DDL schema (SQLite is not supported)
 │
 ├── docs/                       # Project Technical Documentation
 │   ├── architecture.md         # Detailed architectural design and sequence diagrams
@@ -342,8 +342,8 @@ The project is an **SIH 2026 MVP prototype**. The implemented inspection workflo
 
 As an evaluation prototype, the system has the following documented boundaries:
 
-1. **Rule 9 Font Height Measurement Exclusion**: The MVP excludes automated millimeter font height measurement (Rule 9 / Table 1). Accurately determining millimeter font dimensions from uncalibrated smartphone camera photos without a physical scale target remains in research.
-2. **Network Dependency for Cloud Database**: While the local SQLite mode operates entirely offline, cloud Supabase synchronization requires internet connectivity.
+1. **Rule 7(2) Font Height Measurement Exclusion**: The MVP excludes automated millimeter font height measurement (Rule 7(2) & Table-I). Accurately determining millimeter font dimensions from uncalibrated smartphone camera photos without a physical scale target remains in research.
+2. **Network Dependency for Cloud Database**: Backend inspection processing and persistence require connectivity to the Neon PostgreSQL database. Offline mobile draft capture and local image caching function without network, but cloud synchronization requires internet connectivity.
 3. **Lighting & Package Geometry**: Extreme glare on high-gloss curved packaging may trigger quality warnings requiring inspector adjustment.
 4. **Statutory Advisory Role**: The software serves strictly as an **AI-assisted decision-support system**. Final legal compounding, notices, and statutory enforcement actions remain under the authority of the human inspecting officer.
 
@@ -351,7 +351,7 @@ As an evaluation prototype, the system has the following documented boundaries:
 
 ## Future Scope
 
-- **Hardware-Assisted Physical Calibration**: Incorporating AR-based or scale-target camera calibration for automated Rule 9 font height measurements.
+- **Hardware-Assisted Physical Calibration**: Incorporating AR-based or scale-target camera calibration for automated Rule 7(2) font height measurements.
 - **Batch Market Surveillance Analytics**: Centralized administrative dashboard aggregating non-compliance trends across districts and commodity categories.
 - **Multi-Language Declaration Extraction**: Expanding OCR parsers to extract mandatory regional language declarations under Rule 6(3).
 - **On-Device Edge OCR**: Porting OCR inference directly to on-device mobile neural runtimes (e.g. TensorFlow Lite / ONNX) for fully disconnected field execution.

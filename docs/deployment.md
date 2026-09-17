@@ -48,9 +48,12 @@ pip install -r backend/requirements.txt
 # 2. Verify schema and apply migrations to Neon PostgreSQL
 python -m backend.schema_migration
 
-# 3. Start high-performance ASGI server
-uvicorn backend.main:app --host 0.0.0.0 --port 8000 --workers 2
+# 3. Start high-performance ASGI server (single worker required for OCR safety)
+uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-8000} --workers 1
 ```
+
+> **CRITICAL CONCURRENCY INVARIANT — SINGLE WORKER REQUIRED:**  
+> The OCR concurrency guard (`_ocr_concurrency_guard`, `_creation_lock` in `backend/main.py`) is a process-local `threading.Lock`, not a distributed lock. It provides its documented safety guarantee (preventing concurrent PaddleOCR CPU inference, which corrupts shared BLAS thread buffers and drops accuracy) **strictly within a single worker process**. Running with more than 1 worker allows separate processes to execute PaddleOCR simultaneously on the same host, causing CPU contention and non-deterministic buffer corruption. Running with >1 worker requires replacing these process-local locks with a distributed lock (e.g. a PostgreSQL advisory lock via `pg_advisory_xact_lock`) first — this is tracked as a known follow-up item. For now, production deployments MUST run with `--workers 1`.
 
 ### Health Check Verification
 ```bash
@@ -60,7 +63,18 @@ curl -f https://your-backend-host/api/health
 
 ---
 
-## 4. Mobile Client Deployment (Expo / EAS)
+## 4. Persistent Storage Requirements
+
+`uploads/` (package photographs) and `generated_reports/` (sealed PDF inspection reports) **MUST** reside on a persistent volume or attached disk that survives process restarts and redeployments. This is an essential statutory requirement for maintaining evidentiary chain-of-custody under the Legal Metrology Act, 2009.
+
+### Platform Requirements:
+- **Render:** Requires a paid tier with a persistent disk explicitly attached and mounted at the paths configured in `UPLOAD_DIR` and `REPORTS_DIR`. The Render free tier's filesystem is ephemeral and will lose all uploaded evidence and generated reports on every redeploy.
+- **VPS / Dedicated Instance (EC2, DigitalOcean, etc.):** The default root/data filesystem is already persistent; no extra configuration is needed beyond standard disk provisioning.
+- **Ephemeral Container Platforms (Cloud Run, Railway Default Tier, etc.):** Deploying to any platform without confirming persistent disk storage will silently destroy evidence photos and official PDF reports on the next container restart or redeploy.
+
+---
+
+## 5. Mobile Client Deployment (Expo / EAS)
 
 ### 1. Build Verification
 ```powershell
@@ -89,7 +103,7 @@ eas build --platform android --profile production
 
 ---
 
-## 5. Offline Field Inspection Support
+## 6. Offline Field Inspection Support
 - Field inspectors can capture images and metadata in areas without cellular connectivity.
 - Data is stored securely in encrypted local storage (`AsyncStorage` / `SecureStore`).
 - Once connectivity is restored, the mobile client synchronizes drafts with the central Neon PostgreSQL repository and triggers automated OCR/rule compliance evaluation.

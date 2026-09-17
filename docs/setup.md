@@ -142,22 +142,21 @@ The application includes a pre-seeded demonstration inspector account in `backen
 
 ---
 
-## 6. Database Switching: SQLite to Supabase PostgreSQL
+## 6. Database Configuration: Neon PostgreSQL
 
-To switch from the default local SQLite database to a cloud-hosted Supabase PostgreSQL instance:
+NiriKsha is architected exclusively for PostgreSQL. SQLite is strictly forbidden across all environments.
 
-1. Create a Supabase project at [https://supabase.com](https://supabase.com).
-2. Execute the DDL script in `database/schema.sql` within the Supabase SQL Editor.
-3. Update `.env` with your project connection string:
+1. Create a PostgreSQL project on [Neon](https://neon.tech).
+2. Configure `.env` with your Neon PostgreSQL connection string:
    ```dotenv
-   # Direct Connection (port 5432) or Transaction Pooler (port 6543)
-   DATABASE_URL=postgresql+psycopg2://postgres:[YOUR-PASSWORD]@[YOUR-PROJECT-REF].supabase.co:5432/postgres
-   
-   # Supabase Storage Credentials (Optional)
-   SUPABASE_URL=https://[YOUR-PROJECT-REF].supabase.co
-   SUPABASE_KEY=[YOUR-SERVICE-ROLE-KEY]
+   DATABASE_URL=postgresql+psycopg://user:password@host.neon.tech/dbname?sslmode=require&channel_binding=require
+   TEST_DATABASE_URL=postgresql+psycopg://user:password@host.neon.tech/dbname_test?sslmode=require&channel_binding=require
    ```
-4. Restart the FastAPI server. The application will automatically verify database connectivity during startup.
+3. Run migrations to initialize the schema:
+   ```bash
+   python -m backend.schema_migration
+   ```
+4. Start the FastAPI server. The application automatically verifies PostgreSQL connectivity during startup.
 
 ---
 
@@ -168,13 +167,10 @@ To switch from the default local SQLite database to a cloud-hosted Supabase Post
 | `PROJECT_NAME` | String | `"Legal Metrology Packaged-Commodity Inspection System"` | Application title. |
 | `ENVIRONMENT` | String | `"development"` | Runtime environment mode. |
 | `DEBUG` | Boolean | `True` | Enables verbose error messages and tracebacks. |
-| `DATABASE_URL` | String | `"sqlite:///./legal_metrology.db"` | SQLAlchemy database connection URI. |
+| `DATABASE_URL` | String | (Required) | Neon PostgreSQL connection URI (`postgresql+psycopg://...`). |
+| `TEST_DATABASE_URL` | String | (Required for tests) | Dedicated Neon PostgreSQL test connection URI. |
 | `SECRET_KEY` | String | (Pre-configured dev key) | Secret key for signing HS256 JWT tokens. |
 | `ALGORITHM` | String | `"HS256"` | JWT token hashing algorithm. |
 | `ACCESS_TOKEN_EXPIRE_MINUTES` | Integer | `1440` | JWT expiration duration in minutes (24 hours). |
-| `UPLOAD_DIR` | String | `"./uploads"` | Directory for stored product images. |
-| `REPORTS_DIR` | String | `"./generated_reports"` | Directory for generated statutory PDF reports. |
-| `SUPABASE_URL` | String / Null | `None` | Supabase project URL (optional). |
-| `SUPABASE_KEY` | String / Null | `None` | Supabase service key (optional). |
-| `SUPABASE_BUCKET_IMAGES` | String | `"inspection-images"` | Cloud storage bucket name for images. |
-| `SUPABASE_BUCKET_REPORTS` | String | `"inspection-reports"` | Cloud storage bucket name for reports. |
+| `UPLOAD_DIR` | String | `"./uploads"` | Directory for stored product images (must be on persistent disk). |
+| `REPORTS_DIR` | String | `"./generated_reports"` | Directory for generated statutory PDF reports (must be on persistent disk). |

@@ -7,7 +7,7 @@ from backend.font_size_service import (
 
 
 class TestFontSizeAnalysis:
-    """Test suite for Legal Metrology Font-Size Analysis (PCR 2011 Rule 9 Table 1)."""
+    """Test suite for Legal Metrology Font-Size Analysis (PCR 2011 Rule 7(2) Table-I)."""
 
     def test_uncalibrated_image_returns_undeterminable_without_fabrication(self):
         """Without physical calibration reference, system must NEVER fabricate physical millimetres."""
@@ -22,15 +22,15 @@ class TestFontSizeAnalysis:
         assert res.is_calibrated is False
         assert res.estimated_physical_height_mm is None  # Never fabricate mm!
         assert res.measured_pixel_height == 50
-        assert res.statutory_rule_code == "PCR_RULE_09_FONT_SIZE"
+        assert res.statutory_rule_code == "PCR_RULE_07_2_FONT_SIZE"
 
     def test_calibrated_measurement_compliant(self):
-        """With physical scale calibration (e.g. 20 px/mm), 60px height = 3.0mm; threshold for 200g is 2.0mm -> COMPLIANT."""
+        """With physical scale calibration (e.g. 20 px/mm), 60px height = 2.46mm char height; threshold for 300g is 2.0mm -> COMPLIANT."""
         res = font_size_analyzer.analyze_font_size(
             field_name="net_quantity",
             bounding_box=[100, 100, 300, 160],  # 60px height
-            text="200 g",
-            net_quantity_context="200 g",
+            text="300 g",
+            net_quantity_context="300 g",
             calibration_scale_px_per_mm=20.0
         )
         assert res.font_size_status == "FONT_SIZE_COMPLIANT"
@@ -40,12 +40,12 @@ class TestFontSizeAnalysis:
         assert res.statutory_minimum_height_mm == 2.0
 
     def test_calibrated_measurement_non_compliant(self):
-        """With physical scale calibration (e.g. 20 px/mm), 25px height = 1.02mm; threshold for 200g is 2.0mm -> routes to MANUAL_VERIFICATION_REQUIRED."""
+        """With physical scale calibration (e.g. 20 px/mm), 25px height = 1.03mm char height; threshold for 300g is 2.0mm -> routes to MANUAL_VERIFICATION_REQUIRED."""
         res = font_size_analyzer.analyze_font_size(
             field_name="net_quantity",
             bounding_box=[100, 100, 300, 125],  # 25px height
-            text="200 g",
-            net_quantity_context="200 g",
+            text="300 g",
+            net_quantity_context="300 g",
             calibration_scale_px_per_mm=20.0
         )
         assert res.font_size_status in ("FONT_SIZE_NON_COMPLIANT", "MANUAL_VERIFICATION_REQUIRED")
@@ -65,13 +65,14 @@ class TestFontSizeAnalysis:
         assert res.font_size_status == "FONT_SIZE_UNDETERMINABLE"
         assert res.measured_pixel_height == 0
 
-    def test_statutory_rule_9_table_1_threshold_lookup(self):
-        """Verify thresholds match PCR 2011 Rule 9 Table 1 statutory values."""
-        # Up to 50g -> 1.0mm
+    def test_statutory_rule_7_2_table_1_threshold_lookup(self):
+        """Verify thresholds match PCR 2011 Rule 7(2) Table-I statutory values."""
+        # Up to 200g -> 1.0mm
         assert font_size_analyzer.get_statutory_min_height("30 g") == 1.0
-        # 50g to 200g -> 2.0mm
-        assert font_size_analyzer.get_statutory_min_height("150 g") == 2.0
-        # 200g to 1kg -> 4.0mm
-        assert font_size_analyzer.get_statutory_min_height("500 g") == 4.0
-        # Above 1kg -> 6.0mm
-        assert font_size_analyzer.get_statutory_min_height("5 kg") == 6.0
+        assert font_size_analyzer.get_statutory_min_height("200 g") == 1.0
+        # Above 200g to 500g -> 2.0mm
+        assert font_size_analyzer.get_statutory_min_height("300 g") == 2.0
+        assert font_size_analyzer.get_statutory_min_height("500 g") == 2.0
+        # Above 500g -> 4.0mm
+        assert font_size_analyzer.get_statutory_min_height("1 kg") == 4.0
+        assert font_size_analyzer.get_statutory_min_height("5 kg") == 4.0

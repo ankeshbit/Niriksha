@@ -131,10 +131,5 @@ class Settings(BaseSettings):
     VLM_TIMEOUT_SECONDS: float = 15.0
     VLM_CONFIDENCE_THRESHOLD: float = 0.70
 
-    # Supabase Configuration
-    SUPABASE_URL: Optional[str] = None
-    SUPABASE_KEY: Optional[str] = None
-    SUPABASE_BUCKET_IMAGES: str = "inspection-images"
-    SUPABASE_BUCKET_REPORTS: str = "inspection-reports"
 
 settings = Settings()
