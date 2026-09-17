@@ -4,16 +4,15 @@ import { Platform } from 'react-native';
 // Network host configurations
 export const EMULATOR_API_HOST = 'http://10.0.2.2:8000';   // Android Emulator loopback
 export const LOCALHOST_API_HOST = 'http://127.0.0.1:8000';  // Web / iOS simulator
+export const PRODUCTION_API_HOST = 'https://niriksha-1.onrender.com'; // Live Render Backend
 
 // Environment-configured API host (configured via EXPO_PUBLIC_API_URL in .env or EAS build)
 const expoEnvUrl = (process.env as Record<string, string | undefined>)?.EXPO_PUBLIC_API_URL;
 const ENV_API_HOST = expoEnvUrl ? expoEnvUrl.replace(/\/$/, '') : null;
 
 // Default active API host:
-// - If EXPO_PUBLIC_API_URL is configured in .env, use that.
-// - On Android emulator/device without env, default to emulator loopback (10.0.2.2:8000).
-// - On Web / iOS, default to localhost loopback (127.0.0.1:8000).
-export const DEFAULT_API_HOST = ENV_API_HOST || (Platform.OS === 'android' ? EMULATOR_API_HOST : LOCALHOST_API_HOST);
+// - Always default to PRODUCTION_API_HOST (Render backend) on production APKs unless explicitly configured
+export const DEFAULT_API_HOST = ENV_API_HOST || PRODUCTION_API_HOST;
 
 let customBaseUrl: string | null = null;
 
@@ -27,14 +26,14 @@ export const getApiBaseUrl = () => {
   // On Web: ALWAYS dynamically match current window hostname to prevent origin/port mismatch
   if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location?.hostname) {
     const host = window.location.hostname;
-    if (host) {
-      return `http://${host}:8000`;
+    if (host && host !== 'localhost' && host !== '127.0.0.1') {
+      return `https://${host}`;
     }
   }
 
   if (ENV_API_HOST) return ENV_API_HOST;
 
-  return Platform.OS === 'android' ? EMULATOR_API_HOST : LOCALHOST_API_HOST;
+  return PRODUCTION_API_HOST;
 };
 
 // ─── Error classification ─────────────────────────────────────────────────────

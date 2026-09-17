@@ -182,6 +182,11 @@ export const LoginScreen: React.FC = () => {
                   </View>
                 )}
               </TouchableOpacity>
+
+              {/* Active Server URL Indicator */}
+              <Text style={{ textAlign: 'center', fontSize: 11, color: colors.outline, marginTop: 12 }}>
+                Server: {getApiBaseUrl()}
+              </Text>
             </View>
           </View>
 

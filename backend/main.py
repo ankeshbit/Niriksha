@@ -619,6 +619,7 @@ def serialize_report(rep: Report) -> ReportResponse:
 
 # ----------------- Health & Auth Endpoints -----------------
 
+@app.get("/health", response_model=HealthCheckResponse, tags=["Health"])
 @app.get("/api/health", response_model=HealthCheckResponse, tags=["Health"])
 def health_check(db: Session = Depends(get_db)):
     """Health check verifying API and Database connectivity."""
