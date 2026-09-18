@@ -35,6 +35,7 @@ from backend.models import (
     User
 )
 from backend.config import settings
+from backend.storage_service import storage_service
 from backend.ocr_service import ocr_service
 from backend.barcode_service import barcode_service
 from backend.extraction_service import extraction_service, cross_image_verification
@@ -437,11 +438,35 @@ class OCRJobService:
                     db.commit()
                 db.close()
 
-                clean_rel = img_file_path.lstrip("/\\")
-                abs_path = BASE_DIR / clean_rel
-                if not abs_path.exists():
-                    logger.warning(f"[IMG_NOT_FOUND] job_id={job_id} path={abs_path}")
-                    continue
+                abs_path = storage_service.get_local_working_copy(img_file_path)
+                if not abs_path or not abs_path.exists():
+                    logger.error(
+                        f"[SOURCE_IMAGE_UNAVAILABLE] job_id={job_id} inspection_id={inspection_id} "
+                        f"img_id={img_id} view_type={view_type} path={img_file_path}"
+                    )
+                    db_fail = SessionLocal()
+                    try:
+                        fail_job = db_fail.query(OCRJob).filter(OCRJob.id == job_id).first()
+                        if fail_job:
+                            self._fail_job(
+                                fail_job,
+                                "SOURCE_IMAGE_UNAVAILABLE",
+                                f"Required package image for '{view_type}' could not be accessed from storage. Please retake the photo and retry.",
+                                db_fail
+                            )
+                        audit = AuditLog(
+                            inspection_id=inspection_id,
+                            actor_id=inspector_officer_id,
+                            action="OCR_JOB_FAILED",
+                            entity_type="ocr_job",
+                            entity_id=job_id,
+                            details=f"SOURCE_IMAGE_UNAVAILABLE: Image '{img_file_path}' (view: {view_type}) could not be accessed from persistent storage."
+                        )
+                        db_fail.add(audit)
+                        db_fail.commit()
+                    finally:
+                        db_fail.close()
+                    return False
 
                 t_img_start = time.time()
                 rss_pre = _get_process_rss_mb()

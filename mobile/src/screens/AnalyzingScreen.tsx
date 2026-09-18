@@ -316,10 +316,15 @@ export const AnalyzingScreen: React.FC = () => {
               finished = true;
               break;
             } else if (jobStatus.status === 'FAILED') {
-              const errMsg = jobStatus.error_message || 'OCR text recognition failed on server.';
+              const isImageUnavailable = jobStatus.error_code === 'SOURCE_IMAGE_UNAVAILABLE';
+              const errMsg = jobStatus.error_message || (
+                isImageUnavailable
+                  ? 'Source image could not be accessed from storage. Please go back, retake the package photos, and retry.'
+                  : 'OCR text recognition failed on server.'
+              );
               console.error('[ANALYZING_SCREEN] OCR Job marked FAILED on backend', jobStatus);
               setStage('ERROR');
-              setErrorTitle('Analysis Error');
+              setErrorTitle(isImageUnavailable ? 'Source Image Unavailable' : 'Analysis Error');
               setErrorMessage(errMsg);
               return;
             } else {

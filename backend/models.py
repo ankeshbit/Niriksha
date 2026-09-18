@@ -10,7 +10,8 @@ from sqlalchemy import (
     DateTime,
     ForeignKey,
     Text,
-    Enum
+    Enum,
+    LargeBinary
 )
 from sqlalchemy.orm import relationship
 from backend.database import Base
@@ -377,3 +378,18 @@ class ListingComparison(Base):
     inspection = relationship("Inspection", back_populates="listing_comparisons")
     listing = relationship("ProductListing", back_populates="comparisons")
     source_image = relationship("ProductImage")
+
+
+class StoredFile(Base):
+    """
+    Persistent Storage for Images and Official Reports.
+    Provides crash & ephemeral disk resilience across Render container lifecycles.
+    """
+    __tablename__ = "stored_files"
+
+    storage_key = Column(String(500), primary_key=True, index=True)
+    content_type = Column(String(100), default="image/jpeg", nullable=False)
+    file_size = Column(Integer, default=0, nullable=False)
+    file_data = Column(LargeBinary, nullable=False)
+    created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)

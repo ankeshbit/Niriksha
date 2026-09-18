@@ -378,17 +378,26 @@ def build_package_images_evidence_section(
         q_color = COLOR_PASS_GREEN if q_status in ("GOOD", "ACCEPTABLE") else COLOR_WARN_AMBER
         q_text = f"<font color='{q_color.hexval()}'><b>{q_status}</b></font>"
 
-        # Find file on disk
+        # Find file on disk or rehydrate from durable storage
         img_element = None
         if file_path_rel:
+            try:
+                from backend.storage_service import storage_service
+                working_path = storage_service.get_local_working_copy(file_path_rel)
+            except Exception:
+                working_path = None
+
+            cand_paths = []
+            if working_path:
+                cand_paths.append(working_path)
             clean_rel = file_path_rel.lstrip("/\\")
-            cand_paths = [
+            cand_paths.extend([
                 root_dir / clean_rel,
                 root_dir / "uploads" / clean_rel.replace("uploads/", ""),
                 Path(file_path_rel),
-            ]
+            ])
             for cp in cand_paths:
-                if cp.exists() and cp.is_file():
+                if cp and cp.exists() and cp.is_file():
                     try:
                         # Use ImageReader to get dimensions and preserve aspect ratio
                         ir = ImageReader(str(cp))

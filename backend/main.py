@@ -150,6 +150,7 @@ from backend.rule_engine import (
 from backend.listing_service import execute_listing_comparison
 from backend.report_service import report_generator
 from backend.ocr_job_service import ocr_job_service
+from backend.storage_service import storage_service
 from backend.compliance_summary_utils import (
     compute_canonical_compliance_metrics,
     is_pending_adjudication,
@@ -1992,18 +1993,17 @@ async def upload_inspection_image(
     except Exception as e:
         raise HTTPException(status_code=400, detail=f"Invalid or corrupted image file: {str(e)}")
 
-    target_dir = UPLOADS_DIR / "inspections" / inspection_id
-    target_dir.mkdir(parents=True, exist_ok=True)
-
     file_ext = ".jpg" if img_format == "jpeg" else f".{img_format}"
     orig_stem = re.sub(r'[^a-zA-Z0-9_-]', '_', Path(file.filename or 'img').stem)
     safe_filename = f"{uuid.uuid4().hex}_{orig_stem}_{view_type.lower()}{file_ext}"
-    dest_path = target_dir / safe_filename
+    storage_key = f"inspections/{inspection_id}/{safe_filename}"
 
-    # Save to local persistent storage
-    with open(dest_path, "wb") as f:
-        f.write(content)
-    rel_file_path = f"/uploads/inspections/{inspection_id}/{safe_filename}"
+    # Save to durable multi-tier storage (PostgreSQL StoredFile, Supabase if configured, local cache)
+    rel_file_path = storage_service.save_file(storage_key, content, content_type=file.content_type or "image/jpeg")
+
+    dest_path = storage_service.get_local_working_copy(rel_file_path)
+    if not dest_path:
+        raise HTTPException(status_code=500, detail="Failed to initialize local working copy of uploaded image.")
 
     try:
         quality_res = assess_image_quality(str(dest_path))
@@ -2011,17 +2011,14 @@ async def upload_inspection_image(
         raise HTTPException(status_code=500, detail=f"Image quality assessment failed: {str(e)}")
 
     # Canonical slot replacement: remove any existing image of the same view_type
-    # to guarantee retake does not create duplicate or stale images in the DB or on disk.
+    # to guarantee retake does not create duplicate or stale images in the DB or storage.
     existing_images = db.query(ProductImage).filter(
         ProductImage.inspection_id == inspection_id,
         ProductImage.view_type == view_type.lower()
     ).all()
     for old_img in existing_images:
         try:
-            old_rel = old_img.file_path.lstrip("/")
-            old_abs = BASE_DIR / old_rel
-            if old_abs.exists() and old_abs != dest_path:
-                old_abs.unlink()
+            storage_service.delete_file(old_img.file_path)
         except Exception:
             pass
         db.delete(old_img)
@@ -2101,10 +2098,9 @@ def get_image_binary(
         raise HTTPException(status_code=404, detail="Image record not found")
     verify_inspection_access(img.inspection, current_user, allow_supervisory=True)
 
-    clean_rel = img.file_path.lstrip("/")
-    abs_path = BASE_DIR / clean_rel
-    if not abs_path.exists():
-        raise HTTPException(status_code=404, detail="Image file not found on disk")
+    abs_path = storage_service.get_local_working_copy(img.file_path)
+    if not abs_path or not abs_path.exists():
+        raise HTTPException(status_code=404, detail="Image file not found in storage")
 
     return FileResponse(str(abs_path), media_type=img.mime_type or "image/jpeg")
 
@@ -2114,7 +2110,7 @@ def delete_inspection_image(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Deletes an uploaded package image record and removes file from disk."""
+    """Deletes an uploaded package image record and removes file from storage."""
     img = db.query(ProductImage).filter(ProductImage.id == image_id).first()
     if not img:
         raise HTTPException(status_code=404, detail="Image record not found")
@@ -2127,13 +2123,10 @@ def delete_inspection_image(
             detail="Official inspection evidence cannot be deleted after inspection finalization or report generation."
         )
 
-    clean_rel = img.file_path.lstrip("/")
-    abs_path = BASE_DIR / clean_rel
-    if abs_path.exists():
-        try:
-            abs_path.unlink()
-        except Exception:
-            pass
+    try:
+        storage_service.delete_file(img.file_path)
+    except Exception:
+        pass
 
     inspection_id = img.inspection_id
     db.delete(img)
@@ -2173,13 +2166,10 @@ def delete_inspection_image_by_slot(
     ).all()
 
     for img in images:
-        clean_rel = img.file_path.lstrip("/")
-        abs_path = BASE_DIR / clean_rel
-        if abs_path.exists():
-            try:
-                abs_path.unlink()
-            except Exception:
-                pass
+        try:
+            storage_service.delete_file(img.file_path)
+        except Exception:
+            pass
         db.delete(img)
     db.commit()
 
@@ -2481,8 +2471,7 @@ def get_inspection_barcodes(
 
     per_image_barcodes = {}
     for img in images:
-        clean_rel = img.file_path.lstrip("/")
-        abs_path = BASE_DIR / clean_rel
+        abs_path = storage_service.get_local_working_copy(img.file_path)
 
         items = []
         if img.quality_metadata_json:
@@ -2493,7 +2482,7 @@ def get_inspection_barcodes(
             except Exception:
                 items = []
 
-        if not items and abs_path.exists():
+        if not items and abs_path and abs_path.exists():
             items = barcode_service.detect_and_decode(str(abs_path), source_image_id=img.id, source_image_path=img.file_path)
             ocr_rec = db.query(OCRResult).filter(OCRResult.image_id == img.id).first()
             if ocr_rec and ocr_rec.raw_text:
@@ -3280,6 +3269,24 @@ def generate_inspection_report(
         report_version=new_version
     )
 
+    # Persist report files to durable storage service
+    try:
+        safe_insp_num = (inspection.inspection_number or "UNKNOWN").replace("-", "_").replace("/", "_")
+        if pdf_path and Path(pdf_path).exists():
+            storage_service.save_file(
+                f"reports/LM_Report_{safe_insp_num}_v{new_version}.pdf",
+                Path(pdf_path).read_bytes(),
+                "application/pdf"
+            )
+        if docx_path and Path(docx_path).exists():
+            storage_service.save_file(
+                f"reports/LM_Report_{safe_insp_num}_v{new_version}.docx",
+                Path(docx_path).read_bytes(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
+    except Exception as e:
+        logger.warning(f"[REPORT_STORAGE_PERSIST_WARN] Could not persist report to durable storage: {e}")
+
     safety_statement = (
         "This official inspection report was generated by the AI-Assisted Legal Metrology Packaged-Commodity Inspection System (DoCA). "
         "Compliance evaluations were executed via deterministic PCR 2011 rule verification under designated inspecting officer authority."
@@ -3352,13 +3359,18 @@ def stream_inspection_report_pdf(
     verify_inspection_access(inspection, current_user, allow_supervisory=True)
 
     report_record = db.query(Report).filter(Report.inspection_id == inspection.id).first()
-    if not report_record or not Path(report_record.pdf_path).exists():
+    if not report_record:
         generate_inspection_report(inspection.id, db, current_user)
         report_record = db.query(Report).filter(Report.inspection_id == inspection.id).first()
 
-    pdf_file = Path(report_record.pdf_path)
-    if not pdf_file.exists():
-        raise HTTPException(status_code=404, detail="Generated PDF report file not found on disk")
+    pdf_file = storage_service.get_local_working_copy(report_record.pdf_path) if report_record and report_record.pdf_path else None
+    if not pdf_file or not pdf_file.exists():
+        generate_inspection_report(inspection.id, db, current_user, force_regenerate=True)
+        report_record = db.query(Report).filter(Report.inspection_id == inspection.id).first()
+        pdf_file = storage_service.get_local_working_copy(report_record.pdf_path) if report_record and report_record.pdf_path else None
+
+    if not pdf_file or not pdf_file.exists():
+        raise HTTPException(status_code=404, detail="Generated PDF report file not found in storage")
 
     filename = f"LM_Report_{inspection.inspection_number}.pdf"
     return FileResponse(
@@ -3388,28 +3400,14 @@ def stream_inspection_report_docx(
         generate_inspection_report(inspection.id, db, current_user)
         report_record = db.query(Report).filter(Report.inspection_id == inspection.id).first()
 
-    # Ensure DOCX is available on disk at current version
-    docx_file = Path(report_record.docx_path) if getattr(report_record, "docx_path", None) else None
+    docx_file = storage_service.get_local_working_copy(report_record.docx_path) if report_record and report_record.docx_path else None
     if not docx_file or not docx_file.exists():
-        declarations = db.query(Declaration).filter(Declaration.inspection_id == inspection.id).all()
-        compliance_checks = db.query(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection.id).all()
-        evidence_items = db.query(Evidence).join(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection.id).all()
-        gen_docx = report_generator.generate_docx(
-            inspection=inspection,
-            product=inspection.product,
-            inspector=inspection.inspector or current_user,
-            declarations=declarations,
-            compliance_checks=compliance_checks,
-            evidence_items=evidence_items,
-            report_version=report_record.report_version
-        )
-        report_record.docx_path = gen_docx
-        db.commit()
-        db.refresh(report_record)
-        docx_file = Path(gen_docx)
+        generate_inspection_report(inspection.id, db, current_user, force_regenerate=True)
+        report_record = db.query(Report).filter(Report.inspection_id == inspection.id).first()
+        docx_file = storage_service.get_local_working_copy(report_record.docx_path) if report_record and report_record.docx_path else None
 
-    if not docx_file.exists():
-        raise HTTPException(status_code=404, detail="Generated DOCX report file not found on disk")
+    if not docx_file or not docx_file.exists():
+        raise HTTPException(status_code=404, detail="Generated DOCX report file not found in storage")
 
     safe_insp_num = (inspection.inspection_number or "UNKNOWN").replace("-", "_").replace("/", "_")
     filename = f"LM_Report_{safe_insp_num}.docx"
