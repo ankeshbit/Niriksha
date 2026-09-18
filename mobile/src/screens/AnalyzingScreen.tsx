@@ -8,6 +8,8 @@ import {
   Easing,
   Platform,
   AccessibilityInfo,
+  AppState,
+  AppStateStatus,
 } from 'react-native';
 import { SafeAreaView } from 'react-native-safe-area-context';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
@@ -178,6 +180,7 @@ export const AnalyzingScreen: React.FC = () => {
   const [stage, setStage] = useState<AnalysisStage>('IDLE');
   const [progressPercent, setProgressPercent] = useState(15);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
+  const [subStageLabel, setSubStageLabel] = useState<string>('');
   const [errorTitle, setErrorTitle] = useState('');
   const [errorMessage, setErrorMessage] = useState('');
 
@@ -185,11 +188,19 @@ export const AnalyzingScreen: React.FC = () => {
   const abortRef = useRef<AbortController | null>(null);
   const isMountedRef = useRef(true);
   const hasExecutedRef = useRef(false);
+  const triggerImmediatePollRef = useRef<(() => void) | null>(null);
 
   useEffect(() => {
     isMountedRef.current = true;
+    const subscription = AppState.addEventListener('change', (nextAppState: AppStateStatus) => {
+      if (nextAppState === 'active') {
+        console.log('[ANALYZING_SCREEN] App resumed to foreground — triggering immediate status check');
+        triggerImmediatePollRef.current?.();
+      }
+    });
     return () => {
       isMountedRef.current = false;
+      subscription.remove();
       abortRef.current?.abort();
     };
   }, []);
@@ -294,19 +305,31 @@ export const AnalyzingScreen: React.FC = () => {
           }
         }
 
+        const friendlyStageLabels: Record<string, string> = {
+          QUEUED: 'Queued for processing',
+          INITIALIZING_OCR: 'Initializing OCR engine',
+          OCR_IMAGE_1: 'Processing image 1',
+          OCR_IMAGE_2: 'Processing image 2',
+          EXTRACTING_DECLARATIONS: 'Extracting declarations',
+          COMPLIANCE_EVALUATION: 'Evaluating compliance rules',
+          COMPLETED: 'Completed',
+        };
+
         // 2. Poll job status until COMPLETED or FAILED
         let finished = false;
         let consecutiveErrors = 0;
         const pollStart = Date.now();
-        // Allow up to 10 minutes (600,000 ms) for total processing
-        while (!finished && Date.now() - pollStart < 600000) {
-          if (!isMountedRef.current || abortRef.current?.signal.aborted) return;
-          await new Promise<void>((r) => setTimeout(r, 2000));
-          
+
+        const pollCheck = async (): Promise<boolean> => {
+          if (!isMountedRef.current || abortRef.current?.signal.aborted) return false;
           try {
             const jobStatus = await api.getOCRJobStatus(inspectionId);
             consecutiveErrors = 0; // Success reset
-            
+
+            if (jobStatus.current_stage && friendlyStageLabels[jobStatus.current_stage]) {
+              setSubStageLabel(friendlyStageLabels[jobStatus.current_stage]);
+            }
+
             if (jobStatus.status === 'COMPLETED') {
               console.log('[ANALYZING_SCREEN] Durable OCR job COMPLETED', {
                 inspectionId,
@@ -314,7 +337,7 @@ export const AnalyzingScreen: React.FC = () => {
                 durationMs: Date.now() - ocrStart,
               });
               finished = true;
-              break;
+              return true;
             } else if (jobStatus.status === 'FAILED') {
               const isImageUnavailable = jobStatus.error_code === 'SOURCE_IMAGE_UNAVAILABLE';
               const errMsg = isImageUnavailable
@@ -324,17 +347,18 @@ export const AnalyzingScreen: React.FC = () => {
               setStage('ERROR');
               setErrorTitle(isImageUnavailable ? 'Source Image Unavailable' : 'Analysis Error');
               setErrorMessage(errMsg);
-              return;
+              finished = true;
+              return true;
             } else {
               // PENDING or PROCESSING: update UI genuine progress
-              if (jobStatus.progress_percent && jobStatus.progress_percent > 40) {
+              if (jobStatus.progress_percent && jobStatus.progress_percent > 20) {
                 setProgressPercent(Math.min(65, jobStatus.progress_percent));
               }
             }
           } catch (pollErr: any) {
             consecutiveErrors++;
             console.warn(`[ANALYZING_SCREEN] Polling connection hiccup (${consecutiveErrors}/40):`, pollErr?.message || pollErr);
-            
+
             // Allow up to 40 consecutive transient network/502/server-restart hiccups (~80 seconds)
             // without prematurely dropping or failing the inspection!
             if (consecutiveErrors >= 40) {
@@ -345,10 +369,29 @@ export const AnalyzingScreen: React.FC = () => {
                 'Connection to the server was lost during OCR. ' +
                 'Your inspection and images are safely saved in the cloud. Please retry when connected.'
               );
-              return;
+              finished = true;
+              return true;
             }
           }
+          return false;
+        };
+
+        // Wire immediate poll trigger on app foreground resume
+        triggerImmediatePollRef.current = () => {
+          if (!finished) {
+            pollCheck();
+          }
+        };
+
+        // Allow up to 10 minutes (600,000 ms) for total processing
+        while (!finished && Date.now() - pollStart < 600000) {
+          if (!isMountedRef.current || abortRef.current?.signal.aborted) return;
+          const isDone = await pollCheck();
+          if (isDone) break;
+          await new Promise<void>((r) => setTimeout(r, 2500));
         }
+
+        triggerImmediatePollRef.current = null;
 
         if (!finished && Date.now() - pollStart >= 600000) {
           setStage('ERROR');
@@ -467,7 +510,7 @@ export const AnalyzingScreen: React.FC = () => {
               {stage === 'IDLE' || stage === 'STARTING'
                 ? 'Preparing package data...'
                 : stage === 'OCR'
-                ? `Running AI text recognition (${elapsedSeconds}s)...`
+                ? `${subStageLabel || 'Running AI text recognition'} (${elapsedSeconds}s)...`
                 : stage === 'EXTRACTION'
                 ? 'Parsing statutory declarations...'
                 : stage === 'COMPLIANCE'
@@ -532,7 +575,7 @@ export const AnalyzingScreen: React.FC = () => {
                     <MaterialIcons name="radio-button-unchecked" size={20} color={colors.secondary} />
                   )}
                   <Text style={step3Done ? styles.stepTextDone : (step3Active ? styles.stepTextActive : styles.stepTextPending)}>
-                    Reading package text {step3Active ? `(${elapsedSeconds}s)` : ''}
+                    {step3Active && subStageLabel ? `${subStageLabel} (${elapsedSeconds}s)` : `Reading package text ${step3Active ? `(${elapsedSeconds}s)` : ''}`}
                   </Text>
                 </View>
 
