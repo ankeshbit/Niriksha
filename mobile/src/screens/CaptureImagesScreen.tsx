@@ -695,9 +695,10 @@ export const CaptureImagesScreen: React.FC = () => {
                       reader.readAsDataURL(blob);
                     });
                   };
-                  const frontData = await fetchAsDataUrl('http://localhost:8000/uploads/test_fixtures/front.jpg');
+                  const baseUrl = getApiBaseUrl();
+                  const frontData = await fetchAsDataUrl(`${baseUrl}/uploads/test_fixtures/front.jpg`);
                   await processPickedImage(frontData, 'front', 800, 600);
-                  const backData = await fetchAsDataUrl('http://localhost:8000/uploads/test_fixtures/back.jpg');
+                  const backData = await fetchAsDataUrl(`${baseUrl}/uploads/test_fixtures/back.jpg`);
                   await processPickedImage(backData, 'back', 800, 600);
                 } catch (e) {
                   console.error('Failed to attach test package images:', e);
