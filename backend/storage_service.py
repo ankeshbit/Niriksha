@@ -4,23 +4,21 @@ backend/storage_service.py
 Durable Image & Report Storage Service for NiriKsha.
 Provides crash-resilient and restart-resilient persistence across Render container lifecycles.
 
-Architecture:
-1. Object Storage Tier (Supabase Storage):
-   - Active if SUPABASE_URL and SUPABASE_KEY are provided.
-   - Synchronizes blobs to cloud buckets via authenticated REST API.
-2. PostgreSQL Blob Tier (Neon Database):
-   - Always active as zero-dependency persistent storage in table `stored_files`.
-   - Guarantees images survive all Render restarts/redeployments even on Render Free tier.
-3. Ephemeral Disk Cache:
-   - Maintains working copies on local filesystem for PaddleOCR, OpenCV, and ReportLab.
-   - Transparently rehydrates from persistent tiers whenever local files are missing.
+STRICT DESIGN MANDATE:
+- Neon PostgreSQL `stored_files` is the SOLE durable source of truth.
+- Render container filesystems are strictly ephemeral and may be wiped at any time.
+- Working files created for PaddleOCR / OpenCV / ReportLab are temporary working copies
+  and must be cleaned up when processing completes.
+- NO external object-storage dependencies (no Supabase, S3, R2, Firebase).
 """
 
 import os
 import re
+import io
+import tempfile
 import logging
 from pathlib import Path
-from typing import Optional, Union, Tuple
+from typing import Optional, Union, Tuple, BinaryIO
 from datetime import datetime
 
 from backend.config import settings, BACKEND_DIR
@@ -35,22 +33,40 @@ SAFE_KEY_PATTERN = re.compile(r'^[a-zA-Z0-9_\-\./]+$')
 def normalize_storage_key(raw_path_or_key: str) -> str:
     """
     Normalizes and validates a storage key or filesystem path.
-    Prevents directory traversal and sanitizes separators.
+    Prevents directory traversal, absolute system path access, and sanitizes separators.
+
+    Permitted namespaces:
+        - inspections/{inspection_id}/{filename}
+        - reports/{filename}
+        - Prefixed with uploads/ or generated_reports/ (which gets stripped)
 
     Examples:
         '/uploads/inspections/123/front.jpg' -> 'inspections/123/front.jpg'
         'uploads\\inspections\\123\\front.jpg' -> 'inspections/123/front.jpg'
-        'inspections/123/front.jpg'          -> 'inspections/123/front.jpg'
+        'reports/LM_Report_123.pdf'          -> 'reports/LM_Report_123.pdf'
     """
     if not raw_path_or_key or not isinstance(raw_path_or_key, str):
         raise ValueError("Storage key must be a non-empty string.")
 
-    # Remove drive letters if present (e.g. C:)
-    cleaned = re.sub(r'^[a-zA-Z]:', '', raw_path_or_key.strip())
+    raw = raw_path_or_key.strip()
+
+    # Reject null bytes
+    if '\x00' in raw:
+        raise ValueError("Null bytes are forbidden in storage keys.")
+
+    # Reject Windows drive letters (e.g. C:\Windows\...)
+    if re.match(r'^[a-zA-Z]:', raw):
+        raise ValueError(f"Drive letters / absolute system paths are forbidden in storage keys: {raw!r}")
+
     # Normalize backslashes to forward slashes
-    cleaned = cleaned.replace('\\', '/')
-    # Strip leading slashes
-    cleaned = cleaned.lstrip('/')
+    cleaned = raw.replace('\\', '/')
+
+    # Check for absolute paths that are NOT under uploads/ or generated_reports/
+    if cleaned.startswith('/'):
+        stripped_leading = cleaned.lstrip('/')
+        if not (stripped_leading.startswith('uploads/') or stripped_leading.startswith('generated_reports/')):
+            raise ValueError(f"Absolute system paths are forbidden in storage keys: {raw!r}")
+        cleaned = stripped_leading
 
     # Strip standard prefix aliases
     if cleaned.startswith('uploads/'):
@@ -60,45 +76,40 @@ def normalize_storage_key(raw_path_or_key: str) -> str:
 
     # Guard against directory traversal attacks
     parts = cleaned.split('/')
-    if '..' in parts or '.' in parts:
-        raise ValueError(f"Directory traversal sequences are forbidden in storage keys: {raw_path_or_key!r}")
+    if any(p in ('..', '.') for p in parts):
+        raise ValueError(f"Directory traversal sequences are forbidden in storage keys: {raw!r}")
 
     if len(cleaned) > MAX_KEY_LENGTH or not SAFE_KEY_PATTERN.match(cleaned):
-        raise ValueError(f"Invalid characters or excessive length in storage key: {raw_path_or_key!r}")
+        raise ValueError(f"Invalid characters or excessive length in storage key: {raw!r}")
 
     return cleaned
 
 
 class DurableStorageService:
     """
-    Unified persistent storage provider with automatic multi-tier fallback:
-    Local Disk Cache <-> PostgreSQL StoredFiles <-> Supabase Storage Bucket
+    Unified persistent storage provider using Neon PostgreSQL StoredFile exclusively.
+    Local working files are strictly ephemeral and used only for active processing.
     """
 
     def __init__(self):
-        self.supabase_url = (getattr(settings, "SUPABASE_URL", None) or "").strip()
-        self.supabase_key = (getattr(settings, "SUPABASE_KEY", None) or "").strip()
-        self.bucket_images = getattr(settings, "SUPABASE_BUCKET_IMAGES", "inspection-images")
-        self.bucket_reports = getattr(settings, "SUPABASE_BUCKET_REPORTS", "inspection-reports")
-        self.is_supabase_configured = bool(self.supabase_url and self.supabase_key)
-
         _cfg_uploads = Path(settings.UPLOAD_DIR)
         self.base_uploads_dir = _cfg_uploads if _cfg_uploads.is_absolute() else (BACKEND_DIR.parent / _cfg_uploads)
         self.base_uploads_dir.mkdir(parents=True, exist_ok=True)
 
-        if self.is_supabase_configured:
-            logger.info(f"[STORAGE_INIT] Supabase Storage configured: {self.supabase_url}")
-        else:
-            logger.info("[STORAGE_INIT] Supabase not configured. Using Neon PostgreSQL StoredFile persistent tier.")
+        # Ephemeral temp directory for OCR & inference working copies
+        self.temp_working_dir = Path(tempfile.gettempdir()) / "niriksha_working"
+        self.temp_working_dir.mkdir(parents=True, exist_ok=True)
 
-    # ── Tier 1: Local Disk Cache Helpers ─────────────────────────────────────
+        logger.info("[STORAGE_INIT] DurableStorageService initialized with Neon PostgreSQL StoredFile tier.")
+
+    # ── Local Cache / Temp Paths ─────────────────────────────────────────────
 
     def _get_local_cache_path(self, key: str) -> Path:
-        """Resolves the safe local cache path for a key."""
+        """Resolves the local path for a key."""
         clean_key = normalize_storage_key(key)
         return self.base_uploads_dir / clean_key
 
-    # ── Tier 2: Database Blob Storage (Neon PostgreSQL) ──────────────────────
+    # ── Database Blob Storage (Neon PostgreSQL StoredFile) ────────────────────
 
     def _db_save_blob(self, key: str, data: bytes, content_type: str) -> bool:
         """Stores binary payload in PostgreSQL stored_files table."""
@@ -129,7 +140,7 @@ class DurableStorageService:
             finally:
                 db.close()
         except Exception as e:
-            logger.error(f"[STORAGE_DB_SAVE_ERR] Failed to persist key '{key}' to DB: {e}", exc_info=True)
+            logger.error(f"[STORAGE_DB_SAVE_ERR] Failed to persist key '{key}' to Neon DB: {e}", exc_info=True)
             return False
 
     def _db_get_blob(self, key: str) -> Optional[Tuple[bytes, str]]:
@@ -143,11 +154,16 @@ class DurableStorageService:
                 rec = db.query(StoredFile).filter(StoredFile.storage_key == key).first()
                 if rec and rec.file_data:
                     return bytes(rec.file_data), rec.content_type
+                # Fallback check: if key lacks or includes "reports/" prefix
+                alt_key = f"reports/{key}" if not key.startswith("reports/") else key[len("reports/"):]
+                alt_rec = db.query(StoredFile).filter(StoredFile.storage_key == alt_key).first()
+                if alt_rec and alt_rec.file_data:
+                    return bytes(alt_rec.file_data), alt_rec.content_type
                 return None
             finally:
                 db.close()
         except Exception as e:
-            logger.error(f"[STORAGE_DB_GET_ERR] Failed to read key '{key}' from DB: {e}", exc_info=True)
+            logger.error(f"[STORAGE_DB_GET_ERR] Failed to read key '{key}' from Neon DB: {e}", exc_info=True)
             return None
 
     def _db_delete_blob(self, key: str) -> bool:
@@ -159,58 +175,16 @@ class DurableStorageService:
             db = SessionLocal()
             try:
                 db.query(StoredFile).filter(StoredFile.storage_key == key).delete()
+                # Also delete alt key if any
+                alt_key = f"reports/{key}" if not key.startswith("reports/") else key[len("reports/"):]
+                db.query(StoredFile).filter(StoredFile.storage_key == alt_key).delete()
                 db.commit()
                 return True
             finally:
                 db.close()
         except Exception as e:
-            logger.error(f"[STORAGE_DB_DEL_ERR] Failed to delete key '{key}' from DB: {e}", exc_info=True)
+            logger.error(f"[STORAGE_DB_DEL_ERR] Failed to delete key '{key}' from Neon DB: {e}", exc_info=True)
             return False
-
-    # ── Tier 3: Supabase Object Storage ──────────────────────────────────────
-
-    def _supabase_upload(self, key: str, data: bytes, content_type: str) -> bool:
-        """Uploads file to Supabase Storage bucket via REST API."""
-        if not self.is_supabase_configured:
-            return False
-        try:
-            import httpx
-            bucket = self.bucket_reports if key.startswith("reports/") else self.bucket_images
-            url = f"{self.supabase_url}/storage/v1/object/{bucket}/{key}"
-            headers = {
-                "Authorization": f"Bearer {self.supabase_key}",
-                "Content-Type": content_type,
-                "x-upsert": "true"
-            }
-            resp = httpx.post(url, headers=headers, content=data, timeout=15.0)
-            if resp.status_code in (200, 201):
-                logger.info(f"[SUPABASE_UPLOAD_OK] Synced '{key}' to Supabase bucket '{bucket}'")
-                return True
-            else:
-                logger.warning(f"[SUPABASE_UPLOAD_WARN] Status {resp.status_code}: {resp.text}")
-                return False
-        except Exception as e:
-            logger.warning(f"[SUPABASE_UPLOAD_FAIL] Failed to sync to Supabase: {e}")
-            return False
-
-    def _supabase_download(self, key: str) -> Optional[bytes]:
-        """Downloads file from Supabase Storage bucket via REST API."""
-        if not self.is_supabase_configured:
-            return None
-        try:
-            import httpx
-            bucket = self.bucket_reports if key.startswith("reports/") else self.bucket_images
-            url = f"{self.supabase_url}/storage/v1/object/{bucket}/{key}"
-            headers = {
-                "Authorization": f"Bearer {self.supabase_key}"
-            }
-            resp = httpx.get(url, headers=headers, timeout=15.0)
-            if resp.status_code == 200:
-                return resp.content
-            return None
-        except Exception as e:
-            logger.warning(f"[SUPABASE_DOWNLOAD_FAIL] Failed to download '{key}': {e}")
-            return None
 
     # ── Public Storage API ───────────────────────────────────────────────────
 
@@ -221,7 +195,7 @@ class DurableStorageService:
         content_type: str = "image/jpeg"
     ) -> str:
         """
-        Persists a file across durable storage tiers and updates the local disk cache.
+        Persists a file to Neon PostgreSQL StoredFile and maintains local cache copy.
         Returns the standard relative URL path (e.g. '/uploads/inspections/...').
         """
         clean_key = normalize_storage_key(raw_key)
@@ -232,31 +206,29 @@ class DurableStorageService:
         with open(local_path, "wb") as f:
             f.write(content)
 
-        # 2. Persist to Neon PostgreSQL
-        self._db_save_blob(clean_key, content, content_type)
-
-        # 3. Persist to Supabase if configured
-        if self.is_supabase_configured:
-            self._supabase_upload(clean_key, content, content_type)
+        # 2. Persist durably to Neon PostgreSQL
+        saved_db = self._db_save_blob(clean_key, content, content_type)
+        if not saved_db:
+            logger.warning(f"[STORAGE_WARN] Could not persist '{clean_key}' to Neon StoredFile table.")
 
         return f"/uploads/{clean_key}"
 
     def get_file(self, raw_key: str) -> Optional[bytes]:
         """
-        Retrieves file bytes from local disk cache, DB stored_files, or Supabase.
-        Rehydrates local disk cache automatically if found in persistent storage.
+        Retrieves file bytes from local cache or directly from Neon DB stored_files.
+        Rehydrates local disk cache automatically if found in Neon.
         """
         clean_key = normalize_storage_key(raw_key)
         local_path = self._get_local_cache_path(clean_key)
 
-        # Fast path: local disk cache hit
+        # Fast path: local cache hit
         if local_path.exists() and local_path.is_file():
             try:
                 return local_path.read_bytes()
             except Exception as e:
                 logger.warning(f"[STORAGE_LOCAL_READ_FAIL] Failed to read {local_path}: {e}")
 
-        # Persistent path 1: Neon DB stored_files
+        # Durable path: Neon DB stored_files
         db_res = self._db_get_blob(clean_key)
         if db_res:
             data, _ = db_res
@@ -264,31 +236,26 @@ class DurableStorageService:
             try:
                 local_path.parent.mkdir(parents=True, exist_ok=True)
                 local_path.write_bytes(data)
-                logger.info(f"[STORAGE_REHYDRATED] Rehydrated local cache for '{clean_key}' from DB")
+                logger.info(f"[STORAGE_REHYDRATED] Rehydrated local cache for '{clean_key}' from Neon DB")
             except Exception as e:
                 logger.warning(f"[STORAGE_CACHE_WRITE_FAIL] {e}")
             return data
 
-        # Persistent path 2: Supabase Storage
-        if self.is_supabase_configured:
-            sb_data = self._supabase_download(clean_key)
-            if sb_data:
-                try:
-                    local_path.parent.mkdir(parents=True, exist_ok=True)
-                    local_path.write_bytes(sb_data)
-                    # Also write to DB for faster future access
-                    self._db_save_blob(clean_key, sb_data, "image/jpeg")
-                    logger.info(f"[STORAGE_REHYDRATED] Rehydrated local cache for '{clean_key}' from Supabase")
-                except Exception as e:
-                    logger.warning(f"[STORAGE_CACHE_WRITE_FAIL] {e}")
-                return sb_data
+        return None
 
+    def get_file_stream(self, raw_key: str) -> Optional[io.BytesIO]:
+        """
+        Returns a binary stream of the file content from Neon DB or local cache.
+        """
+        data = self.get_file(raw_key)
+        if data is not None:
+            return io.BytesIO(data)
         return None
 
     def get_local_working_copy(self, raw_path_or_key: str) -> Optional[Path]:
         """
         Ensures a valid local file exists on disk for inference / processing.
-        If the file was lost due to container restart, rehydrates it from durable storage.
+        If the local file was lost due to Render container restart, rehydrates it from Neon.
         Returns Path to the local file, or None if unavailable anywhere.
         """
         if not raw_path_or_key:
@@ -312,15 +279,45 @@ class DurableStorageService:
         if local_path.exists() and local_path.is_file():
             return local_path
 
-        # Attempt to pull from durable storage
+        # Pull from Neon DB durable storage
         data = self.get_file(clean_key)
         if data is not None and local_path.exists() and local_path.is_file():
             return local_path
 
         return None
 
+    def create_temp_working_file(self, raw_path_or_key: str, suffix: str = ".jpg") -> Optional[Path]:
+        """
+        Creates a dedicated ephemeral working file in temp_working_dir from Neon storage.
+        Caller is expected to call cleanup_local_working_copy(path) when done.
+        """
+        data = self.get_file(raw_path_or_key)
+        if data is None:
+            return None
+
+        import uuid
+        temp_file = self.temp_working_dir / f"ocr_{uuid.uuid4().hex}{suffix}"
+        temp_file.write_bytes(data)
+        return temp_file
+
+    def cleanup_local_working_copy(self, path: Union[str, Path]) -> None:
+        """
+        Removes an ephemeral working file if it resides in temp_working_dir.
+        """
+        if not path:
+            return
+        try:
+            p = Path(path)
+            if p.exists() and p.is_file():
+                # Only delete if inside temp_working_dir
+                if self.temp_working_dir in p.parents or "ocr_" in p.name:
+                    p.unlink(missing_ok=True)
+                    logger.debug(f"[STORAGE_CLEANUP] Deleted ephemeral working copy: {p}")
+        except Exception as e:
+            logger.warning(f"[STORAGE_CLEANUP_ERR] Could not delete {path}: {e}")
+
     def file_exists(self, raw_key: str) -> bool:
-        """Returns True if the file exists in any storage tier."""
+        """Returns True if the file exists in Neon DB or local cache."""
         try:
             clean_key = normalize_storage_key(raw_key)
         except ValueError:
@@ -333,13 +330,10 @@ class DurableStorageService:
         if self._db_get_blob(clean_key) is not None:
             return True
 
-        if self.is_supabase_configured and self._supabase_download(clean_key) is not None:
-            return True
-
         return False
 
     def delete_file(self, raw_key: str) -> bool:
-        """Deletes file from local cache, PostgreSQL stored_files, and Supabase."""
+        """Deletes file from local cache and Neon PostgreSQL stored_files."""
         try:
             clean_key = normalize_storage_key(raw_key)
         except ValueError:
@@ -355,17 +349,6 @@ class DurableStorageService:
 
         # 2. Database
         self._db_delete_blob(clean_key)
-
-        # 3. Supabase
-        if self.is_supabase_configured:
-            try:
-                import httpx
-                bucket = self.bucket_reports if clean_key.startswith("reports/") else self.bucket_images
-                url = f"{self.supabase_url}/storage/v1/object/{bucket}/{clean_key}"
-                headers = {"Authorization": f"Bearer {self.supabase_key}"}
-                httpx.delete(url, headers=headers, timeout=10.0)
-            except Exception:
-                pass
 
         return True
 

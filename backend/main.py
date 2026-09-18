@@ -2092,17 +2092,22 @@ def get_image_binary(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Streams original binary image file for viewing."""
+    """Streams original binary image file for viewing from durable Neon storage."""
     img = db.query(ProductImage).filter(ProductImage.id == image_id).first()
     if not img:
         raise HTTPException(status_code=404, detail="Image record not found")
     verify_inspection_access(img.inspection, current_user, allow_supervisory=True)
 
-    abs_path = storage_service.get_local_working_copy(img.file_path)
-    if not abs_path or not abs_path.exists():
+    img_bytes = storage_service.get_file(img.file_path)
+    if not img_bytes:
         raise HTTPException(status_code=404, detail="Image file not found in storage")
 
-    return FileResponse(str(abs_path), media_type=img.mime_type or "image/jpeg")
+    safe_name = Path(img.file_path).name or f"image_{image_id}.jpg"
+    return Response(
+        content=img_bytes,
+        media_type=img.mime_type or "image/jpeg",
+        headers={"Content-Disposition": f'inline; filename="{safe_name}"'}
+    )
 
 @app.delete("/api/images/{image_id}", status_code=status.HTTP_200_OK, tags=["Images"])
 def delete_inspection_image(
@@ -3270,17 +3275,19 @@ def generate_inspection_report(
     )
 
     # Persist report files to durable storage service
+    safe_insp_num = (inspection.inspection_number or "UNKNOWN").replace("-", "_").replace("/", "_")
+    durable_pdf_key = f"reports/LM_Report_{safe_insp_num}_v{new_version}.pdf"
+    durable_docx_key = f"reports/LM_Report_{safe_insp_num}_v{new_version}.docx"
     try:
-        safe_insp_num = (inspection.inspection_number or "UNKNOWN").replace("-", "_").replace("/", "_")
         if pdf_path and Path(pdf_path).exists():
             storage_service.save_file(
-                f"reports/LM_Report_{safe_insp_num}_v{new_version}.pdf",
+                durable_pdf_key,
                 Path(pdf_path).read_bytes(),
                 "application/pdf"
             )
         if docx_path and Path(docx_path).exists():
             storage_service.save_file(
-                f"reports/LM_Report_{safe_insp_num}_v{new_version}.docx",
+                durable_docx_key,
                 Path(docx_path).read_bytes(),
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
@@ -3294,8 +3301,8 @@ def generate_inspection_report(
 
     if existing_report:
         existing_report.report_version = new_version
-        existing_report.pdf_path = pdf_path
-        existing_report.docx_path = docx_path
+        existing_report.pdf_path = durable_pdf_key
+        existing_report.docx_path = durable_docx_key
         existing_report.pdf_hash = pdf_hash
         existing_report.legal_safety_statement = safety_statement
         existing_report.generated_at = datetime.utcnow()
@@ -3305,8 +3312,8 @@ def generate_inspection_report(
             id=report_record_id,
             inspection_id=real_inspection_id,
             report_version=new_version,
-            pdf_path=pdf_path,
-            docx_path=docx_path,
+            pdf_path=durable_pdf_key,
+            docx_path=durable_docx_key,
             pdf_hash=pdf_hash,
             legal_safety_statement=safety_statement
         )
@@ -3363,18 +3370,18 @@ def stream_inspection_report_pdf(
         generate_inspection_report(inspection.id, db, current_user)
         report_record = db.query(Report).filter(Report.inspection_id == inspection.id).first()
 
-    pdf_file = storage_service.get_local_working_copy(report_record.pdf_path) if report_record and report_record.pdf_path else None
-    if not pdf_file or not pdf_file.exists():
+    pdf_bytes = storage_service.get_file(report_record.pdf_path) if report_record and report_record.pdf_path else None
+    if not pdf_bytes:
         generate_inspection_report(inspection.id, db, current_user, force_regenerate=True)
         report_record = db.query(Report).filter(Report.inspection_id == inspection.id).first()
-        pdf_file = storage_service.get_local_working_copy(report_record.pdf_path) if report_record and report_record.pdf_path else None
+        pdf_bytes = storage_service.get_file(report_record.pdf_path) if report_record and report_record.pdf_path else None
 
-    if not pdf_file or not pdf_file.exists():
+    if not pdf_bytes:
         raise HTTPException(status_code=404, detail="Generated PDF report file not found in storage")
 
     filename = f"LM_Report_{inspection.inspection_number}.pdf"
-    return FileResponse(
-        str(pdf_file),
+    return Response(
+        content=pdf_bytes,
         media_type="application/pdf",
         headers={"Content-Disposition": f"inline; filename={filename}"}
     )
@@ -3400,19 +3407,19 @@ def stream_inspection_report_docx(
         generate_inspection_report(inspection.id, db, current_user)
         report_record = db.query(Report).filter(Report.inspection_id == inspection.id).first()
 
-    docx_file = storage_service.get_local_working_copy(report_record.docx_path) if report_record and report_record.docx_path else None
-    if not docx_file or not docx_file.exists():
+    docx_bytes = storage_service.get_file(report_record.docx_path) if report_record and report_record.docx_path else None
+    if not docx_bytes:
         generate_inspection_report(inspection.id, db, current_user, force_regenerate=True)
         report_record = db.query(Report).filter(Report.inspection_id == inspection.id).first()
-        docx_file = storage_service.get_local_working_copy(report_record.docx_path) if report_record and report_record.docx_path else None
+        docx_bytes = storage_service.get_file(report_record.docx_path) if report_record and report_record.docx_path else None
 
-    if not docx_file or not docx_file.exists():
+    if not docx_bytes:
         raise HTTPException(status_code=404, detail="Generated DOCX report file not found in storage")
 
     safe_insp_num = (inspection.inspection_number or "UNKNOWN").replace("-", "_").replace("/", "_")
     filename = f"LM_Report_{safe_insp_num}.docx"
-    return FileResponse(
-        str(docx_file),
+    return Response(
+        content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )

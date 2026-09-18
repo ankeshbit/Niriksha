@@ -1,18 +1,27 @@
 """
 tests/test_image_storage_and_safety.py
 
-Comprehensive tests for NiriKsha Image Storage Architecture & Safety Fixes:
-A. image exists -> OCR succeeds
-B. image missing -> OCR FAILED with SOURCE_IMAGE_UNAVAILABLE
-C. worker/container restart -> durable image remains available
-D. two-image OCR -> both images available and processed
-E. duplicate OCR job -> no duplicate results
-F. unauthorized image access -> rejected (RBAC 403)
-G. invalid image path / object key -> rejected (Path traversal prevention)
+Phase 11 Production Automated Test Suite for NiriKsha:
+Durable Neon PostgreSQL Storage Architecture & Asynchronous OCR Safety Fixes.
+
+Covers:
+TEST A — Durable image upload (ProductImage + StoredFile created in Neon)
+TEST B — OCR with durable image (PaddleOCR execution)
+TEST C — Missing image deterministic failure (SOURCE_IMAGE_UNAVAILABLE)
+TEST D — Simulated Render restart (purge local disk, OCR still succeeds)
+TEST E — Two-image OCR (both images rehydrated and processed)
+TEST F — Duplicate OCR jobs (unique active-job constraint prevents duplicates)
+TEST G — Unauthorized image access (RBAC enforcement 403/404)
+TEST H — Path traversal rejection (../../etc/passwd, /etc/passwd, ..\\..\\...)
+TEST I — Report persistence (PDF/DOCX downloadable from Neon after local wipe)
+TEST J — Evidence persistence (evidence rehydrates from Neon for report generation)
 """
 
+import os
+import io
 import uuid
 import time
+import shutil
 import pytest
 from pathlib import Path
 from datetime import datetime
@@ -29,6 +38,7 @@ from backend.models import (
     Product,
     ProductImage,
     Declaration,
+    Report,
     StoredFile
 )
 from backend.storage_service import storage_service, normalize_storage_key
@@ -38,7 +48,7 @@ from backend.config import settings
 
 client = TestClient(app)
 
-# 1x1 test pixel JPEG bytes
+# Genuine minimal 1x1 test JPEG binary payload
 TINY_JPEG_BYTES = (
     b'\xff\xd8\xff\xe0\x00\x10JFIF\x00\x01\x01\x01\x00H\x00H\x00\x00'
     b'\xff\xdb\x00C\x00\x08\x06\x06\x07\x06\x05\x08\x07\x07\x07\t\t'
@@ -141,13 +151,47 @@ def create_test_inspection(db, inspector_officer_id=None):
 
 
 # ==============================================================================
-# TEST A: image exists -> OCR succeeds
+# TEST A: Durable image upload
 # ==============================================================================
-def test_a_image_exists_ocr_succeeds():
+def test_a_durable_image_upload(auth_headers):
     db = SessionLocal()
     try:
         insp_id = create_test_inspection(db)
-        key = f"inspections/{insp_id}/front_test_a.jpg"
+    finally:
+        db.close()
+
+    # Upload genuine image through HTTP endpoint
+    files = {"file": ("front_panel.jpg", io.BytesIO(TINY_JPEG_BYTES), "image/jpeg")}
+    data = {"view_type": "front"}
+    r = client.post(f"/api/inspections/{insp_id}/images", files=files, data=data, headers=auth_headers)
+    assert r.status_code == 201, f"Upload failed: {r.text}"
+    img_resp = r.json()
+
+    # Verify ProductImage metadata
+    assert img_resp["view_type"] == "front"
+    assert img_resp["file_path"].startswith("/uploads/inspections/")
+
+    # Verify StoredFile exists in Neon PostgreSQL
+    db = SessionLocal()
+    try:
+        clean_key = normalize_storage_key(img_resp["file_path"])
+        stored_file = db.query(StoredFile).filter(StoredFile.storage_key == clean_key).first()
+        assert stored_file is not None, "StoredFile record must exist in database"
+        assert bytes(stored_file.file_data) == TINY_JPEG_BYTES, "StoredFile must contain actual image bytes"
+        assert stored_file.file_size == len(TINY_JPEG_BYTES)
+        assert stored_file.content_type == "image/jpeg"
+    finally:
+        db.close()
+
+
+# ==============================================================================
+# TEST B: OCR with durable image
+# ==============================================================================
+def test_b_ocr_with_durable_image():
+    db = SessionLocal()
+    try:
+        insp_id = create_test_inspection(db)
+        key = f"inspections/{insp_id}/front_test_b.jpg"
         rel_path = storage_service.save_file(key, TINY_JPEG_BYTES, "image/jpeg")
 
         img = ProductImage(
@@ -193,13 +237,13 @@ def test_a_image_exists_ocr_succeeds():
 
 
 # ==============================================================================
-# TEST B: image missing -> OCR FAILED with SOURCE_IMAGE_UNAVAILABLE
+# TEST C: Missing image deterministic failure (SOURCE_IMAGE_UNAVAILABLE)
 # ==============================================================================
-def test_b_image_missing_ocr_failed_source_image_unavailable():
+def test_c_missing_image_deterministic_failure():
     db = SessionLocal()
     try:
         insp_id = create_test_inspection(db)
-        # Intentionally non-existent image path
+        # Non-existent storage path
         ghost_path = f"/uploads/inspections/{insp_id}/non_existent_ghost_image.jpg"
 
         img = ProductImage(
@@ -246,9 +290,9 @@ def test_b_image_missing_ocr_failed_source_image_unavailable():
 
 
 # ==============================================================================
-# TEST C: worker/container restart -> durable image remains available
+# TEST D: Simulated Render restart (purge local disk, OCR still succeeds)
 # ==============================================================================
-def test_c_container_restart_durable_image_remains_available():
+def test_d_simulated_render_restart_resilience():
     insp_id = str(uuid.uuid4())
     key = f"inspections/{insp_id}/restart_test.jpg"
 
@@ -265,13 +309,13 @@ def test_c_container_restart_durable_image_remains_available():
         db.close()
 
     # 3. Simulate Render Container Restart / Wiped Ephemeral Disk:
-    # Remove local cache file from disk completely
+    # Delete local cache file from disk completely
     local_path = storage_service._get_local_cache_path(key)
     if local_path.exists():
         local_path.unlink()
     assert not local_path.exists(), "Local cache file must be deleted to simulate restart"
 
-    # 4. Request working copy after restart
+    # 4. Request working copy after restart — must rehydrate from Neon
     rehydrated_path = storage_service.get_local_working_copy(rel_path)
     assert rehydrated_path is not None
     assert rehydrated_path.exists()
@@ -279,9 +323,9 @@ def test_c_container_restart_durable_image_remains_available():
 
 
 # ==============================================================================
-# TEST D: two-image OCR -> both images available
+# TEST E: Two-image OCR (both images processed)
 # ==============================================================================
-def test_d_two_image_ocr_both_images_available():
+def test_e_two_image_ocr():
     db = SessionLocal()
     try:
         insp_id = create_test_inspection(db)
@@ -334,9 +378,9 @@ def test_d_two_image_ocr_both_images_available():
 
 
 # ==============================================================================
-# TEST E: duplicate OCR job -> no duplicate results
+# TEST F: Duplicate OCR jobs prevented
 # ==============================================================================
-def test_e_duplicate_ocr_job_no_duplicate_results(auth_headers):
+def test_f_duplicate_ocr_jobs_prevented(auth_headers):
     db = SessionLocal()
     try:
         insp_id = create_test_inspection(db)
@@ -381,12 +425,11 @@ def test_e_duplicate_ocr_job_no_duplicate_results(auth_headers):
 
 
 # ==============================================================================
-# TEST F: unauthorized image access -> rejected
+# TEST G: Unauthorized image access rejected
 # ==============================================================================
-def test_f_unauthorized_image_access_rejected(auth_headers, other_officer_auth_headers):
+def test_g_unauthorized_image_access_rejected(auth_headers, other_officer_auth_headers):
     db = SessionLocal()
     try:
-        # Create inspection owned by Officer A (SEED_OFFICER_ID)
         insp_id = create_test_inspection(db, settings.SEED_OFFICER_ID)
         key = f"inspections/{insp_id}/private_evidence.jpg"
         rel_path = storage_service.save_file(key, TINY_JPEG_BYTES, "image/jpeg")
@@ -406,7 +449,7 @@ def test_f_unauthorized_image_access_rejected(auth_headers, other_officer_auth_h
     finally:
         db.close()
 
-    # Officer A (authorized) can access
+    # Officer A (authorized owner) can access
     r_owner = client.get(f"/api/images/{img_id}/file", headers=auth_headers)
     assert r_owner.status_code == 200
 
@@ -416,12 +459,15 @@ def test_f_unauthorized_image_access_rejected(auth_headers, other_officer_auth_h
 
 
 # ==============================================================================
-# TEST G: invalid image path/object key -> rejected
+# TEST H: Path traversal rejection
 # ==============================================================================
-def test_g_invalid_image_path_or_key_rejected():
-    # Path traversal attempts
+def test_h_path_traversal_rejection():
+    # Attempt directory traversal
     with pytest.raises(ValueError, match="Directory traversal"):
         normalize_storage_key("../../etc/passwd")
+
+    with pytest.raises(ValueError, match="Directory traversal"):
+        normalize_storage_key("..\\..\\...")
 
     with pytest.raises(ValueError, match="Directory traversal"):
         normalize_storage_key("inspections/../../../secret.env")
@@ -429,9 +475,132 @@ def test_g_invalid_image_path_or_key_rejected():
     with pytest.raises(ValueError, match="Directory traversal"):
         normalize_storage_key("uploads/././inspections")
 
-    # Excessive length / illegal characters
+    # Attempt absolute system path access
     with pytest.raises(ValueError):
-        normalize_storage_key("inspections/name<script>alert(1)</script>.jpg")
+        normalize_storage_key("/etc/passwd")
 
     with pytest.raises(ValueError):
+        normalize_storage_key("C:\\Windows\\System32\\cmd.exe")
+
+    # Attempt null byte injection
+    with pytest.raises(ValueError, match="Null bytes"):
+        normalize_storage_key("inspections/123/img.jpg\x00.png")
+
+    # Attempt excessive length
+    with pytest.raises(ValueError):
         normalize_storage_key("a" * 600)
+
+
+# ==============================================================================
+# TEST I: Report persistence across local file deletion
+# ==============================================================================
+def test_i_report_persistence_across_local_wipe(auth_headers):
+    db = SessionLocal()
+    try:
+        insp_id = create_test_inspection(db)
+        key = f"inspections/{insp_id}/panel.jpg"
+        storage_service.save_file(key, TINY_JPEG_BYTES, "image/jpeg")
+
+        img = ProductImage(
+            id=str(uuid.uuid4()),
+            inspection_id=insp_id,
+            file_path=f"/uploads/{key}",
+            view_type="front",
+            sequence_order=1,
+            processing_status="QUALITY_CHECKED",
+            created_at=datetime.utcnow()
+        )
+        db.add(img)
+        db.commit()
+    finally:
+        db.close()
+
+    # 1. Generate Report
+    r_meta = client.get(f"/api/inspections/{insp_id}/report", headers=auth_headers)
+    assert r_meta.status_code == 200, f"Report metadata generation failed: {r_meta.text}"
+
+    # Verify Report record exists in DB with stored files
+    db = SessionLocal()
+    try:
+        rep = db.query(Report).filter(Report.inspection_id == insp_id).first()
+        assert rep is not None
+        assert rep.pdf_path is not None
+        pdf_key = rep.pdf_path
+        # Verify stored_file in Neon
+        stored_pdf = db.query(StoredFile).filter(StoredFile.storage_key == normalize_storage_key(pdf_key)).first()
+        assert stored_pdf is not None, "Report PDF must be persisted in StoredFile table"
+        assert len(stored_pdf.file_data) > 0
+    finally:
+        db.close()
+
+    # 2. Simulate container restart by wiping local generated_reports and uploads
+    rep_dir = Path("generated_reports")
+    if rep_dir.exists():
+        for f in rep_dir.glob("*.pdf"):
+            try:
+                f.unlink()
+            except Exception:
+                pass
+    local_pdf = storage_service._get_local_cache_path(pdf_key)
+    if local_pdf.exists():
+        local_pdf.unlink()
+
+    # 3. Stream PDF report from API — must retrieve from Neon storage
+    r_pdf = client.get(f"/api/inspections/{insp_id}/report/pdf", headers=auth_headers)
+    assert r_pdf.status_code == 200
+    assert r_pdf.headers.get("content-type") == "application/pdf"
+    assert r_pdf.content.startswith(b"%PDF-"), "Must stream valid PDF bytes from Neon"
+
+    # 4. Stream DOCX report from API — must retrieve from Neon storage
+    r_docx = client.get(f"/api/inspections/{insp_id}/report/docx", headers=auth_headers)
+    assert r_docx.status_code == 200
+    assert "openxmlformats" in r_docx.headers.get("content-type", "")
+    assert r_docx.content.startswith(b"PK"), "Must stream valid DOCX bytes from Neon"
+
+
+# ==============================================================================
+# TEST J: Evidence persistence across local file deletion
+# ==============================================================================
+def test_j_evidence_persistence_across_local_wipe(auth_headers):
+    db = SessionLocal()
+    try:
+        insp_id = create_test_inspection(db)
+        key = f"inspections/{insp_id}/evidence_image.jpg"
+        rel_path = storage_service.save_file(key, TINY_JPEG_BYTES, "image/jpeg")
+
+        img_id = str(uuid.uuid4())
+        img = ProductImage(
+            id=img_id,
+            inspection_id=insp_id,
+            file_path=rel_path,
+            view_type="front",
+            sequence_order=1,
+            processing_status="QUALITY_CHECKED",
+            created_at=datetime.utcnow()
+        )
+        db.add(img)
+        db.commit()
+    finally:
+        db.close()
+
+    # 1. Delete local image copy from disk to simulate container restart
+    local_path = storage_service._get_local_cache_path(key)
+    if local_path.exists():
+        local_path.unlink()
+    assert not local_path.exists()
+
+    # 2. Retrieve image binary through API — must rehydrate from Neon
+    r_img = client.get(f"/api/images/{img_id}/file", headers=auth_headers)
+    assert r_img.status_code == 200
+    assert r_img.content == TINY_JPEG_BYTES
+
+    # 3. Verify report components can rehydrate and render the evidence image
+    from backend.report_components import build_package_images_evidence_section
+    db = SessionLocal()
+    try:
+        insp = db.query(Inspection).filter(Inspection.id == insp_id).first()
+        images = db.query(ProductImage).filter(ProductImage.inspection_id == insp_id).all()
+        flowables = build_package_images_evidence_section(images, Path("."))
+        assert len(flowables) > 0
+    finally:
+        db.close()

@@ -438,8 +438,13 @@ class OCRJobService:
                     db.commit()
                 db.close()
 
-                abs_path = storage_service.get_local_working_copy(img_file_path)
-                if not abs_path or not abs_path.exists():
+                # Rehydrate image to ephemeral working copy from Neon storage
+                temp_file = storage_service.create_temp_working_file(img_file_path)
+                if not temp_file or not temp_file.exists():
+                    # Fallback to get_local_working_copy for test fixtures / local paths
+                    temp_file = storage_service.get_local_working_copy(img_file_path)
+
+                if not temp_file or not temp_file.exists():
                     logger.error(
                         f"[SOURCE_IMAGE_UNAVAILABLE] job_id={job_id} inspection_id={inspection_id} "
                         f"img_id={img_id} view_type={view_type} path={img_file_path}"
@@ -468,25 +473,29 @@ class OCRJobService:
                         db_fail.close()
                     return False
 
-                t_img_start = time.time()
-                rss_pre = _get_process_rss_mb()
+                try:
+                    t_img_start = time.time()
+                    rss_pre = _get_process_rss_mb()
 
-                # Process image through ModularOCRService (using MAX_OCR_DIMENSION=800)
-                ocr_data = ocr_service.process_image(str(abs_path), image_id=img_id)
-                t_img_dur = time.time() - t_img_start
-                rss_post = _get_process_rss_mb()
+                    # Process image through ModularOCRService (using MAX_OCR_DIMENSION=800)
+                    ocr_data = ocr_service.process_image(str(temp_file), image_id=img_id)
+                    t_img_dur = time.time() - t_img_start
+                    rss_post = _get_process_rss_mb()
 
-                logger.info(
-                    f"[OCR_TELEMETRY] job_id={job_id} img_idx={idx} img_id={img_id} "
-                    f"duration={t_img_dur:.2f}s boxes={len(ocr_data.text_boxes)} "
-                    f"mean_conf={ocr_data.mean_confidence:.2f} "
-                    f"rss_before={rss_pre}MB rss_after={rss_post}MB delta={rss_post-rss_pre:.1f}MB"
-                )
+                    logger.info(
+                        f"[OCR_TELEMETRY] job_id={job_id} img_idx={idx} img_id={img_id} "
+                        f"duration={t_img_dur:.2f}s boxes={len(ocr_data.text_boxes)} "
+                        f"mean_conf={ocr_data.mean_confidence:.2f} "
+                        f"rss_before={rss_pre}MB rss_after={rss_post}MB delta={rss_post-rss_pre:.1f}MB"
+                    )
 
-                # Barcode detection
-                img_barcodes = barcode_service.detect_and_decode(str(abs_path), source_image_id=img_id, source_image_path=img_file_path)
-                img_barcodes = barcode_service.cross_validate_with_ocr(img_barcodes, ocr_data.raw_text)
-                per_image_barcodes[img_id] = img_barcodes
+                    # Barcode detection
+                    img_barcodes = barcode_service.detect_and_decode(str(temp_file), source_image_id=img_id, source_image_path=img_file_path)
+                    img_barcodes = barcode_service.cross_validate_with_ocr(img_barcodes, ocr_data.raw_text)
+                    per_image_barcodes[img_id] = img_barcodes
+                finally:
+                    # Ephemeral disk hygiene: delete working copy immediately after processing
+                    storage_service.cleanup_local_working_copy(temp_file)
 
                 # Declaration extraction per image
                 img_ctx = dict(product_ctx)

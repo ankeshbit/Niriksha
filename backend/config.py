@@ -105,11 +105,6 @@ class Settings(BaseSettings):
     UPLOAD_DIR: str = "./uploads"
     REPORTS_DIR: str = "./generated_reports"
 
-    # Supabase / Cloud Object Storage Settings
-    SUPABASE_URL: Optional[str] = None
-    SUPABASE_KEY: Optional[str] = None
-    SUPABASE_BUCKET_IMAGES: str = "inspection-images"
-    SUPABASE_BUCKET_REPORTS: str = "inspection-reports"
 
     # OCR & AI Providers
     OCR_ENGINE: str = "auto"

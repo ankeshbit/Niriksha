@@ -317,11 +317,9 @@ export const AnalyzingScreen: React.FC = () => {
               break;
             } else if (jobStatus.status === 'FAILED') {
               const isImageUnavailable = jobStatus.error_code === 'SOURCE_IMAGE_UNAVAILABLE';
-              const errMsg = jobStatus.error_message || (
-                isImageUnavailable
-                  ? 'Source image could not be accessed from storage. Please go back, retake the package photos, and retry.'
-                  : 'OCR text recognition failed on server.'
-              );
+              const errMsg = isImageUnavailable
+                ? 'Uploaded package image is no longer accessible from storage. Please retake the photo and retry.'
+                : (jobStatus.error_message || 'OCR text recognition failed on server.');
               console.error('[ANALYZING_SCREEN] OCR Job marked FAILED on backend', jobStatus);
               setStage('ERROR');
               setErrorTitle(isImageUnavailable ? 'Source Image Unavailable' : 'Analysis Error');
@@ -463,7 +461,7 @@ export const AnalyzingScreen: React.FC = () => {
           <View style={styles.cardHeader}>
             <MaterialIcons name="query-stats" size={40} color={colors.primary} style={styles.iconCenter} />
             <Text style={styles.titleText}>
-              {stage === 'ERROR' ? 'Analysis Error' : 'Analyzing Package'}
+              {stage === 'ERROR' ? (errorTitle || 'Analysis Error') : 'Analyzing Package'}
             </Text>
             <Text style={styles.subtitleText}>
               {stage === 'IDLE' || stage === 'STARTING'
@@ -477,7 +475,7 @@ export const AnalyzingScreen: React.FC = () => {
                 : stage === 'COMPLETED'
                 ? 'Analysis complete!'
                 : stage === 'ERROR'
-                ? errorTitle
+                ? (errorTitle === 'Source Image Unavailable' ? 'Storage access failed' : 'An error occurred during inspection analysis')
                 : 'Processing...'}
             </Text>
           </View>
