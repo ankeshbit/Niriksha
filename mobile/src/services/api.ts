@@ -22,16 +22,15 @@ export const setApiBaseUrl = (url: string) => {
 
 export const getApiBaseUrl = () => {
   if (customBaseUrl) return customBaseUrl;
+  if (ENV_API_HOST) return ENV_API_HOST;
 
-  // On Web: ALWAYS dynamically match current window hostname to prevent origin/port mismatch
+  // On Web: dynamically match current window hostname if on custom deployment without ENV_API_HOST
   if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location?.hostname) {
     const host = window.location.hostname;
     if (host && host !== 'localhost' && host !== '127.0.0.1') {
       return `https://${host}`;
     }
   }
-
-  if (ENV_API_HOST) return ENV_API_HOST;
 
   return PRODUCTION_API_HOST;
 };

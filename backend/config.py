@@ -96,7 +96,7 @@ class Settings(BaseSettings):
 
     # Supervisor Account Settings
     SEED_SUPERVISOR_ID: str = "DOCA-SUP-101"
-    SEED_SUPERVISOR_PASSWORD: str = "Supervisor@1234"
+    SEED_SUPERVISOR_PASSWORD: str = "admin123"
     SEED_SUPERVISOR_NAME: str = "NiriKsha Supervisor"
     SEED_SUPERVISOR_DESIGNATION: str = "Supervisory Officer (Legal Metrology)"
     SEED_SUPERVISOR_ZONE: str = "Central HQ"
