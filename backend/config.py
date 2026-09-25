@@ -80,26 +80,81 @@ class Settings(BaseSettings):
 
         return self
 
+    @model_validator(mode="after")
+    def validate_security_settings(self):
+        # 1. SECRET_KEY validation: mandatory in all environments
+        raw_secret = (self.SECRET_KEY or "").strip()
+        if not raw_secret:
+            raise ValueError(
+                "SECRET_KEY environment variable is missing or blank.\n"
+                "A secure, random secret key is required to sign and verify authentication tokens.\n"
+                "Please set SECRET_KEY in your .env file (e.g. generate one with 'openssl rand -hex 32')."
+            )
+
+        # 2. Production-only security constraints
+        env = (self.ENVIRONMENT or "").strip().lower()
+        if env == "production":
+            # Guard: Enforce DEBUG=False in production
+            if self.DEBUG:
+                raise ValueError(
+                    "DEBUG mode must be disabled (DEBUG=False) in production environment.\n"
+                    "Verbose error messages and exception stack traces are strictly forbidden in production.\n"
+                    "Set DEBUG=False in your .env file or environment variables."
+                )
+
+            # Guard: SEED_OFFICER_PASSWORD must be set in production
+            if not (self.SEED_OFFICER_PASSWORD or "").strip():
+                raise ValueError(
+                    "SEED_OFFICER_PASSWORD environment variable is required in production environment.\n"
+                    "Set SEED_OFFICER_PASSWORD in your .env file."
+                )
+
+            # Guard: SEED_SUPERVISOR_PASSWORD must be set in production
+            if not (self.SEED_SUPERVISOR_PASSWORD or "").strip():
+                raise ValueError(
+                    "SEED_SUPERVISOR_PASSWORD environment variable is required in production environment.\n"
+                    "Set SEED_SUPERVISOR_PASSWORD in your .env file."
+                )
+
+            # Guard: CORS_ORIGINS must not resolve to a wildcard in production
+            raw_cors = (self.CORS_ORIGINS or "").strip()
+            cors_list = [o.strip() for o in raw_cors.split(",") if o.strip()]
+            if raw_cors == "*" or "*" in cors_list or any("*" in o for o in cors_list):
+                raise ValueError(
+                    "CORS_ORIGINS cannot resolve to a wildcard ('*') in production environment.\n"
+                    "Wide-open CORS combined with credentialed requests exposes the API to unauthorized cross-origin requests.\n"
+                    "Please configure an explicit comma-separated origin allowlist (e.g. CORS_ORIGINS=https://portal.example.gov.in) in your .env file."
+                )
+
+        return self
+
     
     # Auth & Security
-    SECRET_KEY: str = "sih-2026-doca-legal-metrology-jwt-secret-key-32chars"
+    SECRET_KEY: Optional[str] = None
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440  # 24 Hours
     ALGORITHM: str = "HS256"
-    CORS_ORIGINS: str = "*"
+    CORS_ORIGINS: str = ""
 
     # Default Demo Officer
     SEED_OFFICER_ID: str = "DOCA-INSP-842"
-    SEED_OFFICER_PASSWORD: str = "admin123"
+    SEED_OFFICER_PASSWORD: Optional[str] = None
     SEED_OFFICER_NAME: str = "Inspector Rajesh Kumar"
     SEED_OFFICER_DESIGNATION: str = "Senior Inspector (Legal Metrology)"
     SEED_OFFICER_ZONE: str = "Northern Zone - Delhi HQ"
 
     # Supervisor Account Settings
     SEED_SUPERVISOR_ID: str = "DOCA-SUP-101"
-    SEED_SUPERVISOR_PASSWORD: str = "admin123"
+    SEED_SUPERVISOR_PASSWORD: Optional[str] = None
     SEED_SUPERVISOR_NAME: str = "NiriKsha Supervisor"
     SEED_SUPERVISOR_DESIGNATION: str = "Supervisory Officer (Legal Metrology)"
     SEED_SUPERVISOR_ZONE: str = "Central HQ"
+
+    # Admin Account Settings
+    SEED_ADMIN_ID: str = "DOCA-ADMIN-001"
+    SEED_ADMIN_PASSWORD: Optional[str] = None
+    SEED_ADMIN_NAME: str = "Director Vikram Malhotra"
+    SEED_ADMIN_DESIGNATION: str = "Director of Legal Metrology (Admin)"
+    SEED_ADMIN_ZONE: str = "HQ - New Delhi"
 
     # File Storage Paths
     UPLOAD_DIR: str = "./uploads"

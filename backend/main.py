@@ -190,16 +190,38 @@ app = FastAPI(
 )
 
 # CORS Configuration
-_raw_origins = [o.strip() for o in settings.CORS_ORIGINS.split(",") if o.strip()]
-_cors_origins = ["*"] if ("*" in _raw_origins or not _raw_origins) else _raw_origins
+_raw_origins = [o.strip() for o in (settings.CORS_ORIGINS or "").split(",") if o.strip()]
+
+if settings.ENVIRONMENT.lower() == "production":
+    if "*" in _raw_origins or (settings.CORS_ORIGINS or "").strip() == "*" or any("*" in o for o in _raw_origins):
+        raise ValueError(
+            "CORS_ORIGINS cannot resolve to a wildcard ('*') in production environment.\n"
+            "Wide-open CORS combined with credentialed requests exposes the API to unauthorized cross-origin requests.\n"
+            "Please configure an explicit comma-separated origin allowlist instead."
+        )
+    _cors_origins = _raw_origins
+    _cors_origin_regex = None
+else:
+    # Development: keep wildcard behavior available for local development
+    if not _raw_origins or "*" in _raw_origins:
+        _cors_origins = ["*"]
+        _cors_origin_regex = r"^https?://.*$"
+    else:
+        _cors_origins = _raw_origins
+        _cors_origin_regex = None
+
+_cors_kwargs = {
+    "allow_origins": _cors_origins,
+    "allow_credentials": True,
+    "allow_methods": ["*"],
+    "allow_headers": ["*"],
+}
+if _cors_origin_regex:
+    _cors_kwargs["allow_origin_regex"] = _cors_origin_regex
 
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=_cors_origins,
-    allow_origin_regex=r"^https?://.*$",
-    allow_credentials=True,
-    allow_methods=["*"],
-    allow_headers=["*"],
+    **_cors_kwargs,
 )
 
 from fastapi.responses import JSONResponse
@@ -208,17 +230,21 @@ from fastapi import Request
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
     import traceback
+    logger.error(f"Unhandled exception on {request.method} {request.url.path}: {exc}", exc_info=exc)
     traceback.print_exc()
+
+    error_detail = f"Internal Server Error: {str(exc)}" if settings.DEBUG else "Internal Server Error"
     response = JSONResponse(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        content={"detail": f"Internal Server Error: {str(exc)}"}
+        content={"detail": error_detail}
     )
     origin = request.headers.get("origin")
     if origin:
-        response.headers["Access-Control-Allow-Origin"] = origin
-        response.headers["Access-Control-Allow-Credentials"] = "true"
-        response.headers["Access-Control-Allow-Methods"] = "*"
-        response.headers["Access-Control-Allow-Headers"] = "*"
+        if settings.ENVIRONMENT.lower() != "production" or origin in _cors_origins:
+            response.headers["Access-Control-Allow-Origin"] = origin
+            response.headers["Access-Control-Allow-Credentials"] = "true"
+            response.headers["Access-Control-Allow-Methods"] = "*"
+            response.headers["Access-Control-Allow-Headers"] = "*"
     return response
 
 
@@ -1991,7 +2017,8 @@ async def upload_inspection_image(
         width, height = pil_img.size
         img_format = pil_img.format.lower()
     except Exception as e:
-        raise HTTPException(status_code=400, detail=f"Invalid or corrupted image file: {str(e)}")
+        err_msg = f"Invalid or corrupted image file: {str(e)}" if settings.DEBUG else "Invalid or corrupted image file."
+        raise HTTPException(status_code=400, detail=err_msg)
 
     file_ext = ".jpg" if img_format == "jpeg" else f".{img_format}"
     orig_stem = re.sub(r'[^a-zA-Z0-9_-]', '_', Path(file.filename or 'img').stem)
@@ -2008,7 +2035,9 @@ async def upload_inspection_image(
     try:
         quality_res = assess_image_quality(str(dest_path))
     except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Image quality assessment failed: {str(e)}")
+        logger.error(f"Image quality assessment failed: {e}", exc_info=True)
+        err_msg = f"Image quality assessment failed: {str(e)}" if settings.DEBUG else "Image quality assessment failed."
+        raise HTTPException(status_code=500, detail=err_msg)
 
     # Canonical slot replacement: remove any existing image of the same view_type
     # to guarantee retake does not create duplicate or stale images in the DB or storage.
@@ -2134,6 +2163,8 @@ def delete_inspection_image(
         pass
 
     inspection_id = img.inspection_id
+    db.query(Declaration).filter(Declaration.source_image_id == img.id).update({Declaration.source_image_id: None})
+    db.query(Evidence).filter(Evidence.image_id == img.id).update({Evidence.image_id: None})
     db.delete(img)
     db.commit()
 
@@ -2171,6 +2202,8 @@ def delete_inspection_image_by_slot(
     ).all()
 
     for img in images:
+        db.query(Declaration).filter(Declaration.source_image_id == img.id).update({Declaration.source_image_id: None})
+        db.query(Evidence).filter(Evidence.image_id == img.id).update({Evidence.image_id: None})
         try:
             storage_service.delete_file(img.file_path)
         except Exception:
@@ -3211,6 +3244,24 @@ def generate_inspection_report(
 
     # --- Idempotency guard for finalized inspections (AUDIT-REP-01) ---
     existing_report = db.query(Report).filter(Report.inspection_id == real_inspection_id).first()
+
+    # REPORT-BLOCKING GATE (SECURITY.md §8 & §12): Block report generation if any finding is still pending adjudication
+    if inspection.status != "COMPLETED":
+        all_checks = db.query(ComplianceCheck).filter(ComplianceCheck.inspection_id == real_inspection_id).all()
+        unresolved = [c for c in all_checks if is_pending_adjudication(c)]
+        if unresolved:
+            unresolved_descriptions = [
+                {"rule_code": c.rule_code, "title": c.title, "adjudication_status": c.adjudication_status}
+                for c in unresolved
+            ]
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail={
+                    "error": "UNRESOLVED_FINDINGS",
+                    "message": f"Cannot generate report: {len(unresolved)} finding(s) require inspector adjudication before the report can be generated.",
+                    "unresolved_findings": unresolved_descriptions
+                }
+            )
     if (
         existing_report
         and inspection.status == "COMPLETED"
@@ -3507,9 +3558,15 @@ def finalize_inspection(
         report_res = generate_inspection_report(inspection_id, db, current_user)
     except Exception as e:
         db.commit()  # Preserve finalized status, decisions, and audit trail
+        logger.error(f"Report generation error during finalization of {inspection_id}: {e}", exc_info=True)
+        err_msg = (
+            f"Inspection submitted, but the official report could not be generated: {str(e)}. Please retry report generation."
+            if settings.DEBUG
+            else "Inspection submitted, but the official report could not be generated. Please retry report generation."
+        )
         raise HTTPException(
             status_code=500,
-            detail=f"Inspection submitted, but the official report could not be generated: {str(e)}. Please retry report generation."
+            detail=err_msg
         )
 
     log_audit(
@@ -3560,9 +3617,9 @@ def get_report_by_id(
     inspection = report.inspection
     if not inspection:
         inspection = db.query(Inspection).filter(Inspection.id == report.inspection_id).first()
-
-    if inspection:
-        verify_inspection_access(inspection, current_user, allow_supervisory=True)
+    if not inspection:
+        raise HTTPException(status_code=404, detail="Associated inspection not found")
+    verify_inspection_access(inspection, current_user, allow_supervisory=True)
 
     return serialize_report(report)
 
@@ -3584,9 +3641,9 @@ def stream_report_by_id_docx(
     inspection = report.inspection
     if not inspection:
         inspection = db.query(Inspection).filter(Inspection.id == report.inspection_id).first()
-
-    if inspection:
-        verify_inspection_access(inspection, current_user, allow_supervisory=True)
+    if not inspection:
+        raise HTTPException(status_code=404, detail="Associated inspection not found")
+    verify_inspection_access(inspection, current_user, allow_supervisory=True)
 
     # Ensure DOCX exists on disk at current version
     docx_file = Path(report.docx_path) if getattr(report, "docx_path", None) else None

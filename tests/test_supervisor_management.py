@@ -74,6 +74,9 @@ def db_session():
         session.close()
 
 
+TEST_SUPERVISOR_PWD = settings.SEED_SUPERVISOR_PASSWORD or "TestSupervisorAuth2026!"
+
+
 @pytest.fixture
 def supervisor_user(db_session: Session):
     """Ensures test supervisor account DOCA-SUP-101 exists in test database."""
@@ -86,7 +89,7 @@ def supervisor_user(db_session: Session):
             phone="+919876543210",
             designation="Supervisory Officer (Legal Metrology)",
             zone="Central HQ",
-            password_hash=hash_password("Supervisor@1234"),
+            password_hash=hash_password(TEST_SUPERVISOR_PWD),
             role="SUPERVISOR"
         )
         db_session.add(sup)
@@ -96,7 +99,7 @@ def supervisor_user(db_session: Session):
         # Guarantee password and role for test determinism
         sup.role = "SUPERVISOR"
         sup.full_name = "NiriKsha Supervisor"
-        sup.password_hash = hash_password("Supervisor@1234")
+        sup.password_hash = hash_password(TEST_SUPERVISOR_PWD)
         db_session.commit()
     return sup
 
@@ -119,7 +122,7 @@ def inspector_user(db_session: Session):
             phone="+919876543210",
             designation="Senior Inspector (Legal Metrology)",
             zone="Northern Zone - Delhi HQ",
-            password_hash=hash_password("admin123"),
+            password_hash=hash_password(settings.SEED_OFFICER_PASSWORD or "TestOfficerAuth2026!"),
             role="INSPECTOR"
         )
         db_session.add(insp)
@@ -142,7 +145,7 @@ def test_supervisor_valid_login(supervisor_user: User):
     """Supervisor logs in with valid officer ID and password."""
     response = client.post(
         "/api/auth/login",
-        json={"officer_id": "DOCA-SUP-101", "password": "Supervisor@1234"}
+        json={"officer_id": "DOCA-SUP-101", "password": TEST_SUPERVISOR_PWD}
     )
     assert response.status_code == 200, response.text
     data = response.json()

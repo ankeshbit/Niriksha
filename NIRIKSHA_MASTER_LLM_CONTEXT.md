@@ -641,7 +641,7 @@ Implemented in [`backend/main.py`](file:///c:/Users/ankes/OneDrive/Desktop/SIH/b
 # Core Settings
 ENVIRONMENT=development
 DATABASE_URL=postgresql+psycopg://user:password@ep-host.us-east-2.aws.neon.tech/neondb?sslmode=require
-SECRET_KEY=sih-2026-doca-legal-metrology-jwt-secret-key-32chars
+SECRET_KEY=your-secure-random-secret-key-min-32-chars
 ACCESS_TOKEN_EXPIRE_MINUTES=1440
 
 # Test Database Isolation (Mandatory for test execution)

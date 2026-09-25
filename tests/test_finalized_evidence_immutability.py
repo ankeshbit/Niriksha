@@ -10,6 +10,7 @@ Comprehensive test suite verifying that for finalized inspections (status == COM
 6. Normal draft image & evidence operations retain intended behavior before finalization.
 """
 
+import time
 import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
@@ -33,6 +34,22 @@ def inspector_token(client):
 
 def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
+
+def _wait_for_ocr_completion(client: TestClient, token: str, insp_id: str, max_wait_sec: float = 60.0):
+    """Waits for durable OCR processing to finish via /ocr/status endpoint."""
+    deadline = time.time() + max_wait_sec
+    while time.time() < deadline:
+        st_resp = client.get(f"/api/inspections/{insp_id}/ocr/status", headers=_auth(token))
+        if st_resp.status_code == 200:
+            st_data = st_resp.json()
+            status = st_data.get("status")
+            if status == "COMPLETED":
+                return st_data
+            elif status == "FAILED":
+                raise AssertionError(f"Durable OCR job failed: {st_data.get('error_message')}")
+        time.sleep(1.0)
+    raise AssertionError(f"Timed out waiting for OCR job on inspection {insp_id} after {max_wait_sec}s")
+
 
 def _create_and_finalize_inspection(client: TestClient, token: str, name_suffix: str = "1"):
     """Helper to create an inspection, upload image, run OCR, evaluate, and generate official report."""
@@ -62,7 +79,9 @@ def _create_and_finalize_inspection(client: TestClient, token: str, name_suffix:
 
     # Run OCR
     ocr_resp = client.post(f"/api/inspections/{insp_id}/ocr", headers=_auth(token))
-    assert ocr_resp.status_code == 200, ocr_resp.text
+    assert ocr_resp.status_code in (200, 202), ocr_resp.text
+    if ocr_resp.status_code == 202:
+        _wait_for_ocr_completion(client, token, insp_id)
 
     # Evaluate rules
     eval_resp = client.post(f"/api/inspections/{insp_id}/evaluate", headers=_auth(token))
@@ -173,7 +192,9 @@ def test_06_draft_inspection_operations_retain_intended_behavior(client: TestCli
 
     # OCR works on draft
     ocr_resp = client.post(f"/api/inspections/{draft_id}/ocr", headers=_auth(inspector_token))
-    assert ocr_resp.status_code == 200
+    assert ocr_resp.status_code in (200, 202), ocr_resp.text
+    if ocr_resp.status_code == 202:
+        _wait_for_ocr_completion(client, inspector_token, draft_id)
 
     # Declaration edit works on draft
     decl_resp = client.get(f"/api/inspections/{draft_id}/declarations", headers=_auth(inspector_token))
