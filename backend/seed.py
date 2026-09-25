@@ -11,6 +11,12 @@ def seed_database():
         # 1. Seed Development Officer Account
         existing_officer = db.query(User).filter(User.officer_id == settings.SEED_OFFICER_ID).first()
         if not existing_officer:
+            if not settings.SEED_OFFICER_PASSWORD:
+                raise ValueError(
+                    f"SEED_OFFICER_PASSWORD environment variable is not set. "
+                    f"Cannot create development officer account '{settings.SEED_OFFICER_ID}'. "
+                    f"Please set SEED_OFFICER_PASSWORD in your .env file."
+                )
             officer = User(
                 officer_id=settings.SEED_OFFICER_ID,
                 full_name=settings.SEED_OFFICER_NAME,
@@ -67,20 +73,33 @@ def seed_database():
                 print(f"[Seed] Supervisor account verified and usable: {settings.SEED_SUPERVISOR_ID}")
 
         # 1c. Seed Development Admin Account
-        existing_admin = db.query(User).filter(User.officer_id == "DOCA-ADMIN-001").first()
+        admin_id = getattr(settings, "SEED_ADMIN_ID", "DOCA-ADMIN-001")
+        existing_admin = db.query(User).filter(User.officer_id == admin_id).first()
         if not existing_admin:
-            admin_user = User(
-                officer_id="DOCA-ADMIN-001",
-                full_name="Director Vikram Malhotra",
-                email="vikram.malhotra@lm.gov.in",
-                phone="+919876543210",
-                designation="Director of Legal Metrology (Admin)",
-                zone="HQ - New Delhi",
-                password_hash=hash_password("admin123"),
-                role="ADMIN"
-            )
-            db.add(admin_user)
-            print("[Seed] Created development admin account: DOCA-ADMIN-001")
+            admin_pwd = getattr(settings, "SEED_ADMIN_PASSWORD", None)
+            if admin_pwd:
+                admin_user = User(
+                    officer_id=admin_id,
+                    full_name=getattr(settings, "SEED_ADMIN_NAME", "Director Vikram Malhotra"),
+                    email="vikram.malhotra@lm.gov.in",
+                    phone="+919876543210",
+                    designation=getattr(settings, "SEED_ADMIN_DESIGNATION", "Director of Legal Metrology (Admin)"),
+                    zone=getattr(settings, "SEED_ADMIN_ZONE", "HQ - New Delhi"),
+                    password_hash=hash_password(admin_pwd),
+                    role="ADMIN"
+                )
+                db.add(admin_user)
+                print(f"[Seed] Created development admin account: {admin_id}")
+            else:
+                print(f"[Seed Warning] SEED_ADMIN_PASSWORD not set. Cannot create {admin_id}.")
+        else:
+            admin_pwd = getattr(settings, "SEED_ADMIN_PASSWORD", None)
+            if admin_pwd:
+                from backend.auth_utils import verify_password
+                if not verify_password(admin_pwd, existing_admin.password_hash):
+                    existing_admin.password_hash = hash_password(admin_pwd)
+                    db.commit()
+                    print(f"[Seed] Synchronized admin account password: {admin_id}")
 
         # 2. Seed Verified Legal Metrology PCR 2011 Rules (Version 1)
         seed_rules = [
