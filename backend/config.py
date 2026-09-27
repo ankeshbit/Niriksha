@@ -164,7 +164,13 @@ class Settings(BaseSettings):
     # OCR & AI Providers
     OCR_ENGINE: str = "auto"
     PADDLE_OCR_ENABLED: bool = True
-    PADDLE_OCR_VERSION: str = "PP-OCRv4"  # PP-OCRv4 mobile models (fast CPU inference, lightweight RAM footprint)
+    PADDLE_OCR_VERSION: str = "PP-OCRv6_medium"  # PP-OCRv6_medium: 83.2% recognition accuracy on PaddleOCR 15-category benchmark (arXiv:2606.13108).
+    # PP-OCRv4's weighted-average on PaddleOCR's own 12-category benchmark is ~53% (per PP-OCRv5 report arXiv:2507.05595).
+    # The two benchmarks are NOT identical (12-cat vs 15-cat), so the numbers are not directly apples-to-apples —
+    # but the gap is large enough that downgrading to PP-OCRv4 is an unacceptable accuracy regression for a
+    # statutory legal-enforcement pipeline where missed MRP digits or batch codes carry real enforcement consequences.
+    # Peak RAM for PP-OCRv6_medium is ~700-800MB; this requires Render Standard tier (2GB) — see docs/deployment.md.
+    # DO NOT downgrade this setting to save memory without explicit developer sign-off (see AGENTS.md §3).
     PADDLE_OCR_USE_ANGLE_CLS: bool = True
     PADDLE_OCR_LANG: str = "en"
     MAX_OCR_DIMENSION: int = 800  # Max dimension for CPU OCR inference to keep peak RAM strictly under 410MB (safety buffer: 102MB below 512MB ceiling)

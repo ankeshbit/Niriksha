@@ -374,7 +374,7 @@ class PaddleOCREngine(BaseOCREngine):
         """
         Lazy-initializes PaddleOCR singleton using PaddleOCR 3.x API.
         Falls back through multiple initialization strategies in order:
-          1. PaddleOCR 3.x with mobile model version: PaddleOCR(ocr_version='PP-OCRv4', lang=..., use_textline_orientation=...)
+          1. PaddleOCR 3.x with ocr_version shorthand (e.g. 'PP-OCRv6_medium'): PaddleOCR(ocr_version='PP-OCRv6_medium', lang=..., use_textline_orientation=...)
           2. PaddleOCR 3.x standard: PaddleOCR(lang=..., use_textline_orientation=...)
           3. PaddleOCR 2.x legacy: PaddleOCR(lang=..., use_angle_cls=...)
           4. Minimal: PaddleOCR(lang=...)
@@ -392,7 +392,7 @@ class PaddleOCREngine(BaseOCREngine):
         logger.info(f"[PADDLE_INIT_START] Starting PaddleOCR model load (lang={self._lang}, version={self._ocr_version})")
         from paddleocr import PaddleOCR
 
-        # Strategy 1: PaddleOCR 3.7+ native API with mobile model version and CPU OneDNN workaround
+        # Strategy 1: PaddleOCR 3.7+ native API with ocr_version shorthand (PP-OCRv6_medium) and CPU OneDNN workaround
         try:
             PaddleOCREngine._instance = PaddleOCR(
                 ocr_version=self._ocr_version,
