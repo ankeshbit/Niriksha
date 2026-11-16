@@ -362,10 +362,10 @@ def _fetch_existing_draft(db: Session, inspector_id: str, client_draft_id: str):
     """Re-query a draft inspection by client_draft_id. Used for idempotent conflict recovery."""
     return db.query(Inspection).options(
         joinedload(Inspection.product),
-        joinedload(Inspection.images),
-        joinedload(Inspection.declarations),
-        joinedload(Inspection.compliance_checks),
-        joinedload(Inspection.report)
+        joinedload(Inspection.report),
+        selectinload(Inspection.images),
+        selectinload(Inspection.declarations),
+        selectinload(Inspection.compliance_checks)
     ).filter(
         Inspection.inspector_id == inspector_id,
         or_(
@@ -1487,16 +1487,41 @@ def search_repository_inspections(
     total_pages = max(1, (total + page_size - 1) // page_size) if total > 0 else 0
     offset = (page - 1) * page_size
 
-    rows = query.options(
-        joinedload(Inspection.product),
-        joinedload(Inspection.inspector),
-        joinedload(Inspection.report),
-        joinedload(Inspection.declarations),
-        joinedload(Inspection.compliance_checks)
-    ).order_by(Inspection.created_at.desc()).offset(offset).limit(page_size).all()
+    findings_subq = (
+        db.query(func.count(ComplianceCheck.id))
+        .filter(ComplianceCheck.inspection_id == Inspection.id)
+        .correlate(Inspection)
+        .scalar_subquery()
+    )
+    non_comp_subq = (
+        db.query(func.count(ComplianceCheck.id))
+        .filter(
+            ComplianceCheck.inspection_id == Inspection.id,
+            ComplianceCheck.result_state == "POTENTIAL_NON_COMPLIANCE"
+        )
+        .correlate(Inspection)
+        .scalar_subquery()
+    )
+
+    rows = (
+        query.add_columns(
+            findings_subq.label("findings_count"),
+            non_comp_subq.label("non_compliant_count")
+        )
+        .options(
+            joinedload(Inspection.product),
+            joinedload(Inspection.inspector),
+            joinedload(Inspection.report),
+            selectinload(Inspection.declarations)
+        )
+        .order_by(Inspection.created_at.desc())
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
 
     items: List[RepositoryInspectionItem] = []
-    for insp in rows:
+    for insp, findings_cnt, non_comp_cnt in rows:
         p_name = insp.product.product_name if insp.product else "Unnamed Commodity"
         b_name = insp.product.brand_name if insp.product else None
         c_name = insp.product.category if insp.product else "Packaged Commodity"
@@ -1512,9 +1537,6 @@ def search_repository_inspections(
             if d.field_name in ("batch_code", "lot_number") and not batch_val:
                 batch_val = d.corrected_value or d.extracted_value
 
-        checks = insp.compliance_checks or []
-        non_comp = sum(1 for c in checks if c.result_state == "POTENTIAL_NON_COMPLIANCE")
-
         items.append(RepositoryInspectionItem(
             id=insp.id,
             inspection_number=insp.inspection_number,
@@ -1528,8 +1550,8 @@ def search_repository_inspections(
             inspector_name=i_name,
             status=insp.status,
             overall_status=insp.overall_status,
-            findings_count=len(checks),
-            non_compliant_count=non_comp,
+            findings_count=findings_cnt or 0,
+            non_compliant_count=non_comp_cnt or 0,
             has_report=insp.report is not None,
             report_id=insp.report.id if insp.report else None,
             created_at=insp.created_at,
@@ -1681,13 +1703,32 @@ def get_product_inspection_history(
     total_pages = max(1, (total + page_size - 1) // page_size) if total > 0 else 0
     offset = (page - 1) * page_size
 
+    findings_subq = (
+        db.query(func.count(ComplianceCheck.id))
+        .filter(ComplianceCheck.inspection_id == Inspection.id)
+        .correlate(Inspection)
+        .scalar_subquery()
+    )
+    non_comp_subq = (
+        db.query(func.count(ComplianceCheck.id))
+        .filter(
+            ComplianceCheck.inspection_id == Inspection.id,
+            ComplianceCheck.result_state == "POTENTIAL_NON_COMPLIANCE"
+        )
+        .correlate(Inspection)
+        .scalar_subquery()
+    )
+
     paged = (
-        base_q.options(
+        base_q.add_columns(
+            findings_subq.label("findings_count"),
+            non_comp_subq.label("non_compliant_count")
+        )
+        .options(
             joinedload(Inspection.product),
             joinedload(Inspection.inspector),
             joinedload(Inspection.report),
-            joinedload(Inspection.declarations),
-            joinedload(Inspection.compliance_checks)
+            selectinload(Inspection.declarations)
         )
         .order_by(Inspection.created_at.desc())
         .offset(offset)
@@ -1696,7 +1737,7 @@ def get_product_inspection_history(
     )
 
     items: List[RepositoryInspectionItem] = []
-    for insp in paged:
+    for insp, findings_cnt, non_comp_cnt in paged:
         p_name = insp.product.product_name if insp.product else "Unnamed Commodity"
         b_name = insp.product.brand_name if insp.product else None
         c_name = insp.product.category if insp.product else "Packaged Commodity"
@@ -1711,9 +1752,6 @@ def get_product_inspection_history(
             if d.field_name in ("batch_code", "lot_number") and not batch_val:
                 batch_val = d.corrected_value or d.extracted_value
 
-        checks = insp.compliance_checks or []
-        non_comp = sum(1 for c in checks if c.result_state == "POTENTIAL_NON_COMPLIANCE")
-
         items.append(RepositoryInspectionItem(
             id=insp.id,
             inspection_number=insp.inspection_number,
@@ -1727,8 +1765,8 @@ def get_product_inspection_history(
             inspector_name=i_name,
             status=insp.status,
             overall_status=insp.overall_status,
-            findings_count=len(checks),
-            non_compliant_count=non_comp,
+            findings_count=findings_cnt or 0,
+            non_compliant_count=non_comp_cnt or 0,
             has_report=insp.report is not None,
             report_id=insp.report.id if insp.report else None,
             created_at=insp.created_at,
@@ -1938,10 +1976,10 @@ def list_inspections(
     """Lists inspections with optional status filtering and pagination."""
     query = db.query(Inspection).options(
         joinedload(Inspection.product),
-        joinedload(Inspection.images),
-        joinedload(Inspection.declarations),
-        joinedload(Inspection.compliance_checks),
-        joinedload(Inspection.report)
+        joinedload(Inspection.report),
+        selectinload(Inspection.images),
+        selectinload(Inspection.declarations),
+        selectinload(Inspection.compliance_checks)
     )
     if current_user.role not in ("ADMIN", "SUPERVISOR"):
         query = query.filter(Inspection.inspector_id == current_user.id)
@@ -1983,11 +2021,11 @@ def get_inspection_details(
     """Retrieves single inspection details by ID or inspection number."""
     inspection = db.query(Inspection).options(
         joinedload(Inspection.product),
-        joinedload(Inspection.images),
-        joinedload(Inspection.declarations),
-        joinedload(Inspection.compliance_checks),
         joinedload(Inspection.report),
-        joinedload(Inspection.listing)
+        joinedload(Inspection.listing),
+        selectinload(Inspection.images),
+        selectinload(Inspection.declarations),
+        selectinload(Inspection.compliance_checks)
     ).filter(
         or_(
             Inspection.id == inspection_id,
@@ -4568,16 +4606,40 @@ def get_supervisor_inspections(
     else:
         query = query.order_by(sort_dir(Inspection.created_at))
 
+    findings_subq = (
+        db.query(func.count(ComplianceCheck.id))
+        .filter(ComplianceCheck.inspection_id == Inspection.id)
+        .correlate(Inspection)
+        .scalar_subquery()
+    )
+    non_comp_subq = (
+        db.query(func.count(ComplianceCheck.id))
+        .filter(
+            ComplianceCheck.inspection_id == Inspection.id,
+            ComplianceCheck.result_state == "POTENTIAL_NON_COMPLIANCE"
+        )
+        .correlate(Inspection)
+        .scalar_subquery()
+    )
+
     offset = (page - 1) * page_size
-    inspections = query.options(
-        joinedload(Inspection.product),
-        joinedload(Inspection.inspector),
-        joinedload(Inspection.report),
-        joinedload(Inspection.compliance_checks)
-    ).offset(offset).limit(page_size).all()
+    inspections = (
+        query.add_columns(
+            findings_subq.label("findings_count"),
+            non_comp_subq.label("non_compliant_count")
+        )
+        .options(
+            joinedload(Inspection.product),
+            joinedload(Inspection.inspector),
+            joinedload(Inspection.report)
+        )
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
 
     items: List[SupervisorInspectionSummaryItem] = []
-    for insp in inspections:
+    for insp, findings_cnt, non_comp_cnt in inspections:
         prod = insp.product
         p_name = prod.product_name if prod else "Unnamed Commodity"
         b_name = prod.brand_name if prod else None
@@ -4585,10 +4647,6 @@ def get_supervisor_inspections(
         insp_user = insp.inspector
         i_name = insp_user.full_name if insp_user else "Unknown Inspector"
         i_officer_id = insp_user.officer_id if insp_user else (insp.inspector_id or "N/A")
-
-        checks = insp.compliance_checks or []
-        findings_count = len(checks)
-        non_compliant_count = sum(1 for c in checks if c.result_state == "POTENTIAL_NON_COMPLIANCE")
 
         items.append(
             SupervisorInspectionSummaryItem(
@@ -4606,8 +4664,8 @@ def get_supervisor_inspections(
                 finalized_at=insp.finalized_at,
                 has_report=insp.report is not None,
                 report_id=insp.report.id if insp.report else None,
-                findings_count=findings_count,
-                non_compliant_count=non_compliant_count
+                findings_count=findings_cnt or 0,
+                non_compliant_count=non_comp_cnt or 0
             )
         )
 
