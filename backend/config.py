@@ -202,5 +202,11 @@ class Settings(BaseSettings):
     VLM_TIMEOUT_SECONDS: float = 15.0
     VLM_CONFIDENCE_THRESHOLD: float = 0.70
 
+    # ML Readability & Safety Governance Flags
+    # The current classical ML readability model was trained on 18 synthetic demo packages.
+    # It is strictly prohibited from making automated compliance/readability decisions in production.
+    ML_READABILITY_MODEL_ENABLED: bool = False
+    ML_READABILITY_MIN_CONFIDENCE: float = 0.85
+
 
 settings = Settings()

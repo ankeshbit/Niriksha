@@ -16,17 +16,25 @@ CRITICAL INVARIANTS:
 3. LEGAL SAFETY GUARANTEE:
    The system must NEVER convert OCR_UNAVAILABLE, LOW_CONFIDENCE, UNREADABLE, or NOT_OBSERVABLE
    into an automatic legal violation. Such conditions route strictly to MANUAL_VERIFICATION_REQUIRED.
+4. SYNTHETIC MODEL SAFETY GUARANTEE:
+   The baseline classical ML readability model was trained on 18 synthetic demonstration packages
+   with 0% recall on NOT_READABLE. It is STRICTLY ADVISORY and is prohibited from independently
+   certifying a declaration as READABLE without human inspector verification.
 """
 
 import cv2
 import json
+import logging
 import numpy as np
 import pandas as pd
 from typing import List, Dict, Any, Optional, Tuple, Union
 from pydantic import BaseModel
 from pathlib import Path
 
+from backend.config import settings
 from backend.blur_detection import estimate_blur
+
+logger = logging.getLogger("backend.readability")
 
 ML_MODELS_DIR = Path(__file__).resolve().parent / "ml_models"
 if not ML_MODELS_DIR.exists():
@@ -49,14 +57,17 @@ class DeclarationReadabilityResult(BaseModel):
     ml_confidence: Optional[float] = None
     ml_predicted_label: Optional[str] = None
     ml_features: Optional[Dict[str, Any]] = None
+    is_model_production_ready: bool = False
+    model_readiness_reason: Optional[str] = None
     statutory_reference: str = "Rule 7(2) Legibility Mandate, Legal Metrology (Packaged Commodities) Rules, 2011"
-    provenance: str = "ML_AND_CROP_VISION_PIPELINE"
+    provenance: str = "DETERMINISTIC_OPTICAL_PIPELINE_WITH_ML_ADVISORY"
 
 
 class DeclarationReadabilityAnalyzer:
     """
     Evaluates declaration-level readability and optical legibility on localized image regions
-    using trained classical ML models and localized optical feature analysis.
+    using deterministic optical metrics (Laplacian sharpness, Michelson contrast, OCR confidence)
+    supplemented by classical ML models when validated and enabled.
     """
 
     # Image quality gate thresholds from notebook Section 21
@@ -68,9 +79,13 @@ class DeclarationReadabilityAnalyzer:
         self._read_scaler = None
         self._read_features = None
         self._model_name = "LogisticRegression"
+        self.is_synthetic_model: bool = True
+        self.is_model_production_ready: bool = False
+        self.model_readiness_reason: str = "Unvalidated synthetic demonstration model"
         self._load_ml_model()
 
     def _load_ml_model(self):
+        """Loads and audits readability ML model artifacts and metadata."""
         try:
             import joblib
             model_p = ML_MODELS_DIR / "readability_model.joblib"
@@ -85,12 +100,47 @@ class DeclarationReadabilityAnalyzer:
             if feat_p.exists():
                 with open(feat_p, "r", encoding="utf-8") as f:
                     self._read_features = json.load(f).get("features", [])
+
             if meta_p.exists():
                 with open(meta_p, "r", encoding="utf-8") as f:
                     meta = json.load(f)
                     self._model_name = meta.get("readability_model", {}).get("model_type", "LogisticRegression")
-        except Exception:
+                    data_status = str(meta.get("data_status", "")).upper()
+                    ds_version = str(meta.get("dataset_version", "")).lower()
+
+                    # Audit check: detect demonstration or synthetic dataset
+                    if "DEMONSTRATION" in data_status or "synthetic" in ds_version or "synthetic" in data_status:
+                        self.is_synthetic_model = True
+                        self.is_model_production_ready = False
+                        self.model_readiness_reason = (
+                            "Readability model was trained on demonstration/synthetic data (18 packages); "
+                            "statutory safety rules prohibit automated legal compliance classification."
+                        )
+                    else:
+                        self.is_synthetic_model = False
+                        val_f1 = meta.get("readability_model", {}).get("val_metrics", {}).get("val_macro_f1", 0.0)
+                        val_rec = meta.get("readability_model", {}).get("val_metrics", {}).get("val_recall_NOT_READABLE", 0.0)
+                        enabled = getattr(settings, "ML_READABILITY_MODEL_ENABLED", False)
+                        if enabled and val_f1 >= 0.85 and val_rec >= 0.90:
+                            self.is_model_production_ready = True
+                            self.model_readiness_reason = "Model validated on real-world dataset and enabled by configuration."
+                        else:
+                            self.is_model_production_ready = False
+                            self.model_readiness_reason = (
+                                f"Model not production-ready (enabled={enabled}, "
+                                f"val_macro_f1={val_f1:.2f}, val_recall_NOT_READABLE={val_rec:.2f})."
+                            )
+            else:
+                self.is_synthetic_model = False
+                self.is_model_production_ready = False
+                self.model_readiness_reason = "Model metadata not found."
+
+        except Exception as e:
+            logger.warning(f"[READABILITY_MODEL_LOAD_FAIL] {e}")
             self._read_model = None
+            self.is_synthetic_model = False
+            self.is_model_production_ready = False
+            self.model_readiness_reason = f"Model load failed: {e}"
 
     @staticmethod
     def _edge_density(gray: np.ndarray) -> float:
@@ -178,10 +228,10 @@ class DeclarationReadabilityAnalyzer:
         else:
             gray = crop
 
-        # 1. Local Blur Score
+        # 1. Local Blur Score (Laplacian variance)
         _, blur_score, _ = estimate_blur(gray, threshold=50.0)
 
-        # 2. Local Contrast
+        # 2. Local Michelson Contrast
         min_v = float(np.min(gray))
         max_v = float(np.max(gray))
         if (max_v + min_v) > 0:
@@ -204,6 +254,7 @@ class DeclarationReadabilityAnalyzer:
     ) -> DeclarationReadabilityResult:
         """
         Evaluates declaration-level legibility and readability.
+        Enforces safety controls to prevent unvalidated ML models from approving compliance.
         """
         if extracted_value is None and extracted_text is not None:
             extracted_value = extracted_text
@@ -223,7 +274,9 @@ class DeclarationReadabilityAnalyzer:
                 readability_status="NOT_OBSERVABLE",
                 is_sufficiently_observable=False,
                 requires_manual_verification=True,
-                explanation=f"{field_name.replace('_', ' ').title()} text was not recognized by OCR on any captured image."
+                explanation=f"{field_name.replace('_', ' ').title()} text was not recognized by OCR on any captured image.",
+                is_model_production_ready=self.is_model_production_ready,
+                model_readiness_reason=self.model_readiness_reason
             )
 
         # Case 2: Bounding box missing
@@ -253,7 +306,9 @@ class DeclarationReadabilityAnalyzer:
                 readability_status=status,
                 is_sufficiently_observable=(ocr_confidence >= 0.70),
                 requires_manual_verification=req_manual,
-                explanation=exp
+                explanation=exp,
+                is_model_production_ready=self.is_model_production_ready,
+                model_readiness_reason=self.model_readiness_reason
             )
 
         # Case 3: Local Image Crop Analysis
@@ -315,11 +370,14 @@ class DeclarationReadabilityAnalyzer:
                 ml_model_name=ml_model_name,
                 ml_confidence=None,
                 ml_predicted_label=None,
-                ml_features=read_feats
+                ml_features=read_feats,
+                is_model_production_ready=self.is_model_production_ready,
+                model_readiness_reason=self.model_readiness_reason
             )
 
-        # ML Model Inference
-        if self._read_model is not None and read_feats is not None:
+        # ML Model Inference (Executed only if feature flag is active and model is present)
+        is_ml_enabled = getattr(settings, "ML_READABILITY_MODEL_ENABLED", False)
+        if is_ml_enabled and self._read_model is not None and read_feats is not None:
             try:
                 feature_cols = self._read_features or list(read_feats.keys())
                 df_in = pd.DataFrame([read_feats])[feature_cols]
@@ -328,49 +386,81 @@ class DeclarationReadabilityAnalyzer:
                 else:
                     df_in_sc = df_in
 
-                ml_pred_label = self._read_model.predict(df_in_sc)[0]
+                raw_pred = self._read_model.predict(df_in_sc)[0]
+                ml_pred_label = str(raw_pred) if raw_pred is not None else None
                 if hasattr(self._read_model, "predict_proba"):
                     proba = self._read_model.predict_proba(df_in_sc)[0]
                     ml_conf = round(float(proba.max()), 3)
-            except Exception:
-                pass
+            except Exception as e:
+                logger.debug(f"[ML_READABILITY_INFERENCE_ERR] {e}")
 
         # Calculate composite visibility score: combines OCR confidence and local contrast
         if has_crop_metrics:
-            # Contrast weighting: contrast between 0.30 - 0.90 is optimal
             contrast_weight = min(1.0, local_contrast / 0.40)
             blur_weight = 1.0 if local_blur >= 40.0 else (local_blur / 40.0)
             visibility_score = round(float(0.55 * ocr_confidence + 0.25 * contrast_weight + 0.20 * blur_weight), 2)
         else:
             visibility_score = round(float(ocr_confidence), 2)
 
-        # Classification & Routing
+        # ── Authoritative Classification & Routing ───────────────────────────
+        # Invariant: Synthetic ML models CANNOT independently certify READABLE status.
+        # Clean compliance requires deterministic statutory proof (high OCR conf + sharp crop).
+
+        # 1. Deterministic High-Confidence Legibility
         if ocr_confidence >= 0.80 and (not has_crop_metrics or local_blur >= 35.0):
             readability_status = "READABLE"
             is_observable = True
             requires_manual = False
+            advisory_note = f" [ML Advisory ({ml_model_name}): {ml_pred_label}]" if ml_pred_label else ""
             explanation = (
-                f"Declaration is clearly legible (OCR confidence: {ocr_confidence:.2f}"
+                f"Declaration is clearly legible via deterministic OCR analysis (OCR confidence: {ocr_confidence:.2f}"
                 + (f", local sharpness: {local_blur:.1f}, contrast: {local_contrast:.2f})" if has_crop_metrics else ")")
-                + (f" [ML Model {ml_model_name}: {ml_pred_label} (conf: {ml_conf})]" if ml_pred_label else "")
+                + advisory_note
                 + ". Conforms to Rule 7 legibility standards."
             )
-        elif ml_pred_label == "READABLE" and ocr_confidence >= 0.70 and (ml_conf is None or ml_conf >= self.MIN_MODEL_CONFIDENCE):
+
+        # 2. Production-Validated ML Model (Active ONLY when real dataset validation passed and enabled)
+        elif (
+            self.is_model_production_ready
+            and ml_pred_label == "READABLE"
+            and ocr_confidence >= 0.70
+            and ml_conf is not None
+            and ml_conf >= getattr(settings, "ML_READABILITY_MIN_CONFIDENCE", 0.85)
+        ):
             readability_status = "READABLE"
             is_observable = True
             requires_manual = False
             explanation = (
-                f"Declaration classified as READABLE by {ml_model_name} (confidence: {ml_conf}, OCR confidence: {ocr_confidence:.2f}). "
+                f"Declaration classified as READABLE by production-validated {ml_model_name} "
+                f"(confidence: {ml_conf:.2f}, OCR confidence: {ocr_confidence:.2f}). "
                 f"Conforms to Rule 7 legibility standards."
             )
+
+        # 3. Synthetic Model Protection Gate:
+        # If the synthetic/unvalidated model predicted READABLE, but deterministic criteria are NOT met,
+        # DO NOT approve readability! Route directly to MANUAL_VERIFICATION_REQUIRED.
+        elif ml_pred_label == "READABLE" and not self.is_model_production_ready:
+            readability_status = "MANUAL_VERIFICATION_REQUIRED"
+            is_observable = True
+            requires_manual = True
+            explanation = (
+                f"Declaration legibility cannot be certified automatically (OCR confidence: {ocr_confidence:.2f}"
+                + (f", local sharpness: {local_blur:.1f}" if has_crop_metrics else "")
+                + f"). Synthetic demonstration ML model prediction ('READABLE' by {ml_model_name}, conf: {ml_conf}) "
+                f"is unvalidated for statutory decisions. Requires physical manual verification by inspecting officer."
+            )
+
+        # 4. Low ML Confidence / Ambiguity
         elif ml_conf is not None and ml_conf < self.MIN_MODEL_CONFIDENCE and has_crop_metrics:
             readability_status = "MANUAL_VERIFICATION_REQUIRED"
             is_observable = True
             requires_manual = True
             explanation = (
-                f"ML model confidence ({ml_conf:.2f}) below threshold ({self.MIN_MODEL_CONFIDENCE}). "
+                f"ML model confidence ({ml_conf:.2f}) below safety threshold ({self.MIN_MODEL_CONFIDENCE}). "
                 f"Field inspector physical verification required."
             )
+
+        # 5. Moderate Deterministic OCR Confidence
         elif ocr_confidence >= 0.50 and (not has_crop_metrics or local_blur >= 15.0):
             readability_status = "UNCERTAIN"
             is_observable = True
@@ -381,6 +471,8 @@ class DeclarationReadabilityAnalyzer:
                 + (f" [ML Model {ml_model_name}: {ml_pred_label}]" if ml_pred_label else "")
                 + ". Inspector manual verification recommended."
             )
+
+        # 6. Degraded / Poor Optical Clarity
         elif ocr_confidence >= 0.30 or ml_pred_label == "PARTIALLY_READABLE":
             readability_status = "POOR_READABILITY"
             is_observable = False
@@ -391,6 +483,8 @@ class DeclarationReadabilityAnalyzer:
                 + (f" [ML Model {ml_model_name}: {ml_pred_label}]" if ml_pred_label else "")
                 + ". Flagged for manual inspector review. Not an automatic legal violation."
             )
+
+        # 7. Unreadable / Severely Degraded Text
         else:
             readability_status = "UNREADABLE"
             is_observable = False
@@ -415,7 +509,9 @@ class DeclarationReadabilityAnalyzer:
             ml_model_name=ml_model_name,
             ml_confidence=ml_conf,
             ml_predicted_label=ml_pred_label,
-            ml_features=read_feats
+            ml_features=read_feats,
+            is_model_production_ready=self.is_model_production_ready,
+            model_readiness_reason=self.model_readiness_reason
         )
 
 
