@@ -65,11 +65,11 @@ class ChangePasswordRequest(BaseModel):
 INSPECTION_CATEGORIES = Literal["Packaged Food", "Household/Personal Care"]
 
 class CreateInspectionRequest(BaseModel):
-    product_name: str = Field(..., description="Name of the packaged commodity")
+    product_name: str = Field(..., max_length=255, description="Name of the packaged commodity")
     category: INSPECTION_CATEGORIES = Field(..., description="Product category: 'Packaged Food' or 'Household/Personal Care'")
-    brand_name: Optional[str] = Field(None, description="Brand name")
-    location: str = Field(..., description="Inspection location")
-    batch_number: Optional[str] = Field(None, description="Batch / Lot number")
+    brand_name: Optional[str] = Field(None, max_length=255, description="Brand name")
+    location: str = Field(..., max_length=255, description="Inspection location")
+    batch_number: Optional[str] = Field(None, max_length=100, description="Batch / Lot number")
     notes: Optional[str] = Field(None, description="Additional inspection notes")
     client_draft_id: Optional[str] = Field(None, description="Client-generated local draft UUID for idempotent sync")
     inspection_type: Optional[str] = Field("PHYSICAL", description="Analysis mode: PHYSICAL, ONLINE_LISTING, or HYBRID")

@@ -201,7 +201,9 @@ def setup_test_environment():
 
         # 4. Seed counters for current year & 2026
         current_year = datetime.utcnow().year
-        for yr in (current_year, 2026):
+        # De-duplicate: when current_year == 2026 the tuple would queue the same
+        # primary key twice (autoflush is off) and violate the PK on commit.
+        for yr in sorted({current_year, 2026}):
             counter = db.query(InspectionNumberCounter).filter(InspectionNumberCounter.year == yr).first()
             if not counter:
                 db.add(InspectionNumberCounter(year=yr, next_number=1))

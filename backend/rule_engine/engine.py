@@ -289,57 +289,31 @@ class DeterministicRuleEngine:
                     evidence_items=[evidence_item]
                 )
             else:
-                # Check if package is domestic: manufacturer in India or not imported
-                mfg_decl = decl_map.get("manufacturer_details")
-                mfg_val = self._get_effective_value(mfg_decl) or ""
-                is_domestic = (
-                    not product_data.get("is_imported", False)
-                    and not self._get_decl_field(decl, "is_imported", False)
-                    and (not mfg_val or any(ind in mfg_val.upper() for ind in ["INDIA", "DELHI", "MUMBAI", "PUNE", "BANGALORE", "KOLKATA", "CHENNAI", "AHMEDABAD", "GUJARAT", "MAHARASHTRA", "HARYANA", "PUNJAB", "UTTAR PRADESH", "TAMIL NADU", "KARNATAKA", "KERALA", "TELANGANA", "ANDHRA", "RAJASTHAN"]))
+                # An Indian manufacturer address alone never establishes domestic origin
+                # (legal_provenance.py); route to inspector verification instead of inferring PASS.
+                evidence_item = EvidencePayload(
+                    image_id=source_image_id,
+                    bounding_box=None,
+                    highlight_text="[COUNTRY OF ORIGIN NOT EXPLICITLY DECLARED]",
+                    reason="Country of origin is not explicitly declared and domestic origin could not be established. Requires inspector verification."
                 )
-                if is_domestic:
-                    evidence_item = EvidencePayload(
-                        image_id=source_image_id,
-                        bounding_box=bbox,
-                        highlight_text=mfg_val[:100] if mfg_val else "[DOMESTIC COMMODITY]",
-                        reason="Domestic commodity with Indian manufacturer/packer address. Under PCR Rule 6(1)(b), separate country of origin declaration is applicable only to imported goods."
-                    )
-                    return RuleEvaluationResult(
-                        rule_code=rule_code,
-                        rule_version=rule.rule_version,
-                        title=rule.title,
-                        statutory_reference=rule.statutory_reference,
-                        severity=rule.severity,
-                        result_state=RuleResultState.PASS,
-                        effective_value_used=effective_val,
-                        original_ocr_value=original_val,
-                        is_verified_by_officer=is_verified,
-                        explanation="Country of origin declaration is compliant for domestic commodities under PCR Rule 6(1)(b).",
-                        evidence_items=[evidence_item]
-                    )
-                else:
-                    evidence_item = EvidencePayload(
-                        image_id=source_image_id,
-                        bounding_box=None,
-                        highlight_text="[COUNTRY OF ORIGIN NOT EXPLICITLY DECLARED]",
-                        reason="Country of origin is not explicitly declared and domestic origin could not be established. Requires inspector verification."
-                    )
-                    return RuleEvaluationResult(
-                        rule_code=rule_code,
-                        rule_version=rule.rule_version,
-                        title=rule.title,
-                        statutory_reference=rule.statutory_reference,
-                        severity=rule.severity,
-                        result_state=RuleResultState.NEEDS_MANUAL_VERIFICATION,
-                        effective_value_used=None,
-                        original_ocr_value=original_val,
-                        is_verified_by_officer=is_verified,
-                        explanation=(
-                            "Country of Origin / Import Applicability: Country of origin is not explicitly declared on the package. "
-                            "Requires inspector manual verification to determine whether the package is domestic or imported."
-                        ),
-                        evidence_items=[evidence_item]
-                    )
+                return RuleEvaluationResult(
+                    rule_code=rule_code,
+                    rule_version=rule.rule_version,
+                    title=rule.title,
+                    statutory_reference=rule.statutory_reference,
+                    severity=rule.severity,
+                    result_state=RuleResultState.NEEDS_MANUAL_VERIFICATION,
+                    effective_value_used=None,
+                    original_ocr_value=original_val,
+                    is_verified_by_officer=is_verified,
+                    explanation=(
+                        "Country of Origin / Import Applicability: Country of origin is not explicitly declared on the package. "
+                        "Indian manufacturer address alone does not prove domestic origin. "
+                        "Requires inspector manual verification to determine whether the package is domestic or imported."
+                    ),
+                    evidence_items=[evidence_item]
+                )
 
         # Specific Rule: Unit Sale Price (USP) Declaration (Critical Fix #6)
         if rule_code == "PCR_RULE_UNIT_SALE_PRICE":

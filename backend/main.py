@@ -17,8 +17,8 @@ _project_root = str(Path(__file__).resolve().parent.parent)
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from typing import List, Optional
-from datetime import datetime
+from typing import Any, Dict, List, Optional
+from datetime import datetime, timezone
 from PIL import Image
 
 from fastapi import (
@@ -224,7 +224,6 @@ app.add_middleware(
     **_cors_kwargs,
 )
 
-from fastapi.responses import JSONResponse
 from fastapi import Request
 
 @app.exception_handler(Exception)
@@ -506,7 +505,7 @@ def serialize_image_response(img: ProductImage) -> ProductImageResponse:
         height=img.height or 0,
         sequence_order=img.sequence_order or 1,
         quality_status=img.quality_status or "GOOD",
-        quality_score=img.quality_score or 1.0,
+        quality_score=img.quality_score if img.quality_score is not None else 1.0,
         quality_details=quality_details,
         barcodes=barcode_items,
         created_at=img.created_at
@@ -3267,11 +3266,11 @@ def generate_inspection_report(
         and inspection.status == "COMPLETED"
         and not force_regenerate
         and existing_report.pdf_path
-        and Path(existing_report.pdf_path).exists()
+        and storage_service.file_exists(existing_report.pdf_path)
     ):
         # Ensure DOCX also exists at same version without incrementing
-        if not existing_report.docx_path or not Path(existing_report.docx_path).exists():
-            existing_report.docx_path = report_generator.generate_docx(
+        if not existing_report.docx_path or not storage_service.file_exists(existing_report.docx_path):
+            _docx_local = report_generator.generate_docx(
                 inspection=inspection,
                 product=inspection.product,
                 inspector=inspection.inspector or current_user,
@@ -3280,6 +3279,14 @@ def generate_inspection_report(
                 evidence_items=db.query(Evidence).join(ComplianceCheck).filter(ComplianceCheck.inspection_id == real_inspection_id).all(),
                 report_version=existing_report.report_version
             )
+            _safe_num = (inspection.inspection_number or "UNKNOWN").replace("-", "_").replace("/", "_")
+            _docx_key = f"reports/LM_Report_{_safe_num}_v{existing_report.report_version}.docx"
+            storage_service.save_file(
+                _docx_key,
+                Path(_docx_local).read_bytes(),
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
+            existing_report.docx_path = _docx_key
             db.commit()
             db.refresh(existing_report)
         return serialize_report(existing_report)
@@ -3541,7 +3548,12 @@ def finalize_inspection(
         inspection.overall_status = "POTENTIAL_NON_COMPLIANCE"
     elif has_insufficient:
         inspection.overall_status = "NEEDS_MANUAL_VERIFICATION"
-    elif len(all_checks) > 0 and all(c.result_state == "PASS" for c in all_checks):
+    elif len(all_checks) > 0 and all(
+        c.result_state in ("PASS", "NOT_APPLICABLE")
+        or c.adjudication_status in RESOLVED_ADJUDICATION_ACTIONS
+        for c in all_checks
+    ):
+        # Every check passed or was explicitly resolved by the officer (no CONFIRMED violations here)
         inspection.overall_status = "NO_POTENTIAL_VIOLATIONS"
     else:
         # If no statutory checks were evaluated or evidence is unverified,
@@ -3645,9 +3657,8 @@ def stream_report_by_id_docx(
         raise HTTPException(status_code=404, detail="Associated inspection not found")
     verify_inspection_access(inspection, current_user, allow_supervisory=True)
 
-    # Ensure DOCX exists on disk at current version
-    docx_file = Path(report.docx_path) if getattr(report, "docx_path", None) else None
-    if not docx_file or not docx_file.exists():
+    docx_bytes = storage_service.get_file(report.docx_path) if getattr(report, "docx_path", None) else None
+    if not docx_bytes:
         declarations = db.query(Declaration).filter(Declaration.inspection_id == report.inspection_id).all()
         compliance_checks = db.query(ComplianceCheck).filter(ComplianceCheck.inspection_id == report.inspection_id).all()
         evidence_items = db.query(Evidence).join(ComplianceCheck).filter(ComplianceCheck.inspection_id == report.inspection_id).all()
@@ -3660,18 +3671,21 @@ def stream_report_by_id_docx(
             evidence_items=evidence_items,
             report_version=report.report_version
         )
-        report.docx_path = gen_docx
+        docx_bytes = Path(gen_docx).read_bytes()
+        _num = (inspection.inspection_number or "UNKNOWN").replace("-", "_").replace("/", "_")
+        _key = f"reports/LM_Report_{_num}_v{report.report_version}.docx"
+        storage_service.save_file(
+            _key, docx_bytes,
+            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+        )
+        report.docx_path = _key
         db.commit()
         db.refresh(report)
-        docx_file = Path(gen_docx)
-
-    if not docx_file.exists():
-        raise HTTPException(status_code=404, detail="Generated DOCX report file not found on disk")
 
     safe_insp_num = (inspection.inspection_number if inspection else "UNKNOWN").replace("-", "_").replace("/", "_")
     filename = f"LM_Report_{safe_insp_num}.docx"
-    return FileResponse(
-        str(docx_file),
+    return Response(
+        content=docx_bytes,
         media_type="application/vnd.openxmlformats-officedocument.wordprocessingml.document",
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
@@ -4593,11 +4607,11 @@ def delete_inspection(
     files_to_remove = []
     if inspection.report:
         for file_path in [inspection.report.pdf_path, inspection.report.docx_path]:
-            if file_path and os.path.isfile(file_path):
+            if file_path:
                 files_to_remove.append(file_path)
 
     for img in inspection.images:
-        if img.file_path and os.path.isfile(img.file_path):
+        if img.file_path:
             files_to_remove.append(img.file_path)
 
     # Perform atomic DB transaction
@@ -4642,8 +4656,7 @@ def delete_inspection(
     # Post-commit failure-aware physical file cleanup
     for fp in files_to_remove:
         try:
-            if os.path.isfile(fp):
-                os.remove(fp)
+            storage_service.delete_file(fp)
         except Exception as file_err:
             logger.warning(f"[Supervisor Deletion Notice] Could not remove physical file '{fp}': {file_err}")
 
@@ -4689,7 +4702,7 @@ def delete_inspection_report(
     saved_report_id = report.id
     files_to_remove = []
     for fp in [report.pdf_path, report.docx_path]:
-        if fp and os.path.isfile(fp):
+        if fp:
             files_to_remove.append(fp)
 
     try:
@@ -4728,8 +4741,7 @@ def delete_inspection_report(
     # Post-commit physical file cleanup
     for fp in files_to_remove:
         try:
-            if os.path.isfile(fp):
-                os.remove(fp)
+            storage_service.delete_file(fp)
         except Exception as e:
             logger.warning(f"Could not remove report file {fp}: {e}")
 
