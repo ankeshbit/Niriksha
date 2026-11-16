@@ -1,18 +1,11 @@
 import { authStorage } from './authStorage';
 import { Platform } from 'react-native';
+import Constants from 'expo-constants';
 
 // Network host configurations
 export const EMULATOR_API_HOST = 'http://10.0.2.2:8000';   // Android Emulator loopback
 export const LOCALHOST_API_HOST = 'http://127.0.0.1:8000';  // Web / iOS simulator
 export const PRODUCTION_API_HOST = 'https://niriksha-1.onrender.com'; // Live Render Backend
-
-// Environment-configured API host (configured via EXPO_PUBLIC_API_URL in .env or EAS build)
-const expoEnvUrl = (process.env as Record<string, string | undefined>)?.EXPO_PUBLIC_API_URL;
-const ENV_API_HOST = expoEnvUrl ? expoEnvUrl.replace(/\/$/, '') : null;
-
-// Default active API host:
-// - Always default to PRODUCTION_API_HOST (Render backend) on production APKs unless explicitly configured
-export const DEFAULT_API_HOST = ENV_API_HOST || PRODUCTION_API_HOST;
 
 let customBaseUrl: string | null = null;
 
@@ -20,20 +13,77 @@ export const setApiBaseUrl = (url: string) => {
   customBaseUrl = url.replace(/\/$/, '');
 };
 
-export const getApiBaseUrl = () => {
-  if (customBaseUrl) return customBaseUrl;
-  if (ENV_API_HOST) return ENV_API_HOST;
+/**
+ * Resolves local development API host:
+ * 1. Inspects Expo Metro debugger/manifest host to auto-detect the host machine's LAN IP
+ *    (seamlessly connects physical devices and Expo Go over Wi-Fi without hardcoded IPs).
+ * 2. On Android emulator: uses standard emulator loopback 10.0.2.2:8000 when direct host resolution is unavailable.
+ * 3. On Web / iOS simulator: uses 127.0.0.1:8000 or current browser origin.
+ */
+export function resolveDevelopmentHost(): string {
+  // Try modern Expo config hostUri or legacy debuggerHost
+  const hostUri =
+    Constants.expoConfig?.hostUri ||
+    (Constants as any).manifest2?.extra?.expoClient?.hostUri ||
+    (Constants as any).manifest?.debuggerHost;
 
-  // On Web: dynamically match current window hostname if on custom deployment without ENV_API_HOST
+  if (hostUri && typeof hostUri === 'string') {
+    const ip = hostUri.split(':')[0];
+    if (ip && ip !== 'localhost' && ip !== '127.0.0.1') {
+      return `http://${ip}:8000`;
+    }
+  }
+
+  // Fallback to platform-specific localhost alias
+  if (Platform.OS === 'android') {
+    return EMULATOR_API_HOST;
+  }
+
   if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location?.hostname) {
     const host = window.location.hostname;
     if (host && host !== 'localhost' && host !== '127.0.0.1') {
-      return `https://${host}`;
+      return `http://${host}:8000`;
+    }
+  }
+
+  return LOCALHOST_API_HOST;
+}
+
+/**
+ * Authoritative API base URL resolution:
+ * 1. Runtime override via setApiBaseUrl(url)
+ * 2. Explicit environment variable EXPO_PUBLIC_API_URL (takes precedence in all environments)
+ * 3. Development fallback (__DEV__): dynamically inferred Metro host or platform loopback
+ * 4. Production Web deployment fallback (matching custom origin)
+ * 5. Production APK / bundle default (Render hosted backend)
+ */
+export const getApiBaseUrl = (): string => {
+  if (customBaseUrl) return customBaseUrl;
+
+  const expoEnvUrl = (process.env as Record<string, string | undefined>)?.EXPO_PUBLIC_API_URL;
+  if (expoEnvUrl && expoEnvUrl.trim()) {
+    return expoEnvUrl.trim().replace(/\/$/, '');
+  }
+
+  const isDev = typeof __DEV__ !== 'undefined' ? __DEV__ : process.env.NODE_ENV !== 'production';
+  if (isDev) {
+    return resolveDevelopmentHost();
+  }
+
+  // On Web: dynamically match current window hostname if on custom deployment without EXPO_PUBLIC_API_URL
+  if (Platform.OS === 'web' && typeof window !== 'undefined' && window.location?.hostname) {
+    const host = window.location.hostname;
+    if (host && host !== 'localhost' && host !== '127.0.0.1') {
+      const proto = window.location.protocol || 'https:';
+      return `${proto}//${host}`;
     }
   }
 
   return PRODUCTION_API_HOST;
 };
+
+// Backwards-compatible default constant
+export const DEFAULT_API_HOST = getApiBaseUrl();
 
 // ─── Error classification ─────────────────────────────────────────────────────
 
@@ -90,11 +140,13 @@ export function classifyFetchError(err: any, url?: string): ClassifiedError {
   }
 
   if (isNetworkMsg) {
+    const targetUrl = url || (err?.targetUrl ?? err?.url);
+    const targetDesc = targetUrl ? ` (${targetUrl})` : '';
     return {
       type: 'NETWORK_UNREACHABLE',
-      message: msg,
+      message: `${msg}${targetDesc}`,
       userMessage:
-        'Backend connection unavailable. Your draft is safely stored locally.',
+        `Backend connection unavailable${targetDesc}. Your draft is safely stored locally.`,
     };
   }
 
@@ -239,6 +291,10 @@ export async function apiRequest<T = any>(
     return (await response.text()) as unknown as T;
   } catch (err: any) {
     if (timeoutId) clearTimeout(timeoutId);
+    if (err && typeof err === 'object') {
+      err.url = url;
+      err.targetUrl = url;
+    }
     throw err;
   }
 }

@@ -195,10 +195,20 @@ cd mobile
 # 2. Install dependencies
 npm install
 
-# 3. Verify TypeScript type safety
+# 3. (Optional) Configure Backend API URL
+# By default, Niriksha auto-resolves your backend without manual IP configuration:
+# - Android Emulator automatically connects to http://10.0.2.2:8000
+# - Expo Go / Physical Device automatically infers your host PC's Wi-Fi IP via Metro
+# - Web / iOS Simulator connects to http://127.0.0.1:8000
+# - Production Release builds connect to https://niriksha-1.onrender.com
+#
+# To explicitly override the backend endpoint, copy mobile/.env.example to mobile/.env:
+Copy-Item .env.example .env  # or create mobile/.env with EXPO_PUBLIC_API_URL=http://<host>:8000
+
+# 4. Verify TypeScript type safety
 npm run ts:check
 
-# 4. Start Expo development server
+# 5. Start Expo development server
 npm run start
 ```
 
