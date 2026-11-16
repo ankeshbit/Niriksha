@@ -43,8 +43,9 @@ def get_current_user(token: Optional[str] = Depends(oauth2_scheme), db: Session 
     user = db.query(User).filter(User.officer_id == officer_id).first()
     if user is None:
         raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND,
-            detail="Officer not found"
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Officer not found",
+            headers={"WWW-Authenticate": "Bearer"}
         )
     return user
 
