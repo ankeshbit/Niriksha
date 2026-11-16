@@ -3619,6 +3619,111 @@ def _background_generate_report(inspection_id: str, officer_id: str):
         session.close()
 
 
+def determine_authoritative_final_status(
+    inspection: Inspection,
+    all_checks: List[ComplianceCheck],
+    declarations: List[Declaration],
+    requested_status: Optional[str] = None
+) -> str:
+    """
+    Calculates the authoritative final inspection status based on evaluated statutory findings,
+    adjudication outcomes, declaration verifications, and validates that any client-supplied
+    status does not contradict statutory reality.
+
+    Statutory Statuses:
+    - POTENTIAL_NON_COMPLIANCE: Confirmed statutory violation exists.
+    - NEEDS_MANUAL_VERIFICATION: Insufficient evidence, unevaluated rules, or unresolved conflicts.
+    - NO_POTENTIAL_VIOLATIONS: All mandatory rules evaluated and verified compliant.
+    """
+    # 1. Check for confirmed statutory violations
+    has_confirmed_violations = any(
+        c.adjudication_status == "CONFIRMED"
+        or (
+            c.result_state == "POTENTIAL_NON_COMPLIANCE"
+            and c.adjudication_status not in ("DISMISSED", "NOT_APPLICABLE", "CORRECTED")
+        )
+        for c in all_checks
+    )
+
+    # 2. Check for unresolved mandatory label declarations
+    unresolved_declarations = [
+        d for d in declarations
+        if getattr(d, "is_applicable", True)
+        and getattr(d, "extraction_status", "") in ["NOT_FOUND", "CONFLICTING", "LOW_CONFIDENCE", "NEEDS_REVIEW"]
+        and getattr(d, "verification_status", "") not in ["VERIFIED", "CORRECTED"]
+    ]
+
+    # 3. Check for insufficient evidence or checks requiring manual verification
+    has_insufficient_evidence = any(
+        c.adjudication_status == "NEEDS_MORE_EVIDENCE"
+        or (
+            c.result_state in ("INSUFFICIENT_EVIDENCE", "NEEDS_MANUAL_VERIFICATION")
+            and c.adjudication_status not in ("DISMISSED", "NOT_APPLICABLE", "CORRECTED", "CONFIRMED")
+        )
+        for c in all_checks
+    )
+
+    has_no_evaluations = len(all_checks) == 0
+
+    # 4. Compute authoritative baseline
+    if has_confirmed_violations:
+        authoritative_status = "POTENTIAL_NON_COMPLIANCE"
+    elif has_insufficient_evidence or bool(unresolved_declarations) or has_no_evaluations:
+        authoritative_status = "NEEDS_MANUAL_VERIFICATION"
+    elif (
+        len(all_checks) > 0
+        and all(
+            c.result_state in ("PASS", "NOT_APPLICABLE")
+            or c.adjudication_status in RESOLVED_ADJUDICATION_ACTIONS
+            for c in all_checks
+        )
+        and not unresolved_declarations
+    ):
+        authoritative_status = "NO_POTENTIAL_VIOLATIONS"
+    else:
+        authoritative_status = "NEEDS_MANUAL_VERIFICATION"
+
+    # 5. Server-side validation of client-supplied status (if any)
+    if requested_status and str(requested_status).strip():
+        raw_status = str(requested_status).strip().upper()
+        status_map = {
+            "COMPLIANT": "NO_POTENTIAL_VIOLATIONS",
+            "NON_COMPLIANT": "POTENTIAL_NON_COMPLIANCE",
+        }
+        norm_status = status_map.get(raw_status, raw_status)
+
+        valid_statuses = {"NO_POTENTIAL_VIOLATIONS", "POTENTIAL_NON_COMPLIANCE", "NEEDS_MANUAL_VERIFICATION"}
+        if norm_status not in valid_statuses:
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Invalid final_status '{requested_status}'. Must be one of: {', '.join(sorted(valid_statuses))}."
+            )
+
+        # Contradiction checks:
+        if has_confirmed_violations and norm_status != "POTENTIAL_NON_COMPLIANCE":
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot finalize inspection with status '{requested_status}': inspection has confirmed statutory violations."
+            )
+
+        if (has_insufficient_evidence or bool(unresolved_declarations) or has_no_evaluations) and norm_status == "NO_POTENTIAL_VIOLATIONS":
+            reasons = []
+            if has_no_evaluations:
+                reasons.append("statutory compliance rules have not been evaluated")
+            if unresolved_declarations:
+                reasons.append(f"{len(unresolved_declarations)} label declaration(s) have unresolved conflicts or require manual verification")
+            if has_insufficient_evidence:
+                reasons.append("one or more findings have insufficient evidence or require manual verification")
+            raise HTTPException(
+                status_code=status.HTTP_400_BAD_REQUEST,
+                detail=f"Cannot finalize inspection with clean compliance status ('{requested_status}'): {'; '.join(reasons)}."
+            )
+
+        return norm_status
+
+    return authoritative_status
+
+
 @app.post("/api/inspections/{inspection_id}/finalize", response_model=FinalizeInspectionResponse, tags=["Inspections"])
 def finalize_inspection(
     inspection_id: str,
@@ -3631,7 +3736,7 @@ def finalize_inspection(
     Finalizes the inspection lifecycle based on human adjudication, marks status as COMPLETED,
     and produces the finalized official statutory inspection report asynchronously in a background task.
     """
-    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
+    inspection = db.query(Inspection).filter(Inspection.id == inspection_id).with_for_update().first()
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")
     verify_inspection_access(inspection, current_user, allow_supervisory=False)
@@ -3674,41 +3779,15 @@ def finalize_inspection(
             }
         )
 
-    # Calculate final status from resolved adjudications
-    has_confirmed_violations = any(
-        c.adjudication_status == "CONFIRMED"
-        for c in all_checks
-    )
-    has_insufficient = any(
-        c.result_state == "INSUFFICIENT_EVIDENCE" and c.adjudication_status == "NEEDS_MORE_EVIDENCE"
-        for c in all_checks
-    )
+    declarations = db.query(Declaration).filter(Declaration.inspection_id == inspection.id).all()
 
-    # Inspector Final Decision & Adjudication Safety (Requirement 11)
-    if req.final_status and req.final_status in [
-        "NO_POTENTIAL_VIOLATIONS", "POTENTIAL_NON_COMPLIANCE", "NEEDS_MANUAL_VERIFICATION",
-        "COMPLIANT", "NON_COMPLIANT"
-    ]:
-        status_map = {
-            "COMPLIANT": "NO_POTENTIAL_VIOLATIONS",
-            "NON_COMPLIANT": "POTENTIAL_NON_COMPLIANCE",
-        }
-        inspection.overall_status = status_map.get(req.final_status, req.final_status)
-    elif has_confirmed_violations:
-        inspection.overall_status = "POTENTIAL_NON_COMPLIANCE"
-    elif has_insufficient:
-        inspection.overall_status = "NEEDS_MANUAL_VERIFICATION"
-    elif len(all_checks) > 0 and all(
-        c.result_state in ("PASS", "NOT_APPLICABLE")
-        or c.adjudication_status in RESOLVED_ADJUDICATION_ACTIONS
-        for c in all_checks
-    ):
-        # Every check passed or was explicitly resolved by the officer (no CONFIRMED violations here)
-        inspection.overall_status = "NO_POTENTIAL_VIOLATIONS"
-    else:
-        # If no statutory checks were evaluated or evidence is unverified,
-        # never automatically mark compliant. Route to manual verification.
-        inspection.overall_status = "NEEDS_MANUAL_VERIFICATION"
+    # Calculate authoritative final status with server-side validation against client manipulation
+    inspection.overall_status = determine_authoritative_final_status(
+        inspection=inspection,
+        all_checks=all_checks,
+        declarations=declarations,
+        requested_status=req.final_status
+    )
 
     inspection.status = "COMPLETED"
     inspection.finalized_at = datetime.utcnow()
@@ -3722,7 +3801,7 @@ def finalize_inspection(
         "inspection",
         inspection.id,
         inspection.id,
-        details=f"Inspection {inspection.inspection_number} finalized with status: {inspection.overall_status}"
+        details=f"Inspection {inspection.inspection_number} finalized with authoritative status: {inspection.overall_status}"
     )
 
     db.commit()

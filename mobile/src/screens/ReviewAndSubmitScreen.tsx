@@ -52,8 +52,15 @@ export const ReviewAndSubmitScreen: React.FC = () => {
       setFindings(fnds || []);
       setComplianceSummary(compSummary || null);
 
-      const hasViolations = (fnds || []).some((f: any) => f.adjudication_status === 'CONFIRMED' || f.result_state === 'POTENTIAL_NON_COMPLIANCE');
-      const hasUnverified = (fnds || []).some((f: any) => f.result_state === 'INSUFFICIENT_EVIDENCE' || f.result_state === 'NEEDS_MANUAL_VERIFICATION');
+      const hasViolations = (fnds || []).some((f: any) => 
+        f.adjudication_status === 'CONFIRMED' || 
+        (f.result_state === 'POTENTIAL_NON_COMPLIANCE' && f.adjudication_status !== 'DISMISSED' && f.adjudication_status !== 'CORRECTED' && f.adjudication_status !== 'NOT_APPLICABLE')
+      );
+      const hasUnverified = (fnds || []).some((f: any) => 
+        f.result_state === 'INSUFFICIENT_EVIDENCE' || 
+        f.result_state === 'NEEDS_MANUAL_VERIFICATION' ||
+        f.adjudication_status === 'NEEDS_MORE_EVIDENCE'
+      );
       if (hasViolations) {
         setFinalDecision('POTENTIAL_NON_COMPLIANCE');
       } else if (hasUnverified) {
@@ -89,6 +96,11 @@ export const ReviewAndSubmitScreen: React.FC = () => {
   };
 
   const unadjudicatedFindings = findings.filter(isFindingPendingAdjudication);
+
+  const hasConfirmedViolations = (findings || []).some((f: any) => 
+    f.adjudication_status === 'CONFIRMED' || 
+    (f.result_state === 'POTENTIAL_NON_COMPLIANCE' && f.adjudication_status !== 'DISMISSED' && f.adjudication_status !== 'CORRECTED' && f.adjudication_status !== 'NOT_APPLICABLE')
+  );
 
   // Authoritative pending count: Backend compliance-summary is the single source of truth
   const pendingCount =
@@ -444,10 +456,21 @@ export const ReviewAndSubmitScreen: React.FC = () => {
                   <TouchableOpacity
                     style={[
                       styles.verdictOption,
-                      finalDecision === 'NO_POTENTIAL_VIOLATIONS' && styles.verdictOptionSelectedGreen
+                      finalDecision === 'NO_POTENTIAL_VIOLATIONS' && styles.verdictOptionSelectedGreen,
+                      hasConfirmedViolations && { opacity: 0.5 }
                     ]}
-                    onPress={() => setFinalDecision('NO_POTENTIAL_VIOLATIONS')}
-                    activeOpacity={0.8}
+                    onPress={() => {
+                      if (hasConfirmedViolations) {
+                        if (Platform.OS === 'web' && typeof window !== 'undefined') {
+                          window.alert('Cannot declare compliance while confirmed statutory violations exist.');
+                        } else {
+                          Alert.alert('Invalid Determination', 'Cannot declare compliance while confirmed statutory violations exist.');
+                        }
+                        return;
+                      }
+                      setFinalDecision('NO_POTENTIAL_VIOLATIONS');
+                    }}
+                    activeOpacity={hasConfirmedViolations ? 1 : 0.8}
                   >
                     <MaterialIcons
                       name={finalDecision === 'NO_POTENTIAL_VIOLATIONS' ? "radio-button-checked" : "radio-button-unchecked"}
