@@ -14,3 +14,10 @@ local.properties
 
 # Bundle artifacts
 *.jsbundle
+
+# Keystores & Signing Credentials (protect production secrets)
+*.jks
+*.keystore
+!app/debug.keystore
+*.p12
+*.pepk

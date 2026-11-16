@@ -46,6 +46,11 @@ generated_reports/*
 .env
 .env.local
 .env.*.local
+*.jks
+*.keystore
+!mobile/android/app/debug.keystore
+*.p12
+*.pepk
 
 # Scratch & temporary test scripts
 scratch/
