@@ -11,6 +11,7 @@ Targeted tests for the Final Pre-Demo Correction Pass:
 7. REQUEST_NEW_IMAGE endpoint creates audit log and stays unresolved
 """
 import io
+import time
 import json
 import pytest
 from PIL import Image as PILImage
@@ -67,7 +68,18 @@ def _upload_image(token: str, inspection_id: str) -> str:
 
 def _run_ocr(token: str, inspection_id: str):
     res = client.post(f"/api/inspections/{inspection_id}/ocr", headers=_auth(token))
-    assert res.status_code == 200, res.text
+    assert res.status_code in (200, 202), res.text
+    if res.status_code == 202:
+        deadline = time.time() + 60.0
+        while time.time() < deadline:
+            st_resp = client.get(f"/api/inspections/{inspection_id}/ocr/status", headers=_auth(token))
+            if st_resp.status_code == 200:
+                st = st_resp.json()
+                if st.get("status") == "COMPLETED":
+                    break
+                elif st.get("status") == "FAILED":
+                    raise AssertionError(f"OCR failed: {st.get('error_message')}")
+            time.sleep(1.0)
 
 
 def _evaluate(token: str, inspection_id: str) -> list:

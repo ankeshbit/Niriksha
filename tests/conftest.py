@@ -174,8 +174,8 @@ def setup_test_environment():
         if not supervisor:
             supervisor = User(
                 officer_id="DOCA-SUP-101",
-                full_name="Supervisor Anjali Sharma",
-                email="anjali.sharma@lm.gov.in",
+                full_name="NiriKsha Supervisor",
+                email="supervisor@lm.gov.in",
                 phone="+919876543210",
                 designation="Supervisory Officer (Legal Metrology)",
                 zone="Northern Zone - Delhi HQ",

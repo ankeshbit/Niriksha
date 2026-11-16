@@ -15,6 +15,7 @@ Acceptance Criteria:
 """
 
 import os
+import time
 import pytest
 from fastapi.testclient import TestClient
 
@@ -156,7 +157,16 @@ def test_real_britannia_e2e_pipeline_without_fabricated_adjudication(auth_client
     assert r2.status_code == 201
 
     ocr_api_resp = auth_client.post(f"/api/inspections/{insp_id}/ocr")
-    assert ocr_api_resp.status_code == 200
+    assert ocr_api_resp.status_code in (200, 202)
+    if ocr_api_resp.status_code == 202:
+        deadline = time.time() + 90.0
+        while time.time() < deadline:
+            st = auth_client.get(f"/api/inspections/{insp_id}/ocr/status").json()
+            if st.get("status") == "COMPLETED":
+                break
+            elif st.get("status") == "FAILED":
+                raise AssertionError(f"OCR failed: {st.get('error_message')}")
+            time.sleep(1.0)
 
     eval_api_resp = auth_client.post(f"/api/inspections/{insp_id}/evaluate")
     assert eval_api_resp.status_code == 200

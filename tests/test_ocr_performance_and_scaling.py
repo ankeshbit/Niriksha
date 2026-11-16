@@ -120,6 +120,17 @@ def test_ocr_and_compliance_evaluation_workflow(auth_client):
     # 3. Run OCR
     t0 = time.time()
     ocr_resp = auth_client.post(f"/api/inspections/{insp_id}/ocr")
+    assert ocr_resp.status_code in (200, 202), ocr_resp.text
+    if ocr_resp.status_code == 202:
+        deadline = time.time() + 90.0
+        while time.time() < deadline:
+            st = auth_client.get(f"/api/inspections/{insp_id}/ocr/status").json()
+            if st.get("status") == "COMPLETED":
+                break
+            elif st.get("status") == "FAILED":
+                raise AssertionError(f"OCR failed: {st.get('error_message')}")
+            time.sleep(1.0)
+        ocr_resp = auth_client.post(f"/api/inspections/{insp_id}/ocr")
     ocr_time = time.time() - t0
 
     assert ocr_resp.status_code == 200, ocr_resp.text

@@ -38,6 +38,7 @@ via tests/conftest.py. Never touches legal_metrology.db or Neon production.
 """
 
 import os
+import time
 import pytest
 from pathlib import Path
 from fastapi.testclient import TestClient
@@ -119,6 +120,20 @@ def _auth(token: str) -> dict:
     return {"Authorization": f"Bearer {token}"}
 
 
+def _wait_for_ocr_completion(client: TestClient, token: str, insp_id: str, max_wait_sec: float = 60.0):
+    deadline = time.time() + max_wait_sec
+    while time.time() < deadline:
+        st_resp = client.get(f"/api/inspections/{insp_id}/ocr/status", headers=_auth(token))
+        if st_resp.status_code == 200:
+            st_data = st_resp.json()
+            if st_data.get("status") == "COMPLETED":
+                return st_data
+            elif st_data.get("status") == "FAILED":
+                raise AssertionError(f"OCR failed: {st_data.get('error_message')}")
+        time.sleep(1.0)
+    raise AssertionError(f"Timed out waiting for OCR on {insp_id}")
+
+
 @pytest.fixture(scope="module")
 def sample_inspection_with_report(client, inspector_token):
     """Creates a complete finalized inspection with image, OCR, findings, adjudication, and report."""
@@ -149,7 +164,9 @@ def sample_inspection_with_report(client, inspector_token):
 
     # Run OCR
     ocr_resp = client.post(f"/api/inspections/{insp_id}/ocr", headers=_auth(inspector_token))
-    assert ocr_resp.status_code == 200, ocr_resp.text
+    assert ocr_resp.status_code in (200, 202), ocr_resp.text
+    if ocr_resp.status_code == 202:
+        _wait_for_ocr_completion(client, inspector_token, insp_id)
 
     # Run Rule Evaluation
     eval_resp = client.post(f"/api/inspections/{insp_id}/evaluate", headers=_auth(inspector_token))

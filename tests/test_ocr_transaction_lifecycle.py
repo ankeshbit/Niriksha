@@ -89,9 +89,38 @@ def test_ocr_transaction_closed_during_inference(auth_headers):
             ocr_status="OCR_SUCCESS"
         )
 
-    with patch("backend.main.ocr_service.process_image", side_effect=mock_process_image):
+    from backend.ocr_job_service import ocr_job_service
+
+    # Stop background worker loop to isolate forensic pool check from background threads
+    ocr_job_service.stop_worker_loop()
+
+    with patch("backend.ocr_job_service.ocr_job_service.trigger_worker"):
         ocr_resp = client.post(f"/api/inspections/{inspection_id}/ocr", headers=auth_headers)
-        assert ocr_resp.status_code == 200, f"OCR endpoint failed: {ocr_resp.text}"
+        assert ocr_resp.status_code in (200, 202), f"OCR endpoint failed: {ocr_resp.text}"
+
+    if ocr_resp.status_code == 202:
+        job_id = ocr_resp.json()["job_id"]
+        # Claim job to transition from PENDING to PROCESSING with connection safely released
+        from backend.models import OCRJob
+        from datetime import datetime
+        claim_db = SessionLocal()
+        try:
+            job = claim_db.query(OCRJob).filter(OCRJob.id == job_id).first()
+            if job:
+                job.status = "PROCESSING"
+                job.started_at = datetime.utcnow()
+                job.heartbeat_at = datetime.utcnow()
+                claim_db.commit()
+        finally:
+            claim_db.close()
+
+        with patch("backend.ocr_service.ocr_service.process_image", side_effect=mock_process_image):
+            success = ocr_job_service.process_job_execution(job_id, inspection_id)
+            assert success is True
+    else:
+        with patch("backend.ocr_service.ocr_service.process_image", side_effect=mock_process_image):
+            ocr_resp = client.post(f"/api/inspections/{inspection_id}/ocr", headers=auth_headers)
+            assert ocr_resp.status_code == 200
 
     assert inference_executed is True, "Inference mock was not called"
     assert transaction_held_during_inference is False, (

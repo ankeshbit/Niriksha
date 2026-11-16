@@ -318,11 +318,6 @@ async def _startup_ocr_warmup():
     warmup_thread.start()
     logger.info("[OCR_WARMUP_THREAD_STARTED] PaddleOCR warmup launched in background thread")
 
-@app.on_event("startup")
-async def _startup_ocr_worker():
-    """Initializes and runs the durable OCR job worker loop with PostgreSQL SKIP LOCKED claiming."""
-    ocr_job_service.start_worker_loop()
-    logger.info("[OCR_JOB_WORKER_INITIALIZED] Durable background OCR worker active")
 
 # ----------------- Helper Functions -----------------
 
@@ -2453,7 +2448,14 @@ def get_inspection_ocr_job_status(
     )
 
 
-@app.post("/api/inspections/{inspection_id}/ocr", response_model=RunOCRResponse, tags=["OCR & Declarations"])
+@app.post(
+    "/api/inspections/{inspection_id}/ocr",
+    responses={
+        200: {"model": RunOCRResponse, "description": "Cached extraction result if already complete"},
+        202: {"description": "OCR job created and processing asynchronously"}
+    },
+    tags=["OCR & Declarations"]
+)
 def run_inspection_ocr_and_extraction(
     inspection_id: str,
     force: bool = False,
@@ -2495,29 +2497,19 @@ def run_inspection_ocr_and_extraction(
     )
     ocr_job_service.trigger_worker()
 
-    # 3. Wait up to 15s for fast or already-running job to complete
-    wait_until = time.time() + 15.0
-    while time.time() < wait_until:
-        time.sleep(1.0)
-        db.expire_all()
-        fresh_job = db.query(OCRJob).filter(OCRJob.id == job.id).first()
-        if fresh_job and fresh_job.status == "COMPLETED":
-            cached_resp = _build_existing_ocr_response(inspection_id, db)
-            if cached_resp:
-                return cached_resp
-            break
-        elif fresh_job and fresh_job.status == "FAILED":
-            raise HTTPException(status_code=500, detail=fresh_job.error_message or "OCR processing failed")
-
-    # 4. If completed, return response
-    cached_resp = _build_existing_ocr_response(inspection_id, db)
-    if cached_resp:
-        return cached_resp
-
-    # If still processing after 15s wait, return 202 Accepted
-    raise HTTPException(
+    status_url = f"/api/inspections/{inspection_id}/ocr/status"
+    return JSONResponse(
         status_code=status.HTTP_202_ACCEPTED,
-        detail="OCR job is processing asynchronously. Please query /api/inspections/{id}/ocr/status for progress."
+        content={
+            "job_id": job.id,
+            "status_url": status_url,
+            "inspection_id": inspection_id,
+            "status": job.status,
+            "current_stage": job.current_stage,
+            "progress_percent": job.progress_percent,
+            "is_existing": is_existing,
+            "message": "OCR job created and processing asynchronously. Poll status_url for progress."
+        }
     )
 
 

@@ -1,3 +1,4 @@
+import time
 import tests.conftest
 import pytest
 from pathlib import Path
@@ -6,7 +7,23 @@ from backend.main import app
 from backend.config import settings
 from backend.rule_engine import rule_engine, get_all_rules, get_rule_by_code, RuleResultState
 
-client = TestClient(app)
+class OCRAutoResolvingClient(TestClient):
+    def post(self, url, *args, **kwargs):
+        resp = super().post(url, *args, **kwargs)
+        if "/ocr" in str(url) and not str(url).endswith("/ocr/start") and resp.status_code == 202:
+            insp_id = str(url).split("/inspections/")[1].split("/ocr")[0]
+            headers = kwargs.get("headers")
+            deadline = time.time() + 60.0
+            while time.time() < deadline:
+                st = super().get(f"/api/inspections/{insp_id}/ocr/status", headers=headers).json()
+                if st.get("status") == "COMPLETED":
+                    return super().post(url, *args, **kwargs)
+                elif st.get("status") == "FAILED":
+                    raise AssertionError(f"OCR failed: {st.get('error_message')}")
+                time.sleep(0.5)
+        return resp
+
+client = OCRAutoResolvingClient(app)
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
 def get_auth_token():

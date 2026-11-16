@@ -1,5 +1,6 @@
 import os
 import sys
+import time
 import json
 import pytest
 from pathlib import Path
@@ -217,6 +218,17 @@ def test_real_package_complete_end_to_end_api_workflow(auth_client):
 
     # 4. Run OCR & Extraction
     ocr_resp = auth_client.post(f"/api/inspections/{insp_id}/ocr")
+    assert ocr_resp.status_code in (200, 202), f"OCR failed: {ocr_resp.text}"
+    if ocr_resp.status_code == 202:
+        deadline = time.time() + 90.0
+        while time.time() < deadline:
+            st = auth_client.get(f"/api/inspections/{insp_id}/ocr/status").json()
+            if st.get("status") == "COMPLETED":
+                break
+            elif st.get("status") == "FAILED":
+                raise AssertionError(f"OCR failed: {st.get('error_message')}")
+            time.sleep(1.0)
+        ocr_resp = auth_client.post(f"/api/inspections/{insp_id}/ocr")
     assert ocr_resp.status_code == 200, f"OCR failed: {ocr_resp.text}"
     ocr_data = ocr_resp.json()
     assert ocr_data["declarations_count"] > 0

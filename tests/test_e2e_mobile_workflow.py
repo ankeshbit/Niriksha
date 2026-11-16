@@ -25,6 +25,7 @@ End-to-End Validation Suite for Legal Metrology Mobile MVP:
 """
 
 import io
+import time
 import json
 from pathlib import Path
 import pytest
@@ -146,8 +147,20 @@ def test_e2e_full_workflow_and_all_five_actions():
 
     # Step 3: Run OCR and Structured Declaration Extraction (Screen 12: Analyzing)
     ocr_resp = client.post(f"/api/inspections/{insp_id}/ocr", headers=auth_header(token))
-    assert ocr_resp.status_code == 200
-    ocr_data = ocr_resp.json()
+    assert ocr_resp.status_code in {200, 202}
+    if ocr_resp.status_code == 202:
+        deadline = time.time() + 60.0
+        while time.time() < deadline:
+            st = client.get(f"/api/inspections/{insp_id}/ocr/status", headers=auth_header(token)).json()
+            if st.get("status") == "COMPLETED":
+                break
+            elif st.get("status") == "FAILED":
+                raise AssertionError(f"OCR failed: {st.get('error_message')}")
+            time.sleep(1.0)
+    # Refresh cached response or declarations
+    ocr_resp_final = client.post(f"/api/inspections/{insp_id}/ocr", headers=auth_header(token))
+    assert ocr_resp_final.status_code == 200
+    ocr_data = ocr_resp_final.json()
     assert ocr_data["status"] in {"EXTRACTION_COMPLETE", "COMPLETED"}
     assert len(ocr_data["declarations"]) > 0
 
@@ -361,7 +374,16 @@ def test_clean_compliant_flow_status_no_potential_violations():
         data={"view_type": "front"}
     )
 
-    client.post(f"/api/inspections/{insp_id}/ocr", headers=auth_header(token))
+    ocr_resp = client.post(f"/api/inspections/{insp_id}/ocr", headers=auth_header(token))
+    if ocr_resp.status_code == 202:
+        deadline = time.time() + 60.0
+        while time.time() < deadline:
+            st = client.get(f"/api/inspections/{insp_id}/ocr/status", headers=auth_header(token)).json()
+            if st.get("status") == "COMPLETED":
+                break
+            elif st.get("status") == "FAILED":
+                raise AssertionError(f"OCR failed: {st.get('error_message')}")
+            time.sleep(1.0)
     eval_resp = client.post(f"/api/inspections/{insp_id}/evaluate", headers=auth_header(token))
     assert eval_resp.status_code == 200
 

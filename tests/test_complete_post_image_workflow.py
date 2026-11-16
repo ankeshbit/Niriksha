@@ -42,13 +42,29 @@ from backend.extraction_service import (
 )
 from backend.rule_engine.engine import rule_engine
 from backend.rule_engine.models import RuleResultState
+import time
 from backend.report_service import report_generator
 
 FIXTURES_DIR = Path(__file__).resolve().parent / "fixtures"
 
+class OCRAutoResolvingClient(TestClient):
+    def post(self, url, *args, **kwargs):
+        resp = super().post(url, *args, **kwargs)
+        if "/ocr" in str(url) and not str(url).endswith("/ocr/start") and resp.status_code == 202:
+            insp_id = str(url).split("/inspections/")[1].split("/ocr")[0]
+            deadline = time.time() + 60.0
+            while time.time() < deadline:
+                st = super().get(f"/api/inspections/{insp_id}/ocr/status").json()
+                if st.get("status") == "COMPLETED":
+                    return super().post(url, *args, **kwargs)
+                elif st.get("status") == "FAILED":
+                    raise AssertionError(f"OCR failed: {st.get('error_message')}")
+                time.sleep(0.5)
+        return resp
+
 @pytest.fixture
 def auth_client():
-    client = TestClient(app)
+    client = OCRAutoResolvingClient(app)
     resp = client.post("/api/auth/login", json={
         "officer_id": settings.SEED_OFFICER_ID,
         "password": settings.SEED_OFFICER_PASSWORD
