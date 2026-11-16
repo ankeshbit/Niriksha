@@ -623,20 +623,7 @@ class OCRJobService:
 
             try:
                 all_imgs = db.query(ProductImage).filter(ProductImage.inspection_id == inspection_id).all()
-                matrix_rows = declaration_validation_engine.build_declaration_matrix(saved_declarations, all_imgs)
-                matrix_row_map = {r.field_name: r for r in matrix_rows}
-                for decl in saved_declarations:
-                    r = matrix_row_map.get(decl.field_name)
-                    if r:
-                        decl.placement_status = r.placement_status
-                        decl.placement_details_json = json.dumps({"expected_panel": r.placement_status, "statutory_ref": r.statutory_reference})
-                        decl.font_size_status = r.font_size_status
-                        decl.font_size_details_json = json.dumps({"status": r.font_size_status})
-                        decl.readability_status = r.readability_status
-                        decl.readability_details_json = json.dumps({"status": r.readability_status, "confidence": decl.confidence})
-                        decl.format_status = r.format_status
-                        decl.format_details_json = json.dumps({"findings": r.findings, "explanation": r.explanation})
-                        decl.validation_matrix_json = json.dumps(r.model_dump())
+                declaration_validation_engine.compute_and_store_matrix(saved_declarations, all_imgs, db=db)
             except Exception as e:
                 logger.warning(f"[DECLARATION_MATRIX_WARN] {e}")
 

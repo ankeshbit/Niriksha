@@ -2629,7 +2629,7 @@ def get_inspection_declaration_validation(
     declarations = db.query(Declaration).filter(Declaration.inspection_id == inspection.id).all()
     images = db.query(ProductImage).filter(ProductImage.inspection_id == inspection.id).all()
 
-    matrix_rows = declaration_validation_engine.build_declaration_matrix(declarations, images)
+    matrix_rows = declaration_validation_engine.get_or_build_matrix(declarations, images, db=db)
 
     compliant_count = sum(1 for r in matrix_rows if r.overall_status == "COMPLIANT")
     pot_viol_count = sum(1 for r in matrix_rows if r.overall_status == "POTENTIAL_NON_COMPLIANCE")
@@ -2676,7 +2676,7 @@ def get_inspection_compliance_summary(
     images = db.query(ProductImage).filter(ProductImage.inspection_id == real_inspection_id).all()
     listing_comps = db.query(ListingComparison).filter(ListingComparison.inspection_id == real_inspection_id).all()
 
-    matrix_rows = declaration_validation_engine.build_declaration_matrix(declarations, images)
+    matrix_rows = declaration_validation_engine.get_or_build_matrix(declarations, images, db=db)
     summary_data = declaration_validation_engine.compute_compliance_summary(matrix_rows, listing_comps)
 
     checks = db.query(ComplianceCheck).filter(
@@ -2775,6 +2775,14 @@ def update_declaration(
         new_val=decl.effective_value,
         details=f"Field {decl.field_name} verified/corrected"
     )
+
+    # Recompute matrix once after PATCH /api/declarations/{id} and store in Declaration.validation_matrix_json
+    try:
+        all_decls = db.query(Declaration).filter(Declaration.inspection_id == decl.inspection_id).all()
+        all_imgs = db.query(ProductImage).filter(ProductImage.inspection_id == decl.inspection_id).all()
+        declaration_validation_engine.compute_and_store_matrix(all_decls, all_imgs, db=db)
+    except Exception as e:
+        logger.warning(f"[PATCH_DECLARATION_MATRIX_WARN] {e}")
 
     db.commit()
     db.refresh(decl)

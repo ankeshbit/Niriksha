@@ -18,8 +18,13 @@ CRITICAL LEGAL SAFETY:
 """
 
 import re
+import json
+import logging
+from datetime import datetime
 from typing import List, Dict, Any, Optional, Tuple
 from pydantic import BaseModel
+
+logger = logging.getLogger(__name__)
 
 from backend.placement_service import placement_analyzer, PlacementAnalysisResult
 from backend.font_size_service import font_size_analyzer, FontSizeAnalysisResult
@@ -45,6 +50,7 @@ class DeclarationMatrixRow(BaseModel):
     statutory_reference: str = ""
     findings: List[str] = []
     explanation: str = ""
+    computed_at: Optional[str] = None
 
 
 class ComplianceSummaryData(BaseModel):
@@ -353,6 +359,152 @@ class DeclarationValidationEngine:
             )
             matrix_rows.append(row)
 
+        return matrix_rows
+
+    def _build_missing_field_row(self, field_name: str, field_label: str) -> DeclarationMatrixRow:
+        """Constructs a deterministic row for a mandatory declaration missing from package OCR."""
+        is_origin = (field_name == "country_of_origin")
+        overall = "MANUAL_VERIFICATION_REQUIRED" if is_origin else "POTENTIAL_NON_COMPLIANCE"
+        finding = (
+            "Country of origin not declared. Requires manual verification to establish whether item is domestic or imported."
+            if is_origin else
+            f"Mandatory declaration '{field_label}' missing from package OCR."
+        )
+        return DeclarationMatrixRow(
+            field_name=field_name,
+            field_label=field_label,
+            is_present=False,
+            is_correct="UNCERTAIN" if is_origin else "NO",
+            readability_status="NOT_OBSERVABLE",
+            placement_status="NOT_DETERMINABLE",
+            font_size_status="FONT_SIZE_UNDETERMINABLE",
+            format_status="COMPLIANT",
+            overall_status=overall,
+            extracted_value=None,
+            effective_value=None,
+            confidence=0.0,
+            bounding_box=None,
+            source_image_id=None,
+            view_type="unknown",
+            statutory_reference="Rule 6, Legal Metrology (Packaged Commodities) Rules, 2011",
+            findings=[finding],
+            explanation=" Readability: NOT_OBSERVABLE. Placement: NOT_DETERMINABLE."
+        )
+
+    def compute_and_store_matrix(
+        self,
+        declarations: List[Any],
+        images: Optional[List[Any]] = None,
+        net_quantity_str: Optional[str] = None,
+        db: Optional[Any] = None
+    ) -> List[DeclarationMatrixRow]:
+        """
+        Computes the declaration validation matrix and stores each row in Declaration.validation_matrix_json
+        (along with placement_status, font_size_status, readability_status, format_status, and computed_at).
+        """
+        matrix_rows = self.build_declaration_matrix(
+            declarations=declarations,
+            images=images,
+            net_quantity_str=net_quantity_str
+        )
+        now_dt = datetime.utcnow()
+        now_iso = now_dt.isoformat()
+
+        matrix_row_map = {r.field_name: r for r in matrix_rows}
+        for decl in (declarations or []):
+            fname = getattr(decl, "field_name", decl.get("field_name") if isinstance(decl, dict) else None)
+            if not fname:
+                continue
+            r = matrix_row_map.get(fname)
+            if not r:
+                continue
+
+            row_dict = r.model_dump()
+            row_dict["computed_at"] = now_iso
+
+            if hasattr(decl, "placement_status"):
+                decl.placement_status = r.placement_status
+                decl.placement_details_json = json.dumps({"expected_panel": r.placement_status, "statutory_ref": r.statutory_reference})
+                decl.font_size_status = r.font_size_status
+                decl.font_size_details_json = json.dumps({"status": r.font_size_status})
+                decl.readability_status = r.readability_status
+                decl.readability_details_json = json.dumps({"status": r.readability_status, "confidence": getattr(decl, "confidence", 0.0)})
+                decl.format_status = r.format_status
+                decl.format_details_json = json.dumps({"findings": r.findings, "explanation": r.explanation})
+                decl.validation_matrix_json = json.dumps(row_dict)
+                decl.updated_at = now_dt
+            elif isinstance(decl, dict):
+                decl["placement_status"] = r.placement_status
+                decl["validation_matrix_json"] = json.dumps(row_dict)
+
+        if db:
+            try:
+                db.flush()
+            except Exception as e:
+                logger.warning(f"[STORE_MATRIX_FLUSH_WARN] {e}")
+
+        return matrix_rows
+
+    def get_or_build_matrix(
+        self,
+        declarations: List[Any],
+        images: Optional[List[Any]] = None,
+        db: Optional[Any] = None
+    ) -> List[DeclarationMatrixRow]:
+        """
+        Retrieves the unified declaration matrix for an inspection.
+        Reads cached rows from declaration.validation_matrix_json if complete and fresh.
+        Rebuilds only if a row is missing or stale (compared against declaration.updated_at).
+        """
+        if not declarations:
+            return self.build_declaration_matrix([], images)
+
+        needs_rebuild = False
+        cached_rows: Dict[str, DeclarationMatrixRow] = {}
+
+        for decl in declarations:
+            vm_json = getattr(decl, "validation_matrix_json", None) if not isinstance(decl, dict) else decl.get("validation_matrix_json")
+            if not vm_json:
+                needs_rebuild = True
+                break
+            try:
+                row_data = json.loads(vm_json)
+                computed_at_str = row_data.get("computed_at")
+                if not computed_at_str:
+                    needs_rebuild = True
+                    break
+
+                computed_at = datetime.fromisoformat(computed_at_str)
+                updated_at = getattr(decl, "updated_at", None) if not isinstance(decl, dict) else None
+                # If declaration updated_at > computed_at by more than 1 second, it is stale
+                if updated_at and (updated_at - computed_at).total_seconds() > 1.0:
+                    needs_rebuild = True
+                    break
+
+                fname = row_data.get("field_name")
+                if fname:
+                    clean_kwargs = {k: v for k, v in row_data.items() if k in DeclarationMatrixRow.model_fields}
+                    cached_rows[fname] = DeclarationMatrixRow(**clean_kwargs)
+            except Exception:
+                needs_rebuild = True
+                break
+
+        if not needs_rebuild and cached_rows:
+            result_rows: List[DeclarationMatrixRow] = []
+            for fname, flabel in self.MANDATORY_FIELDS:
+                if fname in cached_rows:
+                    result_rows.append(cached_rows[fname])
+                else:
+                    result_rows.append(self._build_missing_field_row(fname, flabel))
+            return result_rows
+
+        # Missing or stale: compute and persist to stored declarations
+        matrix_rows = self.compute_and_store_matrix(declarations, images, db=db)
+        if db:
+            try:
+                db.commit()
+            except Exception as e:
+                logger.warning(f"[MATRIX_REBUILD_COMMIT_WARN] {e}")
         return matrix_rows
 
     def compute_compliance_summary(
