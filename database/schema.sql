@@ -175,3 +175,12 @@ CREATE INDEX IF NOT EXISTS idx_declarations_inspection ON declarations(inspectio
 CREATE INDEX IF NOT EXISTS idx_checks_inspection ON compliance_checks(inspection_id);
 CREATE INDEX IF NOT EXISTS idx_audit_inspection ON audit_logs(inspection_id);
 CREATE INDEX IF NOT EXISTS idx_audit_inspection ON audit_logs(inspection_id);
+CREATE INDEX IF NOT EXISTS ix_product_images_inspection_id ON product_images(inspection_id);
+CREATE INDEX IF NOT EXISTS ix_declarations_inspection_id ON declarations(inspection_id);
+CREATE INDEX IF NOT EXISTS ix_compliance_checks_inspection_id ON compliance_checks(inspection_id);
+CREATE INDEX IF NOT EXISTS ix_evidence_check_id ON evidence(check_id);
+CREATE INDEX IF NOT EXISTS ix_ocr_results_image_id ON ocr_results(image_id);
+CREATE INDEX IF NOT EXISTS ix_inspector_reviews_check_id ON inspector_reviews(check_id);
+CREATE INDEX IF NOT EXISTS ix_audit_logs_inspection_id ON audit_logs(inspection_id);
+CREATE INDEX IF NOT EXISTS ix_listing_comparisons_inspection_id ON listing_comparisons(inspection_id);
+CREATE INDEX IF NOT EXISTS ix_compliance_checks_inspection_id_result_state_adjudication_status ON compliance_checks(inspection_id, result_state, adjudication_status);

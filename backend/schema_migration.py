@@ -165,6 +165,9 @@ def migrate():
         except Exception as e:
             print(f"  [WARN]  Index creation skipped: {e}")
 
+        # Ensure foreign-key and composite performance indexes exist
+        migrate_performance_indexes(conn)
+
         # AUDIT-CONCUR-01: Ensure inspection_number_counters table exists and is initialized
         migrate_inspection_number_counters(conn)
 
@@ -289,6 +292,29 @@ def migrate_stored_files(conn):
     except Exception as e:
         conn.rollback()
         print(f"  [WARN]  stored_files table creation note: {e}")
+
+
+def migrate_performance_indexes(conn):
+    """Ensures foreign key and composite query indexes exist for high-volume inspection tables."""
+    index_statements = [
+        ("ix_product_images_inspection_id", "CREATE INDEX IF NOT EXISTS ix_product_images_inspection_id ON product_images (inspection_id)"),
+        ("ix_declarations_inspection_id", "CREATE INDEX IF NOT EXISTS ix_declarations_inspection_id ON declarations (inspection_id)"),
+        ("ix_compliance_checks_inspection_id", "CREATE INDEX IF NOT EXISTS ix_compliance_checks_inspection_id ON compliance_checks (inspection_id)"),
+        ("ix_evidence_check_id", "CREATE INDEX IF NOT EXISTS ix_evidence_check_id ON evidence (check_id)"),
+        ("ix_ocr_results_image_id", "CREATE INDEX IF NOT EXISTS ix_ocr_results_image_id ON ocr_results (image_id)"),
+        ("ix_inspector_reviews_check_id", "CREATE INDEX IF NOT EXISTS ix_inspector_reviews_check_id ON inspector_reviews (check_id)"),
+        ("ix_audit_logs_inspection_id", "CREATE INDEX IF NOT EXISTS ix_audit_logs_inspection_id ON audit_logs (inspection_id)"),
+        ("ix_listing_comparisons_inspection_id", "CREATE INDEX IF NOT EXISTS ix_listing_comparisons_inspection_id ON listing_comparisons (inspection_id)"),
+        ("ix_compliance_checks_inspection_id_result_state_adjudication_status", "CREATE INDEX IF NOT EXISTS ix_compliance_checks_inspection_id_result_state_adjudication_status ON compliance_checks (inspection_id, result_state, adjudication_status)"),
+    ]
+    for idx_name, stmt in index_statements:
+        try:
+            conn.execute(text(stmt))
+            conn.commit()
+            print(f"  [OK]    Index {idx_name} verified.")
+        except Exception as e:
+            conn.rollback()
+            print(f"  [WARN]  Index {idx_name} creation note: {e}")
 
 
 if __name__ == "__main__":

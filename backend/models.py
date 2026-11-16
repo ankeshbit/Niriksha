@@ -11,7 +11,8 @@ from sqlalchemy import (
     ForeignKey,
     Text,
     Enum,
-    LargeBinary
+    LargeBinary,
+    Index
 )
 from sqlalchemy.orm import relationship
 from backend.database import Base
@@ -92,7 +93,7 @@ class ProductImage(Base):
     __tablename__ = "product_images"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
-    inspection_id = Column(String(36), ForeignKey("inspections.id"), nullable=False)
+    inspection_id = Column(String(36), ForeignKey("inspections.id"), nullable=False, index=True)
     original_filename = Column(String(255), nullable=True)
     file_path = Column(String(500), nullable=False)
     mime_type = Column(String(100), default="image/jpeg")
@@ -119,7 +120,7 @@ class OCRResult(Base):
     __tablename__ = "ocr_results"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
-    image_id = Column(String(36), ForeignKey("product_images.id"), nullable=False)
+    image_id = Column(String(36), ForeignKey("product_images.id"), nullable=False, index=True)
     raw_text = Column(Text, nullable=False)
     normalized_text = Column(Text, nullable=True)
     confidence = Column(Float, nullable=False)
@@ -157,7 +158,7 @@ class Declaration(Base):
     __tablename__ = "declarations"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
-    inspection_id = Column(String(36), ForeignKey("inspections.id"), nullable=False)
+    inspection_id = Column(String(36), ForeignKey("inspections.id"), nullable=False, index=True)
     field_name = Column(String(100), nullable=False)  # commodity_name, manufacturer_details, net_quantity, mrp, date_of_manufacture_packing, consumer_care_details, country_of_origin
     extracted_value = Column(Text, nullable=True)  # Original immutable OCR text
     normalized_value = Column(Text, nullable=True)
@@ -215,9 +216,12 @@ class RuleVersion(Base):
 class ComplianceCheck(Base):
     """Layer 2: Deterministic Rule Engine Results (Potential Non-Compliance Findings)"""
     __tablename__ = "compliance_checks"
+    __table_args__ = (
+        Index("ix_compliance_checks_inspection_id_result_state_adjudication_status", "inspection_id", "result_state", "adjudication_status"),
+    )
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
-    inspection_id = Column(String(36), ForeignKey("inspections.id"), nullable=False)
+    inspection_id = Column(String(36), ForeignKey("inspections.id"), nullable=False, index=True)
     rule_version_id = Column(String(36), ForeignKey("rule_versions.id"), nullable=False)
     rule_code = Column(String(50), nullable=False)
     title = Column(String(255), nullable=False)
@@ -246,7 +250,7 @@ class Evidence(Base):
     __tablename__ = "evidence"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
-    check_id = Column(String(36), ForeignKey("compliance_checks.id"), nullable=False)
+    check_id = Column(String(36), ForeignKey("compliance_checks.id"), nullable=False, index=True)
     image_id = Column(String(36), ForeignKey("product_images.id", ondelete="SET NULL"), nullable=True)
     bounding_box_json = Column(Text, nullable=True)  # [x1, y1, x2, y2]
     crop_image_path = Column(String(500), nullable=True)
@@ -263,7 +267,7 @@ class InspectorReview(Base):
     __tablename__ = "inspector_reviews"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
-    check_id = Column(String(36), ForeignKey("compliance_checks.id"), nullable=False)
+    check_id = Column(String(36), ForeignKey("compliance_checks.id"), nullable=False, index=True)
     officer_id = Column(String(36), ForeignKey("users.id"), nullable=False)
     
     # Actions: CONFIRMED, DISMISSED, NOT_APPLICABLE, NEEDS_MORE_EVIDENCE
@@ -280,7 +284,7 @@ class AuditLog(Base):
     __tablename__ = "audit_logs"
 
     id = Column(String(36), primary_key=True, default=generate_uuid)
-    inspection_id = Column(String(36), ForeignKey("inspections.id", ondelete="SET NULL"), nullable=True)
+    inspection_id = Column(String(36), ForeignKey("inspections.id", ondelete="SET NULL"), nullable=True, index=True)
     actor_id = Column(String(100), nullable=False)
     action = Column(String(100), nullable=False)  # e.g. OCR_RUN, DECLARATION_VERIFIED, FINDING_ADJUDICATED
     entity_type = Column(String(100), nullable=False)  # 'inspection', 'declaration', 'compliance_check'
