@@ -89,30 +89,30 @@ Automated Statutory PDF Inspection Certificate
 
 ```mermaid
 flowchart TD
-    subgraph Client Layer
-        A[React Native / Expo Mobile App<br/>TypeScript / iOS / Android / Web]
-        B[Static Field Portal<br/>FastAPI Web Interface]
+    subgraph Client_Layer ["Client Layer"]
+        A["React Native / Expo Mobile App<br/>TypeScript / iOS / Android / Web"]
+        B["Static Field Portal<br/>FastAPI Web Interface"]
     end
 
-    subgraph API & Application Gateway
-        C[FastAPI REST API Server<br/>Uvicorn / Python 3.10+]
-        D[JWT Authentication & RBAC]
+    subgraph API_Gateway ["API & Application Gateway"]
+        C["FastAPI REST API Server<br/>Uvicorn / Python 3.10+"]
+        D["JWT Authentication & RBAC"]
     end
 
-    subgraph Core Processing Engines
-        E[Image Quality Evaluator<br/>OpenCV Laplacian & Glare Analysis]
-        F[Modular OCR Coordinator<br/>Morphological & Tesseract Backends]
-        G[Declaration Parser<br/>Rule 6 Regex & Heuristic Service]
-        H[Deterministic Rule Engine<br/>PCR 2011 Statutory Evaluator]
-        I[ReportLab PDF Engine<br/>Statutory Certificate Compiler]
+    subgraph Core_Engines ["Core Processing Engines"]
+        E["Image Quality Evaluator<br/>OpenCV Laplacian & Glare Analysis"]
+        F["Modular OCR Coordinator<br/>Morphological & Tesseract Backends"]
+        G["Declaration Parser<br/>Rule 6 Regex & Heuristic Service"]
+        H["Deterministic Rule Engine<br/>PCR 2011 Statutory Evaluator"]
+        I["ReportLab PDF Engine<br/>Statutory Certificate Compiler"]
     end
 
-    subgraph Persistence Layer
-        J[(Relational Database<br/>PostgreSQL (Neon Serverless))]
-        K[File Storage<br/>uploads/ & generated_reports/]
+    subgraph Persistence_Layer ["Persistence Layer"]
+        J[("Relational Database<br/>PostgreSQL (Neon Serverless)")]
+        K["File Storage<br/>uploads/ & generated_reports/"]
     end
 
-    A -->|REST / JSON & Multipart| C
+    A -->|"REST / JSON & Multipart"| C
     B -->|HTTP| C
     C --> D
     C --> E
@@ -158,8 +158,8 @@ flowchart TD
 
 ```bash
 # 1. Clone repository
-git clone https://github.com/ankeshbit/SIH.git
-cd SIH
+git clone https://github.com/ankeshbit/Niriksha.git
+cd Niriksha
 
 # 2. Create and activate virtual environment
 # Windows PowerShell:
