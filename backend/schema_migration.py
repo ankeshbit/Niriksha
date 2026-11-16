@@ -54,6 +54,17 @@ def migrate():
             "column": "password_updated_at",
             "ddl": "ALTER TABLE users ADD COLUMN password_updated_at TIMESTAMP",
         },
+        # Users: add login timestamps
+        {
+            "table": "users",
+            "column": "last_login_at",
+            "ddl": "ALTER TABLE users ADD COLUMN last_login_at TIMESTAMP",
+        },
+        {
+            "table": "users",
+            "column": "previous_login_at",
+            "ddl": "ALTER TABLE users ADD COLUMN previous_login_at TIMESTAMP",
+        },
         # Users: add role for RBAC (PS 26034)
         {
             "table": "users",
@@ -65,6 +76,12 @@ def migrate():
             "table": "inspections",
             "column": "client_draft_id",
             "ddl": "ALTER TABLE inspections ADD COLUMN client_draft_id VARCHAR(100)",
+        },
+        # Inspections: add finalized_at timestamp
+        {
+            "table": "inspections",
+            "column": "finalized_at",
+            "ddl": "ALTER TABLE inspections ADD COLUMN finalized_at TIMESTAMP",
         },
         # Reports: add docx_path for editable DOCX compliance report export (PS 26034)
         {
@@ -83,6 +100,58 @@ def migrate():
             "table": "inspections",
             "column": "inspection_type",
             "ddl": "ALTER TABLE inspections ADD COLUMN inspection_type VARCHAR(50) DEFAULT 'PHYSICAL'",
+        },
+        # Product Images: metadata and processing status columns
+        {
+            "table": "product_images",
+            "column": "original_filename",
+            "ddl": "ALTER TABLE product_images ADD COLUMN original_filename VARCHAR(255)",
+        },
+        {
+            "table": "product_images",
+            "column": "mime_type",
+            "ddl": "ALTER TABLE product_images ADD COLUMN mime_type VARCHAR(100) DEFAULT 'image/jpeg'",
+        },
+        {
+            "table": "product_images",
+            "column": "file_size",
+            "ddl": "ALTER TABLE product_images ADD COLUMN file_size INTEGER DEFAULT 0",
+        },
+        {
+            "table": "product_images",
+            "column": "width",
+            "ddl": "ALTER TABLE product_images ADD COLUMN width INTEGER DEFAULT 0",
+        },
+        {
+            "table": "product_images",
+            "column": "height",
+            "ddl": "ALTER TABLE product_images ADD COLUMN height INTEGER DEFAULT 0",
+        },
+        {
+            "table": "product_images",
+            "column": "quality_metadata_json",
+            "ddl": "ALTER TABLE product_images ADD COLUMN quality_metadata_json TEXT",
+        },
+        {
+            "table": "product_images",
+            "column": "processing_status",
+            "ddl": "ALTER TABLE product_images ADD COLUMN processing_status VARCHAR(50) DEFAULT 'UPLOADED'",
+        },
+        # Declarations: PS 26034 Extended Validation Attributes
+        {
+            "table": "declarations",
+            "column": "normalized_value",
+            "ddl": "ALTER TABLE declarations ADD COLUMN normalized_value TEXT",
+        },
+        {
+            "table": "declarations",
+            "column": "source_image_id",
+            "ddl": "ALTER TABLE declarations ADD COLUMN source_image_id VARCHAR(36)",
+        },
+        {
+            "table": "declarations",
+            "column": "updated_at",
+            "ddl": "ALTER TABLE declarations ADD COLUMN updated_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP",
         },
         # Declarations: PS 26034 Extended Validation Attributes
         {
@@ -145,6 +214,15 @@ def migrate():
     ]
 
     with engine.connect() as conn:
+        # Step 1: Ensure all ORM tables are created if not already present
+        try:
+            Base.metadata.create_all(bind=conn)
+            conn.commit()
+            print("  [OK]    All ORM tables verified/created via metadata.")
+        except Exception as e:
+            print(f"  [WARN]  Table metadata creation notice: {e}")
+
+        # Step 2: Ensure all additive columns exist on older tables
         insp = inspect(conn)
         table_cols = {}
         for m in migrations:
@@ -188,14 +266,6 @@ def migrate():
 
         # Ensure persistent stored_files table exists
         migrate_stored_files(conn)
-
-        # Create any new tables (product_listings, listing_comparisons, stored_files)
-        try:
-            Base.metadata.create_all(bind=conn)
-            conn.commit()
-            print("  [OK]    All ORM tables (including product_listings, listing_comparisons) verified.")
-        except Exception as e:
-            print(f"  [WARN]  Table creation note: {e}")
 
     print("\nMigration complete.")
 
