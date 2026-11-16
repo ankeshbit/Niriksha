@@ -154,7 +154,13 @@ from backend.rule_engine import (
 from backend.listing_service import execute_listing_comparison
 from backend.report_service import report_generator
 from backend.ocr_job_service import ocr_job_service
-from backend.storage_service import storage_service
+from backend.storage_service import (
+    storage_service,
+    StorageError,
+    StoragePersistenceError,
+    StorageValidationError,
+    StorageConflictError
+)
 from backend.compliance_summary_utils import (
     compute_canonical_compliance_metrics,
     is_pending_adjudication,
@@ -2083,63 +2089,85 @@ def _process_image_upload(
     safe_filename = f"{uuid.uuid4().hex}_{orig_stem}_{view_type.lower()}{file_ext}"
     storage_key = f"inspections/{inspection_id}/{safe_filename}"
 
-    # Save to durable multi-tier storage (PostgreSQL StoredFile, Supabase if configured, local cache)
-    rel_file_path = storage_service.save_file(storage_key, content, content_type=content_type or "image/jpeg")
-
-    dest_path = storage_service.get_local_working_copy(rel_file_path)
-    if not dest_path:
-        raise HTTPException(status_code=500, detail="Failed to initialize local working copy of uploaded image.")
+    # Save to durable storage (Neon PostgreSQL StoredFile, local cache)
+    try:
+        rel_file_path = storage_service.save_file(storage_key, content, content_type=content_type or "image/jpeg")
+    except StorageValidationError as e:
+        db.rollback()
+        raise HTTPException(status_code=400, detail=str(e))
+    except StorageConflictError as e:
+        db.rollback()
+        raise HTTPException(status_code=409, detail=str(e))
+    except StoragePersistenceError as e:
+        db.rollback()
+        logger.error(f"[UPLOAD_STORAGE_FAIL] Failed to persist image {storage_key}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to persist uploaded image to durable storage.")
+    except Exception as e:
+        db.rollback()
+        logger.error(f"[UPLOAD_STORAGE_FAIL] Unexpected error saving image {storage_key}: {e}", exc_info=True)
+        raise HTTPException(status_code=500, detail="Failed to store uploaded image.")
 
     try:
-        quality_res = assess_image_quality(str(dest_path))
-    except Exception as e:
-        logger.error(f"Image quality assessment failed: {e}", exc_info=True)
-        err_msg = f"Image quality assessment failed: {str(e)}" if settings.DEBUG else "Image quality assessment failed."
-        raise HTTPException(status_code=500, detail=err_msg)
+        dest_path = storage_service.get_local_working_copy(rel_file_path)
+        if not dest_path:
+            raise HTTPException(status_code=500, detail="Failed to initialize local working copy of uploaded image.")
 
-    # Canonical slot replacement: remove any existing image of the same view_type
-    # to guarantee retake does not create duplicate or stale images in the DB or storage.
-    existing_images = db.query(ProductImage).filter(
-        ProductImage.inspection_id == inspection_id,
-        ProductImage.view_type == view_type.lower()
-    ).all()
-    for old_img in existing_images:
+        quality_res = assess_image_quality(str(dest_path))
+
+        # Canonical slot replacement: remove any existing image of the same view_type
+        # to guarantee retake does not create duplicate or stale images in the DB or storage.
+        existing_images = db.query(ProductImage).filter(
+            ProductImage.inspection_id == inspection_id,
+            ProductImage.view_type == view_type.lower()
+        ).all()
+        for old_img in existing_images:
+            try:
+                storage_service.delete_file(old_img.file_path)
+            except Exception:
+                pass
+            db.delete(old_img)
+        db.flush()
+
+        seq_order = db.query(ProductImage).filter(ProductImage.inspection_id == inspection_id).count() + 1
+
+        product_image = ProductImage(
+            inspection_id=inspection_id,
+            original_filename=filename,
+            file_path=rel_file_path,
+            mime_type=content_type,
+            file_size=file_size,
+            width=width,
+            height=height,
+            sequence_order=seq_order,
+            view_type=view_type.lower(),
+            blur_score=quality_res.blur_score,
+            glare_score=quality_res.brightness_score,
+            quality_score=quality_res.quality_score,
+            quality_status=quality_res.quality_status,
+            quality_metadata_json=json.dumps(quality_res.to_dict()),
+            processing_status="QUALITY_CHECKED"
+        )
+        db.add(product_image)
+
+        if inspection.status == "DRAFT":
+            inspection.status = "IMAGES_UPLOADED"
+
+        log_audit(db, current_user.officer_id, "IMAGE_UPLOADED", "image", product_image.id, inspection_id, details=f"Uploaded {view_type} image")
+        db.commit()
+        db.refresh(product_image)
+
+        return serialize_image_response(product_image)
+    except Exception as e:
+        db.rollback()
         try:
-            storage_service.delete_file(old_img.file_path)
+            storage_service.delete_file(storage_key)
         except Exception:
             pass
-        db.delete(old_img)
-    db.flush()
-
-    seq_order = db.query(ProductImage).filter(ProductImage.inspection_id == inspection_id).count() + 1
-
-    product_image = ProductImage(
-        inspection_id=inspection_id,
-        original_filename=filename,
-        file_path=rel_file_path,
-        mime_type=content_type,
-        file_size=file_size,
-        width=width,
-        height=height,
-        sequence_order=seq_order,
-        view_type=view_type.lower(),
-        blur_score=quality_res.blur_score,
-        glare_score=quality_res.brightness_score,
-        quality_score=quality_res.quality_score,
-        quality_status=quality_res.quality_status,
-        quality_metadata_json=json.dumps(quality_res.to_dict()),
-        processing_status="QUALITY_CHECKED"
-    )
-    db.add(product_image)
-
-    if inspection.status == "DRAFT":
-        inspection.status = "IMAGES_UPLOADED"
-
-    log_audit(db, current_user.officer_id, "IMAGE_UPLOADED", "image", product_image.id, inspection_id, details=f"Uploaded {view_type} image")
-    db.commit()
-    db.refresh(product_image)
-
-    return serialize_image_response(product_image)
+        if isinstance(e, HTTPException):
+            raise
+        logger.error(f"Image processing failed: {e}", exc_info=True)
+        err_msg = f"Image processing failed: {str(e)}" if settings.DEBUG else "Image processing failed."
+        raise HTTPException(status_code=500, detail=err_msg)
 
 
 @app.post("/api/inspections/{inspection_id}/images", response_model=ProductImageResponse, status_code=status.HTTP_201_CREATED, tags=["Images"])
@@ -3394,11 +3422,19 @@ def generate_inspection_report(
             )
             _safe_num = (inspection.inspection_number or "UNKNOWN").replace("-", "_").replace("/", "_")
             _docx_key = f"reports/LM_Report_{_safe_num}_v{existing_report.report_version}.docx"
-            storage_service.save_file(
-                _docx_key,
-                Path(_docx_local).read_bytes(),
-                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-            )
+            try:
+                storage_service.save_file(
+                    _docx_key,
+                    Path(_docx_local).read_bytes(),
+                    "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+                )
+            except Exception as e:
+                db.rollback()
+                logger.error(f"[DOCX_STORAGE_FAIL] Failed to persist DOCX: {e}", exc_info=True)
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail="Failed to persist generated DOCX report to durable storage."
+                )
             existing_report.docx_path = _docx_key
             db.commit()
             db.refresh(existing_report)
@@ -3463,7 +3499,12 @@ def generate_inspection_report(
                 "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
             )
     except Exception as e:
-        logger.warning(f"[REPORT_STORAGE_PERSIST_WARN] Could not persist report to durable storage: {e}")
+        db.rollback()
+        logger.error(f"[REPORT_STORAGE_PERSIST_FAIL] Could not persist report to durable storage: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail="Failed to persist generated statutory report to durable storage."
+        )
 
     safety_statement = (
         "This official inspection report was generated by the AI-Assisted Legal Metrology Packaged-Commodity Inspection System (DoCA). "
@@ -3891,10 +3932,18 @@ def stream_report_by_id_docx(
         docx_bytes = Path(gen_docx).read_bytes()
         _num = (inspection.inspection_number or "UNKNOWN").replace("-", "_").replace("/", "_")
         _key = f"reports/LM_Report_{_num}_v{report.report_version}.docx"
-        storage_service.save_file(
-            _key, docx_bytes,
-            "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
-        )
+        try:
+            storage_service.save_file(
+                _key, docx_bytes,
+                "application/vnd.openxmlformats-officedocument.wordprocessingml.document"
+            )
+        except Exception as e:
+            db.rollback()
+            logger.error(f"[DOCX_STORAGE_FAIL] Failed to persist DOCX: {e}", exc_info=True)
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail="Failed to persist exported DOCX report to durable storage."
+            )
         report.docx_path = _key
         db.commit()
         db.refresh(report)
@@ -4926,7 +4975,7 @@ def delete_inspection(
     # Post-commit failure-aware physical file cleanup
     for fp in files_to_remove:
         try:
-            storage_service.delete_file(fp)
+            storage_service.delete_file(fp, force=True)
         except Exception as file_err:
             logger.warning(f"[Supervisor Deletion Notice] Could not remove physical file '{fp}': {file_err}")
 
@@ -5011,7 +5060,7 @@ def delete_inspection_report(
     # Post-commit physical file cleanup
     for fp in files_to_remove:
         try:
-            storage_service.delete_file(fp)
+            storage_service.delete_file(fp, force=True)
         except Exception as e:
             logger.warning(f"Could not remove report file {fp}: {e}")
 
