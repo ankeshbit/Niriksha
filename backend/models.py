@@ -1,4 +1,5 @@
 import uuid
+import hashlib
 from datetime import datetime
 from typing import Optional, List
 from sqlalchemy import (
@@ -75,6 +76,14 @@ class Inspection(Base):
     ocr_jobs = relationship("OCRJob", back_populates="inspection", cascade="all, delete-orphan")
 
 
+def generate_product_key(product_name: str, brand_name: Optional[str], category: str) -> str:
+    """Generates a stable, deterministic 16-hex identifier for an inspected product entity."""
+    clean_p = (product_name or "").strip().lower()
+    clean_b = (brand_name or "").strip().lower()
+    clean_c = (category or "").strip().lower()
+    return hashlib.sha256(f"{clean_p}|{clean_b}|{clean_c}".encode("utf-8")).hexdigest()[:16]
+
+
 class Product(Base):
     __tablename__ = "products"
 
@@ -84,9 +93,15 @@ class Product(Base):
     brand_name = Column(String(255), nullable=True, index=True)
     category = Column(String(100), nullable=False)  # 'Packaged Food', 'Personal Care / Household'
     batch_number = Column(String(100), nullable=True)
+    product_key = Column(String(64), nullable=True, index=True)
     created_at = Column(DateTime, default=datetime.utcnow)
 
     inspection = relationship("Inspection", back_populates="product")
+
+    def __init__(self, **kwargs):
+        super().__init__(**kwargs)
+        if not self.product_key and self.product_name and self.category:
+            self.product_key = generate_product_key(self.product_name, self.brand_name, self.category)
 
 
 class ProductImage(Base):

@@ -1557,78 +1557,103 @@ def get_repository_products(
     current_user: User = Depends(get_current_user)
 ):
     """Aggregated catalogue of scanned products with surveillance history."""
-    base_q = db.query(Inspection).join(Product, Inspection.id == Product.inspection_id)
+    # Base query partitioned by product_key using window functions
+    base_insp = db.query(
+        Product.product_key,
+        Product.product_name,
+        Product.brand_name,
+        Product.category,
+        Inspection.id.label("inspection_id"),
+        Inspection.overall_status,
+        Inspection.created_at,
+        func.row_number().over(
+            partition_by=Product.product_key,
+            order_by=Inspection.created_at.desc()
+        ).label("rn"),
+        func.count(Inspection.id).over(
+            partition_by=Product.product_key
+        ).label("inspection_count")
+    ).join(Inspection, Product.inspection_id == Inspection.id).filter(
+        Product.product_key.isnot(None)
+    )
+
     if current_user.role not in ("ADMIN", "SUPERVISOR"):
-        base_q = base_q.filter(Inspection.inspector_id == current_user.id)
+        base_insp = base_insp.filter(Inspection.inspector_id == current_user.id)
 
-    inspections = base_q.options(
-        joinedload(Inspection.product),
-        joinedload(Inspection.declarations)
-    ).order_by(Inspection.created_at.desc()).all()
+    ranked_subq = base_insp.subquery("ranked_products")
 
-    # Group strictly by explicit identity: (product_name, brand_name, category)
-    # Never infer identity solely from similar names. If distinct, present separate records.
-    groups: Dict[str, Dict[str, Any]] = {}
-    for insp in inspections:
-        prod = insp.product
-        if not prod:
-            continue
-        key = _generate_product_key(prod.product_name, prod.brand_name, prod.category)
-        if key not in groups:
-            mfg_val = None
-            for d in (insp.declarations or []):
-                if d.field_name in ("manufacturer_name", "manufacturer_details") and not mfg_val:
-                    mfg_val = d.corrected_value or d.extracted_value
+    # Correlated scalar subquery for most recent manufacturer declaration for this product_key
+    mfg_subq = (
+        db.query(func.coalesce(Declaration.corrected_value, Declaration.extracted_value))
+        .join(Inspection, Declaration.inspection_id == Inspection.id)
+        .join(Product, Product.inspection_id == Inspection.id)
+        .filter(
+            Product.product_key == ranked_subq.c.product_key,
+            Declaration.field_name.in_(["manufacturer_name", "manufacturer_details"]),
+            func.coalesce(Declaration.corrected_value, Declaration.extracted_value).isnot(None),
+            func.length(func.trim(func.coalesce(Declaration.corrected_value, Declaration.extracted_value))) > 0
+        )
+        .order_by(Inspection.created_at.desc())
+        .limit(1)
+        .scalar_subquery()
+    )
 
-            groups[key] = {
-                "product_key": key,
-                "product_name": prod.product_name,
-                "brand_name": prod.brand_name,
-                "category": prod.category,
-                "manufacturer": mfg_val,
-                "inspection_count": 1,
-                "last_inspection_date": insp.created_at,
-                "latest_compliance_status": insp.overall_status,
-                "latest_inspection_id": insp.id
-            }
-        else:
-            groups[key]["inspection_count"] += 1
-            if not groups[key]["manufacturer"]:
-                for d in (insp.declarations or []):
-                    if d.field_name in ("manufacturer_name", "manufacturer_details"):
-                        groups[key]["manufacturer"] = d.corrected_value or d.extracted_value
-                        break
-
-    product_list = list(groups.values())
-
-    # Apply search filter
-    if search and search.strip():
-        term = search.strip().lower()
-        product_list = [
-            p for p in product_list
-            if term in p["product_name"].lower()
-            or (p["brand_name"] and term in p["brand_name"].lower())
-            or term in p["category"].lower()
-            or (p["manufacturer"] and term in p["manufacturer"].lower())
-        ]
+    q = db.query(
+        ranked_subq.c.product_key,
+        ranked_subq.c.product_name,
+        ranked_subq.c.brand_name,
+        ranked_subq.c.category,
+        mfg_subq.label("manufacturer"),
+        ranked_subq.c.inspection_count,
+        ranked_subq.c.created_at.label("last_inspection_date"),
+        ranked_subq.c.overall_status.label("latest_compliance_status"),
+        ranked_subq.c.inspection_id.label("latest_inspection_id")
+    ).filter(ranked_subq.c.rn == 1)
 
     # Apply category filter
-    if category:
-        cat_lower = category.strip().lower()
-        product_list = [p for p in product_list if p["category"].lower() == cat_lower]
+    if category and category.strip():
+        q = q.filter(func.lower(ranked_subq.c.category) == category.strip().lower())
 
     # Apply compliance_status filter
-    if compliance_status:
-        cs_lower = compliance_status.strip().lower()
-        product_list = [p for p in product_list if (p["latest_compliance_status"] or "").lower() == cs_lower]
+    if compliance_status and compliance_status.strip():
+        q = q.filter(func.lower(func.coalesce(ranked_subq.c.overall_status, "")) == compliance_status.strip().lower())
 
-    total = len(product_list)
+    # Apply search filter across product name, brand, category, manufacturer
+    if search and search.strip():
+        term = f"%{search.strip().lower()}%"
+        q = q.filter(
+            or_(
+                func.lower(ranked_subq.c.product_name).like(term),
+                func.lower(func.coalesce(ranked_subq.c.brand_name, "")).like(term),
+                func.lower(ranked_subq.c.category).like(term),
+                func.lower(func.coalesce(mfg_subq, "")).like(term)
+            )
+        )
+
+    q = q.order_by(ranked_subq.c.created_at.desc())
+
+    total = q.count()
     total_pages = max(1, (total + page_size - 1) // page_size) if total > 0 else 0
-    start_idx = (page - 1) * page_size
-    paged = product_list[start_idx:start_idx + page_size]
+    offset_val = (page - 1) * page_size
+    rows = q.offset(offset_val).limit(page_size).all()
+
+    items = [
+        RepositoryProductItem(
+            product_key=r.product_key,
+            product_name=r.product_name,
+            brand_name=r.brand_name,
+            category=r.category,
+            manufacturer=r.manufacturer,
+            inspection_count=r.inspection_count,
+            last_inspection_date=r.last_inspection_date,
+            latest_compliance_status=r.latest_compliance_status,
+            latest_inspection_id=r.latest_inspection_id
+        )
+        for r in rows
+    ]
 
     return RepositoryProductsResponse(
-        items=[RepositoryProductItem(**p) for p in paged],
+        items=items,
         total=total,
         page=page,
         page_size=page_size,
@@ -1650,23 +1675,25 @@ def get_product_inspection_history(
     if current_user.role not in ("ADMIN", "SUPERVISOR"):
         base_q = base_q.filter(Inspection.inspector_id == current_user.id)
 
-    all_inspections = base_q.options(
-        joinedload(Inspection.product),
-        joinedload(Inspection.inspector),
-        joinedload(Inspection.report),
-        joinedload(Inspection.declarations),
-        joinedload(Inspection.compliance_checks)
-    ).order_by(Inspection.created_at.desc()).all()
+    base_q = base_q.filter(Product.product_key == product_key)
 
-    matching = [
-        insp for insp in all_inspections
-        if insp.product and _generate_product_key(insp.product.product_name, insp.product.brand_name, insp.product.category) == product_key
-    ]
-
-    total = len(matching)
+    total = base_q.count()
     total_pages = max(1, (total + page_size - 1) // page_size) if total > 0 else 0
     offset = (page - 1) * page_size
-    paged = matching[offset:offset + page_size]
+
+    paged = (
+        base_q.options(
+            joinedload(Inspection.product),
+            joinedload(Inspection.inspector),
+            joinedload(Inspection.report),
+            joinedload(Inspection.declarations),
+            joinedload(Inspection.compliance_checks)
+        )
+        .order_by(Inspection.created_at.desc())
+        .offset(offset)
+        .limit(page_size)
+        .all()
+    )
 
     items: List[RepositoryInspectionItem] = []
     for insp in paged:
@@ -1857,12 +1884,16 @@ def create_inspection(
             db.add(new_inspection)
             db.flush()  # assigns new_inspection.id before the commit
 
+            p_name = req.product_name.strip()
+            b_name = req.brand_name.strip() if req.brand_name else None
+            c_name = req.category.strip()
             new_product = Product(
                 inspection_id=new_inspection.id,
-                product_name=req.product_name.strip(),
-                brand_name=req.brand_name.strip() if req.brand_name else None,
-                category=req.category.strip(),
-                batch_number=req.batch_number.strip() if req.batch_number else None
+                product_name=p_name,
+                brand_name=b_name,
+                category=c_name,
+                batch_number=req.batch_number.strip() if req.batch_number else None,
+                product_key=_generate_product_key(p_name, b_name, c_name)
             )
             db.add(new_product)
 

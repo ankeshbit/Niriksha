@@ -43,6 +43,7 @@ CREATE TABLE IF NOT EXISTS products (
     brand_name VARCHAR(100) NOT NULL,
     category VARCHAR(100) NOT NULL,
     batch_number VARCHAR(100),
+    product_key VARCHAR(64),
     created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
 );
 
@@ -184,3 +185,4 @@ CREATE INDEX IF NOT EXISTS ix_inspector_reviews_check_id ON inspector_reviews(ch
 CREATE INDEX IF NOT EXISTS ix_audit_logs_inspection_id ON audit_logs(inspection_id);
 CREATE INDEX IF NOT EXISTS ix_listing_comparisons_inspection_id ON listing_comparisons(inspection_id);
 CREATE INDEX IF NOT EXISTS ix_compliance_checks_inspection_id_result_state_adjudication_status ON compliance_checks(inspection_id, result_state, adjudication_status);
+CREATE INDEX IF NOT EXISTS ix_products_product_key ON products(product_key);

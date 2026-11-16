@@ -136,6 +136,12 @@ def migrate():
             "column": "normalized_text",
             "ddl": "ALTER TABLE ocr_results ADD COLUMN normalized_text TEXT",
         },
+        # Products: add persisted product_key for fast indexed grouping and pagination
+        {
+            "table": "products",
+            "column": "product_key",
+            "ddl": "ALTER TABLE products ADD COLUMN product_key VARCHAR(64)",
+        },
     ]
 
     with engine.connect() as conn:
@@ -167,6 +173,9 @@ def migrate():
 
         # Ensure foreign-key and composite performance indexes exist
         migrate_performance_indexes(conn)
+
+        # Backfill product_key for any existing products missing it
+        backfill_product_keys(conn)
 
         # AUDIT-CONCUR-01: Ensure inspection_number_counters table exists and is initialized
         migrate_inspection_number_counters(conn)
@@ -306,6 +315,7 @@ def migrate_performance_indexes(conn):
         ("ix_audit_logs_inspection_id", "CREATE INDEX IF NOT EXISTS ix_audit_logs_inspection_id ON audit_logs (inspection_id)"),
         ("ix_listing_comparisons_inspection_id", "CREATE INDEX IF NOT EXISTS ix_listing_comparisons_inspection_id ON listing_comparisons (inspection_id)"),
         ("ix_compliance_checks_inspection_id_result_state_adjudication_status", "CREATE INDEX IF NOT EXISTS ix_compliance_checks_inspection_id_result_state_adjudication_status ON compliance_checks (inspection_id, result_state, adjudication_status)"),
+        ("ix_products_product_key", "CREATE INDEX IF NOT EXISTS ix_products_product_key ON products (product_key)"),
     ]
     for idx_name, stmt in index_statements:
         try:
@@ -315,6 +325,30 @@ def migrate_performance_indexes(conn):
         except Exception as e:
             conn.rollback()
             print(f"  [WARN]  Index {idx_name} creation note: {e}")
+
+
+def backfill_product_keys(conn):
+    """Backfills product_key for any existing products missing it."""
+    try:
+        import hashlib
+        rows = conn.execute(text("SELECT id, product_name, brand_name, category FROM products WHERE product_key IS NULL")).fetchall()
+        if rows:
+            print(f"  [APPLY] Backfilling product_key for {len(rows)} products...")
+            for row in rows:
+                p_id, p_name, b_name, cat = row[0], row[1], row[2], row[3]
+                clean_p = (p_name or "").strip().lower()
+                clean_b = (b_name or "").strip().lower()
+                clean_c = (cat or "").strip().lower()
+                pkey = hashlib.sha256(f"{clean_p}|{clean_b}|{clean_c}".encode("utf-8")).hexdigest()[:16]
+                conn.execute(
+                    text("UPDATE products SET product_key = :pkey WHERE id = :p_id"),
+                    {"pkey": pkey, "p_id": p_id}
+                )
+            conn.commit()
+            print(f"  [OK]    Backfilled {len(rows)} product keys.")
+    except Exception as e:
+        conn.rollback()
+        print(f"  [WARN]  Product key backfill note: {e}")
 
 
 if __name__ == "__main__":

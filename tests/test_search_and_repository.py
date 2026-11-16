@@ -60,6 +60,27 @@ def db_session():
         session.close()
 
 
+@pytest.fixture(autouse=True)
+def clean_test_inspections(db_session: Session):
+    """Ensures test inspection records from previous runs do not conflict."""
+    def _cleanup():
+        try:
+            test_insps = db_session.query(Inspection).filter(
+                (Inspection.inspection_number.like("INSP-REPO-%")) |
+                (Inspection.inspection_number.like("INSP-SECRET-%")) |
+                (Inspection.inspection_number.like("INSP-PROD-HIST-%"))
+            ).all()
+            for i in test_insps:
+                db_session.delete(i)
+            db_session.commit()
+        except Exception:
+            db_session.rollback()
+
+    _cleanup()
+    yield
+    _cleanup()
+
+
 @pytest.fixture
 def auth_headers(db_session: Session):
     """Returns headers for the default seeded inspector."""
