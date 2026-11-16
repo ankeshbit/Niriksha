@@ -33,6 +33,7 @@ from fastapi import (
     Body,
     Response
 )
+from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
@@ -1974,15 +1975,15 @@ def get_inspection_details(
 
 # ----------------- Image Endpoints -----------------
 
-@app.post("/api/inspections/{inspection_id}/images", response_model=ProductImageResponse, status_code=status.HTTP_201_CREATED, tags=["Images"])
-async def upload_inspection_image(
+def _process_image_upload(
     inspection_id: str,
-    file: UploadFile = File(..., description="Package label image"),
-    view_type: str = Form("front", description="Image view type: front, back, panel, side, other"),
-    db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
-):
-    """Uploads a package image for an inspection, stores it safely on disk, and runs quality assessment."""
+    content: bytes,
+    filename: Optional[str],
+    content_type: Optional[str],
+    view_type: str,
+    db: Session,
+    current_user: User
+) -> ProductImageResponse:
     inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")
@@ -1995,13 +1996,6 @@ async def upload_inspection_image(
             detail="Official inspection evidence cannot be modified, uploaded, or replaced after inspection finalization or report generation."
         )
 
-    if file.content_type not in ALLOWED_MIME_TYPES:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unsupported file type '{file.content_type}'. Allowed types: JPEG, PNG, WEBP."
-        )
-
-    content = await file.read()
     file_size = len(content)
     if file_size > MAX_FILE_SIZE_BYTES:
         raise HTTPException(status_code=400, detail="File exceeds maximum size of 15MB")
@@ -2020,12 +2014,12 @@ async def upload_inspection_image(
         raise HTTPException(status_code=400, detail=err_msg)
 
     file_ext = ".jpg" if img_format == "jpeg" else f".{img_format}"
-    orig_stem = re.sub(r'[^a-zA-Z0-9_-]', '_', Path(file.filename or 'img').stem)
+    orig_stem = re.sub(r'[^a-zA-Z0-9_-]', '_', Path(filename or 'img').stem)
     safe_filename = f"{uuid.uuid4().hex}_{orig_stem}_{view_type.lower()}{file_ext}"
     storage_key = f"inspections/{inspection_id}/{safe_filename}"
 
     # Save to durable multi-tier storage (PostgreSQL StoredFile, Supabase if configured, local cache)
-    rel_file_path = storage_service.save_file(storage_key, content, content_type=file.content_type or "image/jpeg")
+    rel_file_path = storage_service.save_file(storage_key, content, content_type=content_type or "image/jpeg")
 
     dest_path = storage_service.get_local_working_copy(rel_file_path)
     if not dest_path:
@@ -2056,9 +2050,9 @@ async def upload_inspection_image(
 
     product_image = ProductImage(
         inspection_id=inspection_id,
-        original_filename=file.filename,
+        original_filename=filename,
         file_path=rel_file_path,
-        mime_type=file.content_type,
+        mime_type=content_type,
         file_size=file_size,
         width=width,
         height=height,
@@ -2081,6 +2075,35 @@ async def upload_inspection_image(
     db.refresh(product_image)
 
     return serialize_image_response(product_image)
+
+
+@app.post("/api/inspections/{inspection_id}/images", response_model=ProductImageResponse, status_code=status.HTTP_201_CREATED, tags=["Images"])
+async def upload_inspection_image(
+    inspection_id: str,
+    file: UploadFile = File(..., description="Package label image"),
+    view_type: str = Form("front", description="Image view type: front, back, panel, side, other"),
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user)
+):
+    """Uploads a package image for an inspection, stores it safely on disk, and runs quality assessment."""
+    if file.content_type not in ALLOWED_MIME_TYPES:
+        raise HTTPException(
+            status_code=400,
+            detail=f"Unsupported file type '{file.content_type}'. Allowed types: JPEG, PNG, WEBP."
+        )
+
+    content = await file.read()
+
+    return await run_in_threadpool(
+        _process_image_upload,
+        inspection_id=inspection_id,
+        content=content,
+        filename=file.filename,
+        content_type=file.content_type,
+        view_type=view_type,
+        db=db,
+        current_user=current_user
+    )
 
 @app.get("/api/inspections/{inspection_id}/images", response_model=List[ProductImageResponse], tags=["Images"])
 def list_inspection_images(
@@ -2219,6 +2242,36 @@ def delete_inspection_image_by_slot(
     return {"message": f"Images for slot {view_type} deleted successfully", "deleted_count": len(images)}
 
 
+def _process_quality_check(content: bytes, filename: Optional[str]) -> QualityCheckResponse:
+    try:
+        quality_res = assess_image_quality(content, image_id=filename)
+    except ValueError as ve:
+        raise HTTPException(
+            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
+            detail=f"Corrupted or invalid image: {str(ve)}"
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Quality check failed: {str(e)}"
+        )
+
+    details = ImageQualityDetails(**quality_res.to_dict())
+
+    return QualityCheckResponse(
+        status=quality_res.status,
+        quality_decision=quality_res.quality_decision,
+        blur_score=quality_res.blur_score,
+        engine=quality_res.engine,
+        image_id=filename,
+        timestamp=quality_res.timestamp,
+        reason=quality_res.recommendation,
+        quality_status=quality_res.quality_status,
+        quality_score=quality_res.quality_score,
+        details=details
+    )
+
+
 @app.post("/api/quality-check", response_model=QualityCheckResponse, tags=["Images"])
 async def check_image_quality_endpoint(
     file: UploadFile = File(...),
@@ -2241,32 +2294,10 @@ async def check_image_quality_endpoint(
     if len(content) == 0:
         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="Uploaded file is empty.")
 
-    try:
-        quality_res = assess_image_quality(content, image_id=file.filename)
-    except ValueError as ve:
-        raise HTTPException(
-            status_code=status.HTTP_422_UNPROCESSABLE_ENTITY,
-            detail=f"Corrupted or invalid image: {str(ve)}"
-        )
-    except Exception as e:
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Quality check failed: {str(e)}"
-        )
-
-    details = ImageQualityDetails(**quality_res.to_dict())
-
-    return QualityCheckResponse(
-        status=quality_res.status,
-        quality_decision=quality_res.quality_decision,
-        blur_score=quality_res.blur_score,
-        engine=quality_res.engine,
-        image_id=file.filename,
-        timestamp=quality_res.timestamp,
-        reason=quality_res.recommendation,
-        quality_status=quality_res.quality_status,
-        quality_score=quality_res.quality_score,
-        details=details
+    return await run_in_threadpool(
+        _process_quality_check,
+        content=content,
+        filename=file.filename
     )
 
 
