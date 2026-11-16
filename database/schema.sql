@@ -318,3 +318,16 @@ CREATE TABLE IF NOT EXISTS stored_files (
 );
 
 CREATE INDEX IF NOT EXISTS ix_stored_files_storage_key ON stored_files (storage_key);
+
+-- 18. Revoked Tokens (Server-side JWT Blacklist for Secure Logout & Credential Invalidation)
+CREATE TABLE IF NOT EXISTS revoked_tokens (
+    token_hash VARCHAR(64) PRIMARY KEY,
+    officer_id VARCHAR(50) NOT NULL,
+    expires_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+    revoked_at TIMESTAMP WITHOUT TIME ZONE NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    reason VARCHAR(50) NOT NULL DEFAULT 'LOGOUT'
+);
+
+CREATE INDEX IF NOT EXISTS ix_revoked_tokens_token_hash ON revoked_tokens (token_hash);
+CREATE INDEX IF NOT EXISTS ix_revoked_tokens_officer_id ON revoked_tokens (officer_id);
+CREATE INDEX IF NOT EXISTS ix_revoked_tokens_expires_at ON revoked_tokens (expires_at);

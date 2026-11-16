@@ -134,6 +134,10 @@ from backend.auth_utils import verify_password, hash_password
 from backend.auth_service import (
     create_access_token,
     get_current_user,
+    oauth2_scheme,
+    revoke_token,
+    is_token_revoked,
+    cleanup_expired_revoked_tokens,
     require_roles,
     require_inspector,
     require_supervisor_or_admin,
@@ -784,6 +788,7 @@ def update_profile(
 def change_password(
     req: ChangePasswordRequest,
     db: Session = Depends(get_db),
+    token: Optional[str] = Depends(oauth2_scheme),
     current_user: User = Depends(get_current_user)
 ):
     """Verifies existing password and updates to new password hash."""
@@ -799,13 +804,19 @@ def change_password(
         )
     
     current_user.password_hash = hash_password(req.new_password)
+    current_user.password_updated_at = datetime.utcnow()
+
+    # Revoke currently used token upon password change
+    if token:
+        revoke_token(db, token, officer_id=current_user.officer_id, reason="PASSWORD_CHANGED")
+
     log_audit(
         db,
         current_user.officer_id,
         "PASSWORD_CHANGED",
         "user",
         current_user.id,
-        details="Officer password updated successfully"
+        details="Officer password updated successfully; existing session tokens invalidated"
     )
     db.commit()
     return {"status": "success", "message": "Password changed successfully"}
@@ -813,17 +824,37 @@ def change_password(
 @app.post("/api/auth/logout", status_code=status.HTTP_200_OK, tags=["Authentication"])
 def logout(
     db: Session = Depends(get_db),
-    current_user: User = Depends(get_current_user)
+    token: Optional[str] = Depends(oauth2_scheme)
 ):
-    """Logs out the authenticated officer and records an audit trail event."""
-    log_audit(
-        db,
-        current_user.officer_id,
-        "LOGOUT",
-        "user",
-        current_user.id,
-        details="Officer logged out successfully"
-    )
+    """
+    Logs out the authenticated officer and authoritatively revokes the JWT token.
+    Gracefully handles expired or already-revoked tokens without throwing 500.
+    """
+    if not token:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Authentication token required for logout",
+            headers={"WWW-Authenticate": "Bearer"}
+        )
+
+    officer_id = None
+    try:
+        current_user = get_current_user(token=token, db=db)
+        if current_user:
+            officer_id = current_user.officer_id
+            log_audit(
+                db,
+                officer_id,
+                "LOGOUT",
+                "user",
+                current_user.id,
+                details="Officer logged out successfully and token was revoked"
+            )
+    except HTTPException:
+        # Token may be expired or already revoked: still ensure blacklist entry exists
+        pass
+
+    revoke_token(db, token, officer_id=officer_id, reason="LOGOUT")
     db.commit()
     return {"message": "Successfully logged out"}
 

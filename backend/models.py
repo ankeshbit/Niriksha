@@ -412,3 +412,15 @@ class StoredFile(Base):
     file_data = Column(LargeBinary, nullable=False)
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False)
     updated_at = Column(DateTime, default=datetime.utcnow, onupdate=datetime.utcnow, nullable=False)
+
+
+class RevokedToken(Base):
+    """Token revocation blocklist for secure server-side JWT invalidation upon logout and credential rotation."""
+    __tablename__ = "revoked_tokens"
+
+    token_hash = Column(String(64), primary_key=True, index=True)
+    officer_id = Column(String(50), nullable=False, index=True)
+    expires_at = Column(DateTime, nullable=False, index=True)
+    revoked_at = Column(DateTime, default=datetime.utcnow, nullable=False)
+    reason = Column(String(50), default="LOGOUT", nullable=False)
+

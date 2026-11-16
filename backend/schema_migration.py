@@ -267,6 +267,9 @@ def migrate():
         # Ensure persistent stored_files table exists
         migrate_stored_files(conn)
 
+        # Ensure revoked_tokens table exists for JWT revocation
+        migrate_revoked_tokens(conn)
+
     print("\nMigration complete.")
 
 
@@ -371,6 +374,27 @@ def migrate_stored_files(conn):
     except Exception as e:
         conn.rollback()
         print(f"  [WARN]  stored_files table creation note: {e}")
+
+
+def migrate_revoked_tokens(conn):
+    """Ensure revoked_tokens table exists for secure JWT token invalidation on logout."""
+    try:
+        conn.execute(text("""
+            CREATE TABLE IF NOT EXISTS revoked_tokens (
+                token_hash VARCHAR(64) PRIMARY KEY,
+                officer_id VARCHAR(50) NOT NULL,
+                expires_at TIMESTAMP WITHOUT TIME ZONE NOT NULL,
+                revoked_at TIMESTAMP WITHOUT TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+                reason VARCHAR(50) NOT NULL DEFAULT 'LOGOUT'
+            );
+        """))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_revoked_tokens_officer_id ON revoked_tokens (officer_id);"))
+        conn.execute(text("CREATE INDEX IF NOT EXISTS ix_revoked_tokens_expires_at ON revoked_tokens (expires_at);"))
+        conn.commit()
+        print("  [OK]    Table revoked_tokens verified.")
+    except Exception as e:
+        conn.rollback()
+        print(f"  [WARN]  revoked_tokens table creation note: {e}")
 
 
 def migrate_performance_indexes(conn):
