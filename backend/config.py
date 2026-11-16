@@ -27,6 +27,10 @@ class Settings(BaseSettings):
     ENVIRONMENT: str = "development"
     DEBUG: bool = True
     DATABASE_URL: Optional[str] = None
+    DB_POOL_SIZE: int = 5
+    DB_MAX_OVERFLOW: int = 5
+    POOL_SIZE: Optional[int] = None
+    MAX_OVERFLOW: Optional[int] = None
 
     @model_validator(mode="after")
     def validate_database_url(self):
@@ -77,6 +81,16 @@ class Settings(BaseSettings):
             self.DATABASE_URL = raw_url.replace("postgresql://", "postgresql+psycopg://", 1)
         else:
             self.DATABASE_URL = raw_url
+
+        if self.POOL_SIZE is not None:
+            self.DB_POOL_SIZE = self.POOL_SIZE
+        else:
+            self.POOL_SIZE = self.DB_POOL_SIZE
+
+        if self.MAX_OVERFLOW is not None:
+            self.DB_MAX_OVERFLOW = self.MAX_OVERFLOW
+        else:
+            self.MAX_OVERFLOW = self.DB_MAX_OVERFLOW
 
         return self
 

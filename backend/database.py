@@ -1,11 +1,15 @@
 import os
-from typing import Dict, Any
+from typing import Dict, Any, Optional
 from sqlalchemy import create_engine
 from sqlalchemy.orm import sessionmaker, declarative_base
 from backend.config import settings
 
 
-def build_engine(database_url: str):
+def build_engine(
+    database_url: str,
+    pool_size: Optional[int] = None,
+    max_overflow: Optional[int] = None,
+):
     """Constructs a PostgreSQL-only SQLAlchemy engine.
 
     SQLite is strictly forbidden: config.py rejects it before this function
@@ -19,6 +23,9 @@ def build_engine(database_url: str):
             f"Only Neon PostgreSQL (postgresql+psycopg://...) is supported."
         )
 
+    effective_pool_size = pool_size if pool_size is not None else getattr(settings, "DB_POOL_SIZE", 5)
+    effective_max_overflow = max_overflow if max_overflow is not None else getattr(settings, "DB_MAX_OVERFLOW", 5)
+
     # PostgreSQL / Neon Serverless configuration:
     # pool_pre_ping=True ensures resilience across serverless compute wake-up.
     # pool_recycle=300 prevents stale idle connections on long-lived processes.
@@ -26,6 +33,8 @@ def build_engine(database_url: str):
     # so a cold/suspended compute fails fast instead of hanging Render request gateway.
     return create_engine(
         database_url,
+        pool_size=effective_pool_size,
+        max_overflow=effective_max_overflow,
         pool_pre_ping=True,
         pool_recycle=300,
         connect_args={"connect_timeout": 15},
