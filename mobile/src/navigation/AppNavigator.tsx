@@ -31,7 +31,7 @@ export const AppNavigator: React.FC = () => {
   return (
     <NavigationContainer>
       <Stack.Navigator
-        initialRouteName="Intro"
+        initialRouteName="Login"
         screenOptions={{
           headerShown: false,
           animation: 'fade',

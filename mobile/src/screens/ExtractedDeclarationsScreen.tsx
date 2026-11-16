@@ -17,6 +17,7 @@ import { colors, typography, spacing, borderRadius } from '../theme/tokens';
 import { BottomNav } from '../components/BottomNav';
 import { ProfileAvatar } from '../components/ProfileAvatar';
 import { api } from '../services/api';
+import { formatLiveTime } from '../services/dateUtils';
 import { useNavigation, useRoute, RouteProp } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
@@ -117,11 +118,21 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
     }
   };
 
-  const todayStr = new Date().toLocaleDateString('en-GB', {
+  const [currentDate, setCurrentDate] = useState(() => new Date());
+
+  useEffect(() => {
+    const timer = setInterval(() => {
+      setCurrentDate(new Date());
+    }, 1000);
+    return () => clearInterval(timer);
+  }, []);
+
+  const todayStr = currentDate.toLocaleDateString('en-GB', {
     day: 'numeric',
     month: 'short',
     year: 'numeric',
   });
+  const liveTimeStr = formatLiveTime(currentDate);
 
   return (
     <SafeAreaView style={styles.safeArea} edges={['top', 'left', 'right']}>
@@ -139,7 +150,7 @@ export const ExtractedDeclarationsScreen: React.FC = () => {
             <View>
               <Text style={styles.headerTitle}>NiriKsha</Text>
               <Text style={styles.headerSubtitle}>
-                {inspectionNumber ? `ID: ${inspectionNumber}` : (inspectionId ? `ID: ${inspectionId.substring(0, 8).toUpperCase()}` : 'Inspection')} • {todayStr}
+                {inspectionNumber ? `ID: ${inspectionNumber}` : (inspectionId ? `ID: ${inspectionId.substring(0, 8).toUpperCase()}` : 'Inspection')} • {todayStr} • {liveTimeStr}
               </Text>
             </View>
           </View>

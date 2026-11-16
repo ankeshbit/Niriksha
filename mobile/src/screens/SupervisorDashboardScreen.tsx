@@ -15,7 +15,7 @@ import { BottomNav, BOTTOM_NAV_TAB_HEIGHT } from '../components/BottomNav';
 import { ProfileAvatar } from '../components/ProfileAvatar';
 import { api } from '../services/api';
 import { authStorage } from '../services/authStorage';
-import { getTimeBasedGreeting } from '../services/dateUtils';
+import { getTimeBasedGreeting, formatLiveTime } from '../services/dateUtils';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
@@ -28,6 +28,7 @@ export const SupervisorDashboardScreen: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [refreshing, setRefreshing] = useState(false);
+  const [currentDate, setCurrentDate] = useState(() => new Date());
 
   const loadData = useCallback(async (isRefresh = false) => {
     try {
@@ -49,16 +50,28 @@ export const SupervisorDashboardScreen: React.FC = () => {
 
   useFocusEffect(
     useCallback(() => {
+      setCurrentDate(new Date());
       loadData();
+      const timer = setInterval(() => {
+        setCurrentDate(new Date());
+      }, 1000);
+      return () => clearInterval(timer);
     }, [loadData])
   );
 
   const onRefresh = () => {
     setRefreshing(true);
+    setCurrentDate(new Date());
     loadData(true);
   };
 
-  const greeting = getTimeBasedGreeting();
+  const todayStr = currentDate.toLocaleDateString('en-GB', {
+    day: 'numeric',
+    month: 'short',
+    year: 'numeric',
+  });
+  const liveTimeStr = formatLiveTime(currentDate);
+  const greeting = getTimeBasedGreeting(currentDate);
   const supervisorName = profile?.full_name || 'Supervisor';
 
   return (
@@ -72,7 +85,9 @@ export const SupervisorDashboardScreen: React.FC = () => {
                 <MaterialIcons name="security" size={14} color="#FFFFFF" />
                 <Text style={styles.supervisorBadgeText}>SUPERVISOR</Text>
               </View>
-              <Text style={styles.officerIdText}>{profile?.officer_id || 'DOCA-SUP-101'}</Text>
+              <Text style={styles.officerIdText}>
+                {profile?.officer_id || 'DOCA-SUP-101'} • {todayStr} • {liveTimeStr}
+              </Text>
             </View>
             <Text style={styles.greetingText}>{greeting}, {supervisorName}</Text>
             <Text style={styles.zoneText}>{profile?.zone || 'Central HQ'} • {profile?.designation || 'Supervisory Officer'}</Text>

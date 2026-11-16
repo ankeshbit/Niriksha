@@ -8,15 +8,6 @@
 
 ---
 
-## Documentation Quick Links
-
-- [System Architecture & Technical Design](docs/architecture.md)
-- [Environment Setup & Installation Guide](docs/setup.md)
-- [REST API Reference](docs/api.md)
-- [Automated Testing & Verification Guide](docs/testing.md)
-
----
-
 ## Overview
 
 **NiriKsha** is an AI-assisted legal metrology inspection and decision-support system prototype developed for field enforcement officers to inspect packaged commodities against statutory declaration standards mandated by the **Legal Metrology (Packaged Commodities) Rules, 2011 (PCR 2011)** under the **Legal Metrology Act, 2009**.
@@ -303,14 +294,6 @@ npm run ts:check
 │
 ├── database/
 │   └── schema.sql              # Base PostgreSQL DDL schema (SQLite is not supported)
-│
-├── docs/                       # Project Technical Documentation
-│   ├── architecture.md         # Detailed architectural design and sequence diagrams
-│   ├── setup.md                # Development environment setup and installation guide
-│   ├── api.md                  # REST API reference and endpoint specifications
-│   ├── testing.md              # Automated testing catalog and verification guide
-│   ├── prd/                    # Product requirements and specification documents
-│   └── screenshots/            # Curated application screenshot gallery
 │
 ├── scripts/                    # Helper and build utility scripts
 │   ├── setup_android_sdk.py    # Local Android commandlinetools setup utility

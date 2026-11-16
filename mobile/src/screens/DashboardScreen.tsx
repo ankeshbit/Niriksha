@@ -18,7 +18,7 @@ import { BottomNav, BOTTOM_NAV_TAB_HEIGHT } from '../components/BottomNav';
 import { ProfileAvatar } from '../components/ProfileAvatar';
 import { api } from '../services/api';
 import { authStorage } from '../services/authStorage';
-import { getTimeBasedGreeting } from '../services/dateUtils';
+import { getTimeBasedGreeting, formatLiveTime } from '../services/dateUtils';
 import { useNavigation, useFocusEffect } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
@@ -127,6 +127,10 @@ export const DashboardScreen: React.FC = () => {
     useCallback(() => {
       setCurrentDate(new Date());
       loadData(false);
+      const timer = setInterval(() => {
+        setCurrentDate(new Date());
+      }, 1000);
+      return () => clearInterval(timer);
     }, [])
   );
 
@@ -141,6 +145,7 @@ export const DashboardScreen: React.FC = () => {
     month: 'short',
     year: 'numeric',
   });
+  const liveTimeStr = formatLiveTime(currentDate);
 
   const formatCount = (val?: number | null) => {
     if (val === undefined || val === null) {
@@ -251,8 +256,8 @@ export const DashboardScreen: React.FC = () => {
                   {`${getTimeBasedGreeting(currentDate)}, ${profile?.full_name || 'Officer'}`}
                 </Text>
                 <View style={styles.identityRow}>
-                  <Text style={styles.welcomeSubtext} numberOfLines={1} ellipsizeMode="tail">
-                    ID: {profile?.officer_id || 'ID Pending'} • {todayStr}
+                  <Text style={styles.welcomeSubtext} numberOfLines={2}>
+                    ID: {profile?.officer_id || 'ID Pending'} • {todayStr} • {liveTimeStr}
                   </Text>
                   <View style={[styles.roleBadge, styles.roleBadgeInspector]}>
                     <Text style={[styles.roleBadgeText, styles.roleBadgeTextInspector]}>

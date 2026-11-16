@@ -216,35 +216,22 @@ describe('NiriKsha Intro Video Launch Flow', () => {
     });
   });
 
-  describe('Bundled Video Asset & Offline Raw Resource Integrity', () => {
+  describe('Bundled Brand Asset Integrity (Video Asset Removed)', () => {
     const fs = require('fs');
     const path = require('path');
 
-    it('verifies the primary video asset exists and is non-empty', () => {
+    it('verifies intro video assets are removed to prevent unneeded weight and playback delay', () => {
       const videoPath = path.resolve(__dirname, '../../../assets/videos/niriksha_intro.mp4');
-      expect(fs.existsSync(videoPath)).toBe(true);
-      const stat = fs.statSync(videoPath);
-      expect(stat.size).toBeGreaterThan(1024 * 1024); // > 1MB
-    });
-
-    it('verifies the compiled Android raw resource exists in res/raw for offline playback', () => {
       const rawPath = path.resolve(__dirname, '../../../android/app/src/main/res/raw/niriksha_intro.mp4');
-      expect(fs.existsSync(rawPath)).toBe(true);
-      const stat = fs.statSync(rawPath);
-      expect(stat.size).toBe(2835493); // exact matching size
+      expect(fs.existsSync(videoPath)).toBe(false);
+      expect(fs.existsSync(rawPath)).toBe(false);
     });
 
-    it('verifies the NiriKsha logo asset exists for fallback display', () => {
+    it('verifies the NiriKsha logo asset exists for display', () => {
       const logoPath = path.resolve(__dirname, '../../../assets/niriksha_logo.png');
       expect(fs.existsSync(logoPath)).toBe(true);
       const stat = fs.statSync(logoPath);
       expect(stat.size).toBeGreaterThan(100 * 1024);
-    });
-
-    it('verifies the Android raw resource URI conforms to standard', () => {
-      const rawUri = 'android.resource://gov.doca.legalmetrology/raw/niriksha_intro';
-      expect(rawUri.startsWith('android.resource://')).toBe(true);
-      expect(rawUri.endsWith('/raw/niriksha_intro')).toBe(true);
     });
   });
 

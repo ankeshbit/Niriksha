@@ -77,3 +77,19 @@ export const getTimeBasedGreeting = (date: Date = new Date()): string => {
   }
 };
 
+/**
+ * Formats a Date object into a 12-hour live time string: "hh:mm:ss A" (e.g., "02:45:10 PM").
+ *
+ * @param date Optional Date instance (defaults to new Date())
+ */
+export const formatLiveTime = (date: Date = new Date()): string => {
+  const hours = date.getHours();
+  const minutes = date.getMinutes();
+  const seconds = date.getSeconds();
+  const ampm = hours >= 12 ? 'PM' : 'AM';
+  const displayHours = hours % 12 || 12;
+  const pad = (n: number) => (n < 10 ? '0' + n : String(n));
+  return `${pad(displayHours)}:${pad(minutes)}:${pad(seconds)} ${ampm}`;
+};
+
+

@@ -17,6 +17,7 @@ import { MaterialIcons } from '@expo/vector-icons';
 import { colors, typography, spacing, borderRadius } from '../theme/tokens';
 import { api, getApiBaseUrl } from '../services/api';
 import { authStorage } from '../services/authStorage';
+import * as SplashScreen from 'expo-splash-screen';
 import { useNavigation } from '@react-navigation/native';
 import { NativeStackNavigationProp } from '@react-navigation/native-stack';
 import { RootStackParamList } from '../navigation/types';
@@ -30,6 +31,7 @@ export const LoginScreen: React.FC = () => {
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
+    SplashScreen.hideAsync().catch(() => {});
     Promise.all([authStorage.getToken(), authStorage.getProfile()]).then(([token, profile]) => {
       if (token) {
         if (profile?.role === 'SUPERVISOR') {
