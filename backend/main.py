@@ -32,7 +32,8 @@ from fastapi import (
     Form,
     Body,
     Response,
-    Request
+    Request,
+    BackgroundTasks
 )
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
@@ -44,7 +45,7 @@ from sqlalchemy import text, or_, and_, func, distinct, case, desc, asc
 from sqlalchemy.exc import IntegrityError
 
 from backend.config import settings
-from backend.database import get_db, engine, Base, get_database_backend_info
+from backend.database import get_db, engine, Base, get_database_backend_info, SessionLocal
 from backend.models import (
     User,
     RuleVersion,
@@ -3510,7 +3511,7 @@ def get_inspection_report_metadata(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Retrieves metadata of the statutory inspection report."""
+    """Retrieves metadata of the statutory inspection report. Returns HTTP 202 while generating."""
     inspection = get_inspection_by_id_or_number(db, inspection_id)
     if not inspection:
         raise HTTPException(status_code=404, detail="Inspection not found")
@@ -3518,6 +3519,15 @@ def get_inspection_report_metadata(
 
     report_record = db.query(Report).filter(Report.inspection_id == inspection.id).first()
     if not report_record:
+        if inspection.status == "COMPLETED":
+            return JSONResponse(
+                status_code=status.HTTP_202_ACCEPTED,
+                content={
+                    "status": "PENDING",
+                    "inspection_id": inspection.id,
+                    "detail": "Statutory report generation in progress. Poll this endpoint."
+                }
+            )
         # Auto-generate if not yet generated
         return generate_inspection_report(inspection.id, db, current_user)
 
@@ -3594,16 +3604,32 @@ def stream_inspection_report_docx(
         headers={"Content-Disposition": f"attachment; filename={filename}"}
     )
 
+def _background_generate_report(inspection_id: str, officer_id: str):
+    """Generates statutory PDF and DOCX reports in the background using its own database session."""
+    session = SessionLocal()
+    try:
+        user = session.query(User).filter(User.officer_id == officer_id).first()
+        if not user:
+            logger.error(f"[BACKGROUND_REPORT] Officer '{officer_id}' not found for inspection {inspection_id}")
+            return
+        generate_inspection_report(inspection_id, session, user)
+    except Exception as e:
+        logger.error(f"[BACKGROUND_REPORT_ERROR] Failed generating report for inspection {inspection_id}: {e}", exc_info=True)
+    finally:
+        session.close()
+
+
 @app.post("/api/inspections/{inspection_id}/finalize", response_model=FinalizeInspectionResponse, tags=["Inspections"])
 def finalize_inspection(
     inspection_id: str,
+    background_tasks: BackgroundTasks,
     req: FinalizeInspectionRequest = Body(default=FinalizeInspectionRequest()),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """
     Finalizes the inspection lifecycle based on human adjudication, marks status as COMPLETED,
-    and produces the finalized official statutory inspection report.
+    and produces the finalized official statutory inspection report asynchronously in a background task.
     """
     inspection = db.query(Inspection).filter(Inspection.id == inspection_id).first()
     if not inspection:
@@ -3611,14 +3637,26 @@ def finalize_inspection(
     verify_inspection_access(inspection, current_user, allow_supervisory=False)
 
     # Fast-path idempotency: If already finalized and report exists, return existing record
-    if inspection.status == "COMPLETED" and inspection.report:
+    if inspection.status == "COMPLETED":
+        existing_report = inspection.report or db.query(Report).filter(Report.inspection_id == inspection.id).first()
+        if existing_report:
+            return FinalizeInspectionResponse(
+                inspection_id=inspection.id,
+                inspection_number=inspection.inspection_number,
+                status=inspection.status,
+                overall_status=inspection.overall_status,
+                finalized_at=inspection.finalized_at,
+                report=serialize_report(existing_report),
+                report_status="COMPLETED"
+            )
         return FinalizeInspectionResponse(
             inspection_id=inspection.id,
             inspection_number=inspection.inspection_number,
             status=inspection.status,
             overall_status=inspection.overall_status,
             finalized_at=inspection.finalized_at,
-            report=serialize_report(inspection.report)
+            report=None,
+            report_status="PENDING"
         )
 
     all_checks = db.query(ComplianceCheck).filter(ComplianceCheck.inspection_id == inspection.id).all()
@@ -3677,22 +3715,6 @@ def finalize_inspection(
     if req.officer_notes:
         inspection.notes = req.officer_notes.strip()
 
-    # Generate statutory PDF report
-    try:
-        report_res = generate_inspection_report(inspection_id, db, current_user)
-    except Exception as e:
-        db.commit()  # Preserve finalized status, decisions, and audit trail
-        logger.error(f"Report generation error during finalization of {inspection_id}: {e}", exc_info=True)
-        err_msg = (
-            f"Inspection submitted, but the official report could not be generated: {str(e)}. Please retry report generation."
-            if settings.DEBUG
-            else "Inspection submitted, but the official report could not be generated. Please retry report generation."
-        )
-        raise HTTPException(
-            status_code=500,
-            detail=err_msg
-        )
-
     log_audit(
         db,
         current_user.officer_id,
@@ -3706,13 +3728,17 @@ def finalize_inspection(
     db.commit()
     db.refresh(inspection)
 
+    # Queue background task for statutory report generation using its own DB session
+    background_tasks.add_task(_background_generate_report, inspection.id, current_user.officer_id)
+
     return FinalizeInspectionResponse(
         inspection_id=inspection.id,
         inspection_number=inspection.inspection_number,
         status=inspection.status,
         overall_status=inspection.overall_status,
         finalized_at=inspection.finalized_at,
-        report=report_res
+        report=None,
+        report_status="PENDING"
     )
 
 @app.get("/api/reports", response_model=List[ReportResponse], tags=["Reports"])

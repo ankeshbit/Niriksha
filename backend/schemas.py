@@ -436,7 +436,8 @@ class FinalizeInspectionResponse(BaseModel):
     status: str
     overall_status: str
     finalized_at: datetime
-    report: ReportResponse
+    report: Optional[ReportResponse] = None
+    report_status: str = "PENDING"
 
 class AuditLogResponse(BaseModel):
     model_config = ConfigDict(from_attributes=True)

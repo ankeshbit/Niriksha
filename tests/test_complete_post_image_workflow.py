@@ -708,10 +708,23 @@ def test_20_repeated_finalize_does_not_create_duplicate_report_or_inspection(aut
             json={"action": "CONFIRMED", "notes": "Verified"}
         )
 
-    # First finalization
+    # First finalization: returns COMPLETED with report_status=PENDING
     fin1 = auth_client.post(f"/api/inspections/{insp_id}/finalize")
     assert fin1.status_code == 200
-    rep1_id = fin1.json()["report"]["id"]
+    assert fin1.json()["status"] == "COMPLETED"
+    assert fin1.json()["report_status"] == "PENDING"
+
+    # Poll GET /api/inspections/{insp_id}/report until ready
+    import time
+    rep1_id = None
+    for _ in range(20):
+        r_poll = auth_client.get(f"/api/inspections/{insp_id}/report")
+        if r_poll.status_code == 200:
+            rep1_id = r_poll.json()["id"]
+            break
+        elif r_poll.status_code == 202:
+            time.sleep(0.2)
+    assert rep1_id is not None, "Report generation did not complete within timeout"
 
     # Second finalization (client retry)
     fin2 = auth_client.post(f"/api/inspections/{insp_id}/finalize")

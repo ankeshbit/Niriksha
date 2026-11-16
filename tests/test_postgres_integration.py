@@ -138,7 +138,16 @@ def test_integration_workflow_complete():
     assert fin_resp.status_code == 200, f"Finalize failed: {fin_resp.text}"
     fin_data = fin_resp.json()
     assert fin_data["status"] == "COMPLETED"
-    assert fin_data["report"] is not None
+    assert fin_data.get("report_status") == "PENDING" or fin_data.get("report") is not None
+
+    # Poll until background report generation completes
+    import time
+    for _ in range(20):
+        r_rep = client.get(f"/api/inspections/{insp_id}/report", headers=headers)
+        if r_rep.status_code == 200:
+            break
+        elif r_rep.status_code == 202:
+            time.sleep(0.2)
 
     # Stream official report PDF
     pdf_resp = client.get(f"/api/inspections/{insp_id}/report/pdf", headers=headers)

@@ -158,8 +158,20 @@ def test_all_pass_final_status_verified_compliant():
     data = fin_resp.json()
     assert data["status"] == "COMPLETED"
     assert data["overall_status"] in ["VERIFIED_COMPLIANT", "NO_POTENTIAL_VIOLATIONS"]
-    assert "report" in data
-    assert data["report"]["report_version"] >= 1
+    assert data.get("report_status") == "PENDING" or data.get("report") is not None
+
+    # Poll report endpoint until generated
+    import time
+    report_data = None
+    for _ in range(20):
+        r_rep = client.get(f"/api/inspections/{insp_id}/report", headers={"Authorization": f"Bearer {token}"})
+        if r_rep.status_code == 200:
+            report_data = r_rep.json()
+            break
+        elif r_rep.status_code == 202:
+            time.sleep(0.2)
+    assert report_data is not None
+    assert report_data["report_version"] >= 1
 
 def test_confirmed_finding_final_status_potential_non_compliance():
     token = get_auth_token()
