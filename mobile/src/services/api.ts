@@ -85,7 +85,133 @@ export const getApiBaseUrl = (): string => {
 // Backwards-compatible default constant
 export const DEFAULT_API_HOST = getApiBaseUrl();
 
-// ─── Error classification ─────────────────────────────────────────────────────
+// ─── Error Sanitization & Classification ─────────────────────────────────────
+
+/**
+ * Strips sensitive data (JWTs, auth headers, database credentials, server stack traces)
+ * from error messages before they reach the UI.
+ */
+export function sanitizeErrorMessage(message: string): string {
+  if (!message || typeof message !== 'string') return 'An error occurred';
+  return message
+    // Redact JWT tokens
+    .replace(/eyJ[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}\.[A-Za-z0-9_-]{10,}/g, '[REDACTED_TOKEN]')
+    // Redact Bearer tokens
+    .replace(/Bearer\s+[A-Za-z0-9_\-\.]{15,}/gi, 'Bearer [REDACTED]')
+    // Redact DB connection strings
+    .replace(/(?:postgres(?:ql)?(?:\+psycopg)?|mysql|mongodb):\/\/[^@\s]+@[^\s]+/gi, '[REDACTED_DATABASE_URL]')
+    // Redact internal password keys
+    .replace(/password(?:_hash)?["']?\s*[:=]\s*["']?[^"'\s,]+/gi, 'password=[REDACTED]')
+    // Replace unhandled python stack traces
+    .replace(/Traceback \(most recent call last\)[\s\S]+/g, 'Internal server error occurred.');
+}
+
+export type ApiErrorKind =
+  | 'AUTHENTICATION'      // 401
+  | 'AUTHORIZATION'       // 403
+  | 'NOT_FOUND'           // 404
+  | 'VALIDATION'          // 400, 422
+  | 'CONFLICT'            // 409
+  | 'RATE_LIMIT'          // 429
+  | 'SERVER_ERROR'        // 5xx
+  | 'NETWORK_UNREACHABLE' // genuine network drop
+  | 'REQUEST_TIMEOUT'     // AbortError / timeout
+  | 'BLOB_FETCH_ERROR'    // client blob reading error
+  | 'UNKNOWN';
+
+export interface ApiErrorOptions {
+  message: string;
+  status?: number;
+  kind?: ApiErrorKind;
+  data?: any;
+  url?: string;
+  cause?: any;
+  userMessage?: string;
+}
+
+/**
+ * Authoritative, strongly-typed API error structure.
+ * Preserves HTTP status code, server response body, URL, and category,
+ * while preventing sensitive token/internal leaks.
+ */
+export class ApiError extends Error {
+  public readonly status?: number;
+  public readonly statusCode?: number;
+  public readonly kind: ApiErrorKind;
+  public readonly data?: any;
+  public readonly url?: string;
+  public readonly targetUrl?: string;
+  public readonly response?: { status: number; data?: any };
+  public readonly isNetworkError: boolean;
+  public readonly userMessage: string;
+
+  constructor(options: ApiErrorOptions) {
+    const cleanMsg = sanitizeErrorMessage(options.message);
+    super(cleanMsg);
+    this.name = 'ApiError';
+    this.status = options.status;
+    this.statusCode = options.status;
+    this.data = options.data;
+    this.url = options.url;
+    this.targetUrl = options.url;
+    if (options.cause) {
+      this.cause = options.cause;
+    }
+
+    if (options.status !== undefined) {
+      this.response = {
+        status: options.status,
+        data: options.data,
+      };
+    }
+
+    if (options.kind) {
+      this.kind = options.kind;
+    } else if (options.status === 401) {
+      this.kind = 'AUTHENTICATION';
+    } else if (options.status === 403) {
+      this.kind = 'AUTHORIZATION';
+    } else if (options.status === 404) {
+      this.kind = 'NOT_FOUND';
+    } else if (options.status === 400 || options.status === 422) {
+      this.kind = 'VALIDATION';
+    } else if (options.status === 409) {
+      this.kind = 'CONFLICT';
+    } else if (options.status === 429) {
+      this.kind = 'RATE_LIMIT';
+    } else if (options.status && options.status >= 500) {
+      this.kind = 'SERVER_ERROR';
+    } else {
+      this.kind = 'UNKNOWN';
+    }
+
+    this.isNetworkError = this.kind === 'NETWORK_UNREACHABLE';
+
+    if (options.userMessage) {
+      this.userMessage = sanitizeErrorMessage(options.userMessage);
+    } else if (this.kind === 'AUTHENTICATION') {
+      this.userMessage = 'Session expired. Please sign in again.';
+    } else if (this.kind === 'AUTHORIZATION') {
+      this.userMessage = 'Access denied. You do not have permission to perform this action.';
+    } else if (this.kind === 'NOT_FOUND') {
+      this.userMessage = 'The requested resource was not found.';
+    } else if (this.kind === 'RATE_LIMIT') {
+      this.userMessage = 'Too many requests. Please slow down and try again.';
+    } else if (this.kind === 'SERVER_ERROR') {
+      this.userMessage = 'Server error. Please try again in a moment.';
+    } else if (this.kind === 'NETWORK_UNREACHABLE') {
+      this.userMessage = 'Backend connection unavailable. Your draft is safely stored locally.';
+    } else if (this.kind === 'REQUEST_TIMEOUT') {
+      this.userMessage = 'The request took too long. The server may be processing a complex task. Please try again.';
+    } else if (this.kind === 'BLOB_FETCH_ERROR') {
+      this.userMessage = 'Could not read the selected image file. Please select the image again.';
+    } else {
+      this.userMessage = cleanMsg || 'An unexpected error occurred.';
+    }
+
+    Object.setPrototypeOf(this, ApiError.prototype);
+  }
+}
 
 export type FetchErrorType =
   | 'NETWORK_UNREACHABLE'
@@ -107,64 +233,53 @@ export interface ClassifiedError {
  * Classifies a fetch/network error into a structured type so callers can make
  * informed decisions (e.g. offline draft vs user error vs retry).
  *
- * FIX-RC-4: Separates client-side blob: URI errors from genuine network failures.
- * A blob: fetch error is NOT a connectivity problem and must not trigger offline mode.
+ * Guaranteed invariants:
+ * - Server errors (5xx) and HTTP errors (4xx) preserve their status code.
+ * - Server errors are NEVER misclassified as offline/connectivity failures.
+ * - Timeouts and blob reading errors are NEVER misclassified as connectivity failures.
  */
 export function classifyFetchError(err: any, url?: string): ClassifiedError {
   const msg = String(err?.message || err || '');
-  const isAbort = err?.name === 'AbortError' || msg.includes('aborted');
-  const isNetworkMsg =
-    msg.includes('Failed to fetch') ||
-    msg.includes('Network request failed') ||
-    msg.includes('NetworkError') ||
-    msg.includes('ECONNREFUSED') ||
-    msg.includes('ENOTFOUND');
+  const targetUrl = url || err?.url || err?.targetUrl;
 
-  // Client-side blob URL fetch failure (RC-3/RC-4) — NOT a network/connectivity error
-  if (url && (url.startsWith('blob:') || url.startsWith('data:'))) {
+  // 1. Client-side blob URL fetch failure — NOT a network/connectivity error
+  if ((targetUrl && (targetUrl.startsWith('blob:') || targetUrl.startsWith('data:'))) || err?.kind === 'BLOB_FETCH_ERROR') {
     return {
       type: 'BLOB_FETCH_ERROR',
-      message: msg,
-      userMessage:
-        'Could not read the selected image file. Please select the image again.',
+      message: sanitizeErrorMessage(msg),
+      userMessage: 'Could not read the selected image file. Please select the image again.',
     };
   }
 
+  // 2. Timeout
+  const isAbort = err?.name === 'AbortError' || err?.kind === 'REQUEST_TIMEOUT' || msg.includes('aborted');
   if (isAbort) {
     return {
       type: 'REQUEST_TIMEOUT',
-      message: msg,
-      userMessage:
-        'The request took too long. The server may be processing a complex task. Please try again.',
+      message: sanitizeErrorMessage(msg),
+      userMessage: 'The request took too long. The server may be processing a complex task. Please try again.',
     };
   }
 
-  if (isNetworkMsg) {
-    const targetUrl = url || (err?.targetUrl ?? err?.url);
-    const targetDesc = targetUrl ? ` (${targetUrl})` : '';
-    return {
-      type: 'NETWORK_UNREACHABLE',
-      message: `${msg}${targetDesc}`,
-      userMessage:
-        `Backend connection unavailable${targetDesc}. Your draft is safely stored locally.`,
-    };
-  }
+  // 3. Status checks (MUST take precedence over message strings to prevent 500/502 from being classed as offline)
+  const status = err?.status ?? err?.statusCode ?? err?.response?.status;
 
-  const status = err?.status ?? err?.statusCode;
-  if (status === 401 || status === 403) {
+  if (status === 401 || status === 403 || err?.kind === 'AUTHENTICATION' || err?.kind === 'AUTHORIZATION') {
     return {
       type: 'AUTH_ERROR',
-      status,
-      message: msg,
-      userMessage: status === 401 ? 'Session expired. Please sign in again.' : 'Access denied.',
+      status: status || (err?.kind === 'AUTHENTICATION' ? 401 : 403),
+      message: sanitizeErrorMessage(msg),
+      userMessage: (status === 401 || err?.kind === 'AUTHENTICATION')
+        ? 'Session expired. Please sign in again.'
+        : 'Access denied.',
     };
   }
 
-  if (status && status >= 500) {
+  if ((status && status >= 500) || err?.kind === 'SERVER_ERROR') {
     return {
       type: 'SERVER_ERROR',
-      status,
-      message: msg,
+      status: status || 500,
+      message: sanitizeErrorMessage(msg),
       userMessage: 'Server error. Please try again in a moment.',
     };
   }
@@ -173,15 +288,33 @@ export function classifyFetchError(err: any, url?: string): ClassifiedError {
     return {
       type: 'HTTP_ERROR',
       status,
-      message: msg,
-      userMessage: msg || `Request failed (${status})`,
+      message: sanitizeErrorMessage(msg),
+      userMessage: sanitizeErrorMessage(msg) || `Request failed (${status})`,
+    };
+  }
+
+  // 4. Genuine network connectivity failure without HTTP status
+  const isNetworkMsg =
+    err?.kind === 'NETWORK_UNREACHABLE' ||
+    msg.includes('Failed to fetch') ||
+    msg.includes('Network request failed') ||
+    msg.includes('NetworkError') ||
+    msg.includes('ECONNREFUSED') ||
+    msg.includes('ENOTFOUND');
+
+  if (isNetworkMsg) {
+    const targetDesc = targetUrl ? ` (${targetUrl})` : '';
+    return {
+      type: 'NETWORK_UNREACHABLE',
+      message: sanitizeErrorMessage(`${msg}${targetDesc}`),
+      userMessage: `Backend connection unavailable${targetDesc}. Your draft is safely stored locally.`,
     };
   }
 
   return {
     type: 'UNKNOWN_ERROR',
-    message: msg,
-    userMessage: msg || 'An unexpected error occurred.',
+    message: sanitizeErrorMessage(msg),
+    userMessage: sanitizeErrorMessage(msg) || 'An unexpected error occurred.',
   };
 }
 
@@ -189,7 +322,7 @@ export function classifyFetchError(err: any, url?: string): ClassifiedError {
  * Returns true if the classified error represents a genuine network connectivity
  * failure that justifies switching to offline draft mode.
  *
- * Critically, BLOB_FETCH_ERROR and REQUEST_TIMEOUT are NOT connectivity failures.
+ * Critically, BLOB_FETCH_ERROR, REQUEST_TIMEOUT, and SERVER_ERROR are NOT connectivity failures.
  */
 export function isConnectivityError(classified: ClassifiedError): boolean {
   return classified.type === 'NETWORK_UNREACHABLE';
@@ -198,13 +331,11 @@ export function isConnectivityError(classified: ClassifiedError): boolean {
 // ─── Core API request function ────────────────────────────────────────────────
 
 /**
- * FIX-RC-5: Added `timeoutMs` option to `apiRequest`.
- *
- * Default timeout: 30000ms (30s) — covers normal API calls.
- * OCR endpoint should use 180000ms (3 minutes) for CPU-heavy PaddleOCR.
- *
- * The AbortController fires after `timeoutMs`. The error thrown is classified as
- * REQUEST_TIMEOUT (not NETWORK_UNREACHABLE), so callers can decide appropriately.
+ * Authoritative API request function:
+ * - Preserves HTTP status codes via typed ApiError instances.
+ * - Handles 401 session expiry and token clearing.
+ * - Distinguishes timeouts, server errors, and network disconnects.
+ * - Preserves multipart form data uploads.
  */
 export async function apiRequest<T = any>(
   endpoint: string,
@@ -262,20 +393,38 @@ export async function apiRequest<T = any>(
 
     if (response.status === 401) {
       await authStorage.clear();
-      throw new Error('Session expired. Please sign in again.');
+      throw new ApiError({
+        message: 'Session expired. Please sign in again.',
+        status: 401,
+        kind: 'AUTHENTICATION',
+        url,
+        userMessage: 'Session expired. Please sign in again.',
+      });
     }
 
     if (!response.ok) {
       let errorDetail = `Request failed (${response.status})`;
+      let responseData: any = undefined;
       try {
-        const errJson = await response.json();
-        if (errJson.detail) {
-          errorDetail = typeof errJson.detail === 'string' ? errJson.detail : JSON.stringify(errJson.detail);
+        responseData = await response.json();
+        if (responseData && responseData.detail) {
+          errorDetail = typeof responseData.detail === 'string'
+            ? responseData.detail
+            : JSON.stringify(responseData.detail);
         }
       } catch {
-        // Use fallback error
+        try {
+          const text = await response.text();
+          if (text) errorDetail = text;
+        } catch {}
       }
-      throw new Error(errorDetail);
+
+      throw new ApiError({
+        message: errorDetail,
+        status: response.status,
+        data: responseData,
+        url,
+      });
     }
 
     // Handle empty responses or 204 No Content
@@ -291,11 +440,48 @@ export async function apiRequest<T = any>(
     return (await response.text()) as unknown as T;
   } catch (err: any) {
     if (timeoutId) clearTimeout(timeoutId);
-    if (err && typeof err === 'object') {
-      err.url = url;
-      err.targetUrl = url;
+
+    // If it is already an ApiError (e.g. from non-ok HTTP response or 401), re-throw
+    if (err instanceof ApiError) {
+      throw err;
     }
-    throw err;
+
+    const msg = String(err?.message || err || '');
+    const isAbort = err?.name === 'AbortError' || msg.includes('aborted');
+    const isNetworkMsg =
+      msg.includes('Failed to fetch') ||
+      msg.includes('Network request failed') ||
+      msg.includes('NetworkError') ||
+      msg.includes('ECONNREFUSED') ||
+      msg.includes('ENOTFOUND');
+
+    if (isAbort) {
+      throw new ApiError({
+        message: 'Request timed out. Please try again.',
+        kind: 'REQUEST_TIMEOUT',
+        url,
+        cause: err,
+        userMessage: 'The request took too long. The server may be processing a complex task. Please try again.',
+      });
+    }
+
+    if (isNetworkMsg) {
+      throw new ApiError({
+        message: `Backend connection unavailable (${url})`,
+        kind: 'NETWORK_UNREACHABLE',
+        url,
+        cause: err,
+        userMessage: 'Backend connection unavailable. Your draft is safely stored locally.',
+      });
+    }
+
+    throw new ApiError({
+      message: msg || 'An unexpected error occurred.',
+      kind: 'UNKNOWN',
+      url,
+      cause: err,
+      userMessage: msg || 'An unexpected error occurred.',
+    });
   }
 }
 
