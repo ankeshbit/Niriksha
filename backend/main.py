@@ -17,7 +17,7 @@ _project_root = str(Path(__file__).resolve().parent.parent)
 if _project_root not in sys.path:
     sys.path.insert(0, _project_root)
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 from datetime import datetime, timezone
 from PIL import Image
 
@@ -31,10 +31,12 @@ from fastapi import (
     File,
     Form,
     Body,
-    Response
+    Response,
+    Request
 )
 from fastapi.concurrency import run_in_threadpool
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.middleware.gzip import GZipMiddleware
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse, JSONResponse, FileResponse
 from sqlalchemy.orm import Session, joinedload, selectinload
@@ -224,6 +226,7 @@ app.add_middleware(
     CORSMiddleware,
     **_cors_kwargs,
 )
+app.add_middleware(GZipMiddleware, minimum_size=1000)
 
 from fastapi import Request
 
@@ -890,31 +893,7 @@ def get_dashboard_summary(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
-    """Computes all 7 dynamic Legal Metrology Enforcement KPIs calculated strictly from live DB."""
-    query = db.query(Inspection)
-    if current_user.role not in ("ADMIN", "SUPERVISOR"):
-        query = query.filter(Inspection.inspector_id == current_user.id)
-
-    total_inspections = query.count()
-    completed_inspections = query.filter(
-        or_(Inspection.status == "COMPLETED", Inspection.finalized_at.isnot(None))
-    ).count()
-    pending_verification = query.filter(
-        Inspection.overall_status == "NEEDS_MANUAL_VERIFICATION"
-    ).count()
-    potential_non_compliance = query.filter(
-        Inspection.overall_status == "POTENTIAL_NON_COMPLIANCE"
-    ).count()
-    compliant_inspections = query.filter(
-        Inspection.overall_status.in_(["NO_POTENTIAL_VIOLATIONS", "VERIFIED_COMPLIANT"])
-    ).count()
-
-    # Reports generated: inspections that have an associated Report record
-    reports_generated = query.join(Report, Inspection.id == Report.inspection_id).count()
-
-    # Inspections requiring manual verification: overall_status is NEEDS_MANUAL_VERIFICATION,
-    # or has declarations in CONFLICTING / NOT_FOUND / NEEDS_REVIEW,
-    # or findings in FAIL with PENDING adjudication
+    """Computes all 7 dynamic Legal Metrology Enforcement KPIs calculated strictly from live DB in a single conditional aggregation query."""
     unresolved_decl_subq = db.query(distinct(Declaration.inspection_id)).filter(
         Declaration.extraction_status.in_(["NOT_FOUND", "CONFLICTING", "LOW_CONFIDENCE", "NEEDS_REVIEW"])
     )
@@ -923,22 +902,43 @@ def get_dashboard_summary(
         ComplianceCheck.adjudication_status == "PENDING"
     )
 
-    manual_verification_required = query.filter(
-        or_(
-            Inspection.overall_status == "NEEDS_MANUAL_VERIFICATION",
-            Inspection.id.in_(unresolved_decl_subq),
-            Inspection.id.in_(unresolved_check_subq)
-        )
-    ).count()
+    base_query = db.query(
+        func.count(Inspection.id).label("total_inspections"),
+        func.count(Inspection.id).filter(
+            or_(Inspection.status == "COMPLETED", Inspection.finalized_at.isnot(None))
+        ).label("completed_inspections"),
+        func.count(Inspection.id).filter(
+            Inspection.overall_status == "NEEDS_MANUAL_VERIFICATION"
+        ).label("pending_verification"),
+        func.count(Inspection.id).filter(
+            Inspection.overall_status == "POTENTIAL_NON_COMPLIANCE"
+        ).label("potential_non_compliance"),
+        func.count(Inspection.id).filter(
+            Inspection.overall_status.in_(["NO_POTENTIAL_VIOLATIONS", "VERIFIED_COMPLIANT"])
+        ).label("compliant_inspections"),
+        func.count(Report.id).label("reports_generated"),
+        func.count(Inspection.id).filter(
+            or_(
+                Inspection.overall_status == "NEEDS_MANUAL_VERIFICATION",
+                Inspection.id.in_(unresolved_decl_subq),
+                Inspection.id.in_(unresolved_check_subq)
+            )
+        ).label("manual_verification_required")
+    ).outerjoin(Report, Inspection.id == Report.inspection_id)
+
+    if current_user.role not in ("ADMIN", "SUPERVISOR"):
+        base_query = base_query.filter(Inspection.inspector_id == current_user.id)
+
+    res = base_query.one()
 
     return DashboardKPISummaryResponse(
-        total_inspections=total_inspections,
-        completed_inspections=completed_inspections,
-        pending_verification=pending_verification,
-        potential_non_compliance=potential_non_compliance,
-        compliant_inspections=compliant_inspections,
-        reports_generated=reports_generated,
-        manual_verification_required=manual_verification_required
+        total_inspections=res.total_inspections or 0,
+        completed_inspections=res.completed_inspections or 0,
+        pending_verification=res.pending_verification or 0,
+        potential_non_compliance=res.potential_non_compliance or 0,
+        compliant_inspections=res.compliant_inspections or 0,
+        reports_generated=res.reports_generated or 0,
+        manual_verification_required=res.manual_verification_required or 0
     )
 
 
@@ -2204,6 +2204,7 @@ def get_image_metadata(
 @app.get("/api/images/{image_id}/file", tags=["Images"])
 def get_image_binary(
     image_id: str,
+    request: Request,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
@@ -2218,10 +2219,21 @@ def get_image_binary(
         raise HTTPException(status_code=404, detail="Image file not found in storage")
 
     safe_name = Path(img.file_path).name or f"image_{image_id}.jpg"
+    etag = f'"{hashlib.sha256(img_bytes).hexdigest()}"'
+    headers = {
+        "Content-Disposition": f'inline; filename="{safe_name}"',
+        "ETag": etag,
+        "Cache-Control": "private, max-age=300"
+    }
+
+    if_none_match = request.headers.get("if-none-match")
+    if if_none_match and if_none_match.strip() == etag:
+        return Response(status_code=status.HTTP_304_NOT_MODIFIED, headers=headers)
+
     return Response(
         content=img_bytes,
         media_type=img.mime_type or "image/jpeg",
-        headers={"Content-Disposition": f'inline; filename="{safe_name}"'}
+        headers=headers
     )
 
 @app.delete("/api/images/{image_id}", status_code=status.HTTP_200_OK, tags=["Images"])
@@ -3822,10 +3834,12 @@ def get_inspection_audit_logs(
 
 @app.get("/api/rules", tags=["Rules"])
 def list_rules(
+    response: Response,
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user)
 ):
     """Returns the list of registered statutory Legal Metrology rules."""
+    response.headers["Cache-Control"] = "public, max-age=3600"
     rules = db.query(RuleVersion).filter(RuleVersion.is_active == True).all()
     return [
         {
@@ -4284,6 +4298,30 @@ def root_index():
 # SUPERVISOR MANAGEMENT ENDPOINTS (NIRIKSHA ROLE-BASED ACCESS CONTROL)
 # ===========================================================================
 
+# In-process TTL cache for supervisor dashboard (15 seconds, keyed by role and user id)
+_supervisor_dashboard_cache: Dict[Tuple[str, str], Tuple[float, SupervisorDashboardResponse]] = {}
+SUPERVISOR_DASHBOARD_CACHE_TTL = 15.0
+
+
+def _get_cached_supervisor_dashboard(user: User) -> Optional[SupervisorDashboardResponse]:
+    key = (user.role, user.id)
+    entry = _supervisor_dashboard_cache.get(key)
+    if entry:
+        cached_time, response = entry
+        if time.time() - cached_time < SUPERVISOR_DASHBOARD_CACHE_TTL:
+            return response
+    return None
+
+
+def _set_cached_supervisor_dashboard(user: User, response: SupervisorDashboardResponse):
+    key = (user.role, user.id)
+    _supervisor_dashboard_cache[key] = (time.time(), response)
+
+
+def clear_supervisor_dashboard_cache():
+    _supervisor_dashboard_cache.clear()
+
+
 @app.get("/api/supervisor/dashboard", response_model=SupervisorDashboardResponse, tags=["Supervisor Management"])
 def get_supervisor_dashboard(
     db: Session = Depends(get_db),
@@ -4293,33 +4331,11 @@ def get_supervisor_dashboard(
     Returns real-time management KPIs aggregated across ALL Field Inspectors.
     Every metric is computed live from Neon PostgreSQL — zero hardcoded / fake data.
     """
-    total_inspections = db.query(Inspection).count()
-    
-    # Today's Inspections
-    today_inspections = db.query(Inspection).filter(
-        func.date(Inspection.created_at) == func.current_date()
-    ).count()
+    cached = _get_cached_supervisor_dashboard(current_user)
+    if cached is not None:
+        return cached
 
-    # Completed vs Pending Inspections
-    completed_inspections = db.query(Inspection).filter(
-        or_(Inspection.status == "COMPLETED", Inspection.finalized_at.isnot(None))
-    ).count()
-    pending_inspections = db.query(Inspection).filter(
-        and_(Inspection.status != "COMPLETED", Inspection.finalized_at.is_(None))
-    ).count()
-
-    # Compliance states
-    potential_non_compliance = db.query(Inspection).filter(
-        Inspection.overall_status == "POTENTIAL_NON_COMPLIANCE"
-    ).count()
-
-    # Reports generated
-    reports_generated = db.query(Report).count()
-
-    # Active inspectors (distinct inspectors who submitted inspections)
-    active_inspectors_count = db.query(func.count(distinct(Inspection.inspector_id))).scalar() or 0
-
-    # Inspections requiring manual verification
+    # Subqueries for manual verification conditions
     unresolved_decl_subq = db.query(distinct(Declaration.inspection_id)).filter(
         Declaration.extraction_status.in_(["NOT_FOUND", "CONFLICTING", "LOW_CONFIDENCE", "NEEDS_REVIEW"])
     )
@@ -4327,13 +4343,40 @@ def get_supervisor_dashboard(
         ComplianceCheck.result_state == "POTENTIAL_NON_COMPLIANCE",
         ComplianceCheck.adjudication_status == "PENDING"
     )
-    manual_verification_required = db.query(Inspection).filter(
-        or_(
-            Inspection.overall_status == "NEEDS_MANUAL_VERIFICATION",
-            Inspection.id.in_(unresolved_decl_subq),
-            Inspection.id.in_(unresolved_check_subq)
-        )
-    ).count()
+
+    counts_row = db.query(
+        func.count(Inspection.id).label("total_inspections"),
+        func.count(Inspection.id).filter(
+            func.date(Inspection.created_at) == func.current_date()
+        ).label("today_inspections"),
+        func.count(Inspection.id).filter(
+            or_(Inspection.status == "COMPLETED", Inspection.finalized_at.isnot(None))
+        ).label("completed_inspections"),
+        func.count(Inspection.id).filter(
+            and_(Inspection.status != "COMPLETED", Inspection.finalized_at.is_(None))
+        ).label("pending_inspections"),
+        func.count(Inspection.id).filter(
+            Inspection.overall_status == "POTENTIAL_NON_COMPLIANCE"
+        ).label("potential_non_compliance"),
+        func.count(Report.id).label("reports_generated"),
+        func.count(distinct(Inspection.inspector_id)).label("active_inspectors_count"),
+        func.count(Inspection.id).filter(
+            or_(
+                Inspection.overall_status == "NEEDS_MANUAL_VERIFICATION",
+                Inspection.id.in_(unresolved_decl_subq),
+                Inspection.id.in_(unresolved_check_subq)
+            )
+        ).label("manual_verification_required")
+    ).outerjoin(Report, Inspection.id == Report.inspection_id).one()
+
+    total_inspections = counts_row.total_inspections or 0
+    today_inspections = counts_row.today_inspections or 0
+    completed_inspections = counts_row.completed_inspections or 0
+    pending_inspections = counts_row.pending_inspections or 0
+    potential_non_compliance = counts_row.potential_non_compliance or 0
+    reports_generated = counts_row.reports_generated or 0
+    active_inspectors_count = counts_row.active_inspectors_count or 0
+    manual_verification_required = counts_row.manual_verification_required or 0
 
     # Recent Submissions (limit 10)
     recent_objs = db.query(Inspection).order_by(Inspection.created_at.desc()).limit(10).all()
@@ -4434,7 +4477,7 @@ def get_supervisor_dashboard(
         for insp in attention_objs
     ]
 
-    return SupervisorDashboardResponse(
+    response = SupervisorDashboardResponse(
         total_inspections=total_inspections,
         today_inspections=today_inspections,
         completed_inspections=completed_inspections,
@@ -4450,6 +4493,8 @@ def get_supervisor_dashboard(
         inspections_by_date=inspections_by_date,
         inspections_requiring_attention=inspections_requiring_attention
     )
+    _set_cached_supervisor_dashboard(current_user, response)
+    return response
 
 
 @app.get("/api/supervisor/inspectors", response_model=SupervisorInspectorsListResponse, tags=["Supervisor Management"])
